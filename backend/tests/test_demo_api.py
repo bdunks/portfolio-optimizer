@@ -1,0 +1,570 @@
+from __future__ import annotations
+
+import csv
+import io
+from collections.abc import Iterator
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy import inspect
+
+from app.broker.fake import FakeBroker
+from app.db.models import (
+    CurrentQuote,
+    CurrentTaxLot,
+    RecommendationGroup,
+    RecommendationGroupLeg,
+    RecommendationLeg,
+    Security,
+)
+from app.main import create_app
+from app.schemas import BrokerSnapshot
+
+
+@pytest.fixture
+def split_lot_snapshot() -> BrokerSnapshot:
+    """Two one-share VB lots exercise consolidated SELL and replacement BUY resizing."""
+    snapshot = FakeBroker.demo_snapshot()
+    lots = []
+    for lot in snapshot.lots:
+        if lot.ticker == "VB":
+            lots.extend(
+                [
+                    lot.model_copy(
+                        update={"broker_lot_id": "DEMO-VB-LOT-1", "shares": Decimal(1), "available_shares": Decimal(1)}
+                    ),
+                    lot.model_copy(
+                        update={"broker_lot_id": "DEMO-VB-LOT-2", "shares": Decimal(1), "available_shares": Decimal(1)}
+                    ),
+                ]
+            )
+        else:
+            lots.append(lot)
+    return snapshot.model_copy(update={"lots": lots})
+
+
+@pytest.fixture
+def demo_app(tmp_path: Path, split_lot_snapshot: BrokerSnapshot) -> Iterator[tuple[FastAPI, TestClient, FakeBroker, Path]]:
+    database_path = tmp_path / "demo-api.sqlite3"
+    broker = FakeBroker(split_lot_snapshot)
+    app = create_app(database_url=f"sqlite:///{database_path}", broker=broker, seed_demo_data=True)
+    with TestClient(app, base_url="http://localhost") as client:
+        yield app, client, broker, database_path
+
+def _shared_replacement_snapshot(aapl_lot_quantities: tuple[int, ...] = (1, 1)) -> BrokerSnapshot:
+    snapshot = FakeBroker.demo_snapshot()
+    aapl_position = snapshot.positions[0].model_copy(
+        update={"shares": Decimal(sum(aapl_lot_quantities)), "market_value_usd": Decimal(175 * sum(aapl_lot_quantities))}
+    )
+    msft_position = aapl_position.model_copy(
+        update={"ticker": "MSFT", "shares": Decimal(2), "market_value_usd": Decimal(350)}
+    )
+    aapl_template = snapshot.lots[0]
+    aapl_lots = [
+        aapl_template.model_copy(
+            update={
+                "broker_lot_id": f"DEMO-AAPL-SHARED-{index}",
+                "shares": Decimal(shares),
+                "available_shares": Decimal(shares),
+                "adjusted_unit_basis_usd": Decimal(200),
+            }
+        )
+        for index, shares in enumerate(aapl_lot_quantities, start=1)
+    ]
+    msft_lot = aapl_template.model_copy(
+        update={
+            "ticker": "MSFT",
+            "broker_lot_id": "DEMO-MSFT-SHARED-1",
+            "shares": Decimal(2),
+            "available_shares": Decimal(2),
+            "adjusted_unit_basis_usd": Decimal(200),
+        }
+    )
+    aapl_quote = next(quote for quote in snapshot.quotes if quote.ticker == "AAPL").model_copy(
+        update={"last_usd": Decimal(175), "bid_usd": Decimal(174), "ask_usd": Decimal(176)}
+    )
+    msft_quote = aapl_quote.model_copy(update={"ticker": "MSFT"})
+    other_quotes = [quote for quote in snapshot.quotes if quote.ticker != "AAPL"]
+    return snapshot.model_copy(
+        update={
+            "positions": [aapl_position, msft_position],
+            "lots": [*aapl_lots, msft_lot],
+            "quotes": [*other_quotes, aapl_quote, msft_quote],
+        }
+    )
+
+
+def _configure_batch_policy(client: TestClient, *, minimum_buy: str) -> None:
+    active = client.get("/api/v1/policy").json()["active"]
+    payload = {
+        "source_revision_id": active["id"],
+        "settings": active["settings"],
+        "sleeves": active["sleeves"],
+        "allowed_securities": active["allowed_securities"],
+        "overrides": active["overrides"],
+        "reassignments": {},
+    }
+    payload["settings"].update(
+        {
+            "min_buy_order_notional_usd": minimum_buy,
+            "max_batch_turnover_pct": "100",
+            "max_total_orders_per_batch": 3,
+        }
+    )
+    draft = client.post("/api/v1/policy/drafts", json=payload)
+    assert draft.status_code == 201, draft.text
+    activated = client.post(f"/api/v1/policy/{draft.json()['id']}/activate")
+    assert activated.status_code == 200, activated.text
+
+
+@pytest.fixture
+def shared_replacement_app(tmp_path: Path) -> Iterator[tuple[FastAPI, TestClient, Path]]:
+    database_path = tmp_path / "shared-replacement.sqlite3"
+    app = create_app(
+        database_url=f"sqlite:///{database_path}",
+        broker=FakeBroker(_shared_replacement_snapshot()),
+        seed_demo_data=True,
+    )
+    with TestClient(app, base_url="http://localhost") as client:
+        _configure_batch_policy(client, minimum_buy="500")
+        yield app, client, database_path
+
+
+
+def _create_run(client: TestClient) -> dict[str, Any]:
+    response = client.post("/api/v1/optimizer/runs", json={})
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert payload["status"] == "demo"
+    assert payload["solver_version"] == "DEMO"
+    assert payload["demo"] is True
+    assert payload["actionable"] is False
+    assert "real_optimizer_unavailable" in payload["warnings"]
+    return payload
+
+
+def test_demo_run_persistence_selection_arithmetic_and_restart(
+    demo_app: tuple[FastAPI, TestClient, FakeBroker, Path], split_lot_snapshot: BrokerSnapshot
+) -> None:
+    app, client, broker, database_path = demo_app
+    run = _create_run(client)
+    run_id = run["run_id"]
+    assert run["source_generation"] == 1
+    assert run["source_checksum"]
+    assert run["input_fingerprint"]
+    assert run["estimated_tax_benefit_usd"] is None
+    assert run["estimated_tax_benefit_status"] == "tax_profile_incomplete"
+    recommendations = client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations").json()
+    groups = recommendations["groups"]
+    legs_by_id = {leg["leg_id"]: leg for leg in recommendations["consolidated_legs"]}
+    assert len(groups) == 1
+    group = groups[0]
+    sell, buy = (legs_by_id[leg_id] for leg_id in group["leg_ids"])
+    assert group["leg_ids"] == [sell["leg_id"], buy["leg_id"]]
+    assert len({leg["leg_id"] for leg in recommendations["consolidated_legs"]}) == len(recommendations["consolidated_legs"])
+    assert buy["group_ids"] == [group["group_id"]]
+    assert buy["dependencies"] == [sell["leg_id"]]
+    assert sell["side"] == "SELL"
+    assert sell["ticker"] == "VB"
+    assert sell["shares"] == "2"
+    assert {lot["broker_lot_id"] for lot in sell["selected_lots"]} == {
+        "DEMO-VB-LOT-1",
+        "DEMO-VB-LOT-2",
+    }
+    assert buy["side"] == "BUY"
+    assert buy["ticker"] == "VTI"
+    assert buy["shares"] == "2"
+    assert run["estimated_realized_st_usd"] == "0"
+    assert Decimal(run["estimated_realized_lt_usd"]) == Decimal(-40)
+    assert Decimal(run["cash_after_usd"]) == Decimal(850)
+    current = group["impact"]["portfolio_effects"]["us_transition"]["current"]["us_sleeve_value_usd"]
+    proposed = group["impact"]["portfolio_effects"]["us_transition"]["proposed_basket"]["us_sleeve_value_usd"]
+    assert Decimal(current) == Decimal(proposed) == Decimal(2200)
+    wash_view = client.get("/api/v1/wash-sales").json()
+    assert wash_view["demo"] is True
+    assert wash_view["current_restrictions"] == []
+    assert wash_view["proposed_restrictions"][0]["ticker"] == "VB"
+    assert wash_view["proposed_restrictions"][0]["next_eligible_purchase_date"] == "2026-12-06"
+    assert wash_view["proposed_restrictions"][0]["source"].startswith("DEMO recommendation")
+
+
+    selected = client.post(
+        f"/api/v1/optimizer/runs/{run_id}/selection",
+        json={
+            "selected_group_ids": [group["group_id"]],
+            "selected_sell_lots": {group["group_id"]: ["DEMO-VB-LOT-1"]},
+        },
+    )
+    assert selected.status_code == 200, selected.text
+    selected_payload = selected.json()
+    selected_group = selected_payload["groups"][0]
+    selected_legs = {leg["leg_id"]: leg for leg in selected_payload["consolidated_legs"]}
+    selected_sell, selected_buy = (selected_legs[leg_id] for leg_id in selected_group["leg_ids"])
+    assert selected_sell["shares"] == "1"
+    assert Decimal(selected_sell["net_lt_realized_usd"]) == Decimal(-20)
+    assert selected_buy["shares"] == "1"
+    assert Decimal(selected_buy["estimated_notional_usd"]) == Decimal(200)
+    assert Decimal(selected_group["impact"]["sell_proceeds_usd"]) == Decimal(200)
+    assert Decimal(selected.json()["estimated_realized_lt_usd"]) == Decimal(-20)
+    assert selected.json()["lots_sold_count"] == 1
+    assert selected.json()["orders_count"] == 2
+
+    no_trade = client.post(
+        f"/api/v1/optimizer/runs/{run_id}/selection",
+        json={"selected_group_ids": [], "selected_sell_lots": {}},
+    )
+    assert no_trade.status_code == 200, no_trade.text
+    assert no_trade.json()["orders_count"] == 0
+    assert Decimal(no_trade.json()["estimated_realized_lt_usd"]) == Decimal(0)
+    assert no_trade.json()["groups"][0]["selected"] is False
+
+    assert broker.fetch_count == 1
+    app.state.engine.dispose()
+    restarted = create_app(
+        database_url=f"sqlite:///{database_path}",
+        broker=FakeBroker(split_lot_snapshot),
+    )
+    with TestClient(restarted, base_url="http://localhost") as second_client:
+        reopened = second_client.get(f"/api/v1/optimizer/runs/{run_id}")
+        assert reopened.status_code == 200
+        assert reopened.json()["status"] == "demo"
+        assert reopened.json()["source_generation"] == 1
+        reopened_recommendations = second_client.get(
+            f"/api/v1/optimizer/runs/{run_id}/recommendations"
+        ).json()
+        reopened_groups = reopened_recommendations["groups"]
+        reopened_legs = {leg["leg_id"]: leg for leg in reopened_recommendations["consolidated_legs"]}
+        reopened_sell_id, reopened_buy_id = reopened_groups[0]["leg_ids"]
+        assert reopened_legs[reopened_buy_id]["shares"] == "0"
+        assert reopened_legs[reopened_sell_id]["selected_lots"][0]["broker_lot_id"].startswith("DEMO-VB-LOT-")
+        assert {"note", "rejected", "rejection_reason"} <= {
+            column["name"] for column in inspect(restarted.state.engine).get_columns("recommendation_group")
+        }
+    restarted.state.engine.dispose()
+    del app
+
+
+def test_shared_replacement_buy_pools_proceeds_and_counts_consolidated_orders(
+    shared_replacement_app: tuple[FastAPI, TestClient, Path],
+) -> None:
+    app, client, _ = shared_replacement_app
+    response = client.post("/api/v1/optimizer/runs", json={})
+    assert response.status_code == 201, response.text
+    run = response.json()
+    assert run["orders_count"] == 3
+    assert run["lots_sold_count"] == 3
+    recs = client.get(f"/api/v1/optimizer/runs/{run['run_id']}/recommendations").json()
+    assert len(recs["groups"]) == 2
+    legs = {leg["leg_id"]: leg for leg in recs["consolidated_legs"]}
+    assert len(legs) == len(recs["consolidated_legs"]) == 3
+    sells = [leg for leg in recs["consolidated_legs"] if leg["side"] == "SELL"]
+    buys = [leg for leg in recs["consolidated_legs"] if leg["side"] == "BUY"]
+    assert [leg["side"] for leg in recs["consolidated_legs"]] == ["SELL", "SELL", "BUY"]
+    assert len(sells) == 2
+    assert all(Decimal(leg["estimated_notional_usd"]) == Decimal(350) for leg in sells)
+    assert len(buys) == 1
+    buy = buys[0]
+    assert buy["ticker"] == "VTI"
+    assert buy["shares"] == "3"
+    assert buy["estimated_notional_usd"] == "600"
+    assert set(buy["dependencies"]) == {leg["leg_id"] for leg in sells}
+    assert set(buy["group_ids"]) == {group["group_id"] for group in recs["groups"]}
+    for group in recs["groups"]:
+        assert len(group["leg_ids"]) == 2
+        assert set(group["leg_ids"]) <= set(legs)
+        assert buy["leg_id"] in group["leg_ids"]
+
+    with app.state.session_factory() as session:
+        database_buy_legs = (
+            session.query(RecommendationLeg)
+            .join(RecommendationGroup, RecommendationGroup.id == RecommendationLeg.group_id)
+            .filter(RecommendationGroup.run_id == run["run_id"], RecommendationLeg.side == "BUY")
+            .all()
+        )
+        assert len(database_buy_legs) == 1
+        assert session.query(RecommendationGroupLeg).filter_by(leg_id=buy["leg_id"]).count() == 2
+
+    json_export = client.get(f"/api/v1/optimizer/runs/{run['run_id']}/export?format=json").json()
+    assert [leg["leg_id"] for leg in json_export["run"]["consolidated_legs"]].count(buy["leg_id"]) == 1
+    csv_response = client.get(f"/api/v1/optimizer/runs/{run['run_id']}/export?format=csv")
+    rows = list(csv.DictReader(io.StringIO(csv_response.text)))
+    assert [row["leg_id"] for row in rows if row["side"] == "BUY"] == [buy["leg_id"]]
+
+    deselected = client.post(
+        f"/api/v1/optimizer/runs/{run['run_id']}/selection",
+        json={"selected_group_ids": [recs["groups"][0]["group_id"]]},
+    )
+    assert deselected.status_code == 422
+    assert deselected.json()["code"] == "selected_basket_infeasible"
+    unchanged = client.get(f"/api/v1/optimizer/runs/{run['run_id']}/recommendations").json()
+    unchanged_buy = next(leg for leg in unchanged["consolidated_legs"] if leg["side"] == "BUY")
+    assert unchanged_buy["shares"] == "3"
+    assert set(unchanged_buy["dependencies"]) == {leg["leg_id"] for leg in sells}
+
+
+def test_removing_one_sell_lot_resizes_shared_buy_and_keeps_only_funding_dependencies(
+    shared_replacement_app: tuple[FastAPI, TestClient, Path],
+) -> None:
+    _, client, _ = shared_replacement_app
+    _configure_batch_policy(client, minimum_buy="300")
+    run = client.post("/api/v1/optimizer/runs", json={}).json()
+    recs = client.get(f"/api/v1/optimizer/runs/{run['run_id']}/recommendations").json()
+    groups = recs["groups"]
+    aapl_group = next(group for group in groups if group["sleeve_key"] == "us_equities" and "AAPL" in group["rationale"])
+    legs = {leg["leg_id"]: leg for leg in recs["consolidated_legs"]}
+    aapl_sell = next(legs[leg_id] for leg_id in aapl_group["leg_ids"] if legs[leg_id]["side"] == "SELL")
+    selected = client.post(
+        f"/api/v1/optimizer/runs/{run['run_id']}/selection",
+        json={
+            "selected_group_ids": [group["group_id"] for group in groups],
+            "selected_sell_lots": {aapl_group["group_id"]: ["DEMO-AAPL-SHARED-1"]},
+        },
+    )
+    assert selected.status_code == 200, selected.text
+    updated_legs = {leg["leg_id"]: leg for leg in selected.json()["consolidated_legs"]}
+    buy = next(leg for leg in updated_legs.values() if leg["side"] == "BUY")
+    assert buy["shares"] == "2"
+    assert buy["estimated_notional_usd"] == "400"
+    assert set(buy["dependencies"]) == {
+        leg["leg_id"] for leg in updated_legs.values() if leg["side"] == "SELL" and leg["shares"] != "0"
+    }
+    assert updated_legs[aapl_sell["leg_id"]]["shares"] == "1"
+    assert [lot["broker_lot_id"] for lot in updated_legs[aapl_sell["leg_id"]]["selected_lots"] if lot["selected"]] == [
+        "DEMO-AAPL-SHARED-1"
+    ]
+
+
+def test_rejecting_group_preserves_other_groups_existing_sell_lot_subset(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "reject-preserves-subset.sqlite3"
+    app = create_app(
+        database_url=f"sqlite:///{database_path}",
+        broker=FakeBroker(_shared_replacement_snapshot((2, 1))),
+        seed_demo_data=True,
+    )
+    with TestClient(app, base_url="http://localhost") as client:
+        _configure_batch_policy(client, minimum_buy="0")
+        run = client.post("/api/v1/optimizer/runs", json={}).json()
+        recs = client.get(f"/api/v1/optimizer/runs/{run['run_id']}/recommendations").json()
+        groups = recs["groups"]
+        aapl_group = next(group for group in groups if "AAPL" in group["rationale"])
+        msft_group = next(group for group in groups if "MSFT" in group["rationale"])
+        selection = client.post(
+            f"/api/v1/optimizer/runs/{run['run_id']}/selection",
+            json={
+                "selected_group_ids": [aapl_group["group_id"], msft_group["group_id"]],
+                "selected_sell_lots": {aapl_group["group_id"]: ["DEMO-AAPL-SHARED-1"]},
+            },
+        )
+        assert selection.status_code == 200, selection.text
+        before = selection.json()
+        before_groups = {group["group_id"]: group for group in before["groups"]}
+        before_legs = {leg["leg_id"]: leg for leg in before["consolidated_legs"]}
+        aapl_sell_id = next(leg_id for leg_id in before_groups[aapl_group["group_id"]]["leg_ids"] if before_legs[leg_id]["side"] == "SELL")
+        before_aapl = before_legs[aapl_sell_id]
+        assert before_aapl["shares"] == "2"
+        assert before_aapl["net_lt_realized_usd"] == "-50"
+        assert before_groups[aapl_group["group_id"]]["impact"]["selected_sell_lots_count"] == 1
+
+        rejected = client.patch(
+            f"/api/v1/optimizer/runs/{run['run_id']}/recommendations/{msft_group['group_id']}",
+            json={"rejected": True, "rejection_reason": "not selected"},
+        )
+        assert rejected.status_code == 200, rejected.text
+        after = client.get(f"/api/v1/optimizer/runs/{run['run_id']}/recommendations").json()
+        after_groups = {group["group_id"]: group for group in after["groups"]}
+        after_legs = {leg["leg_id"]: leg for leg in after["consolidated_legs"]}
+        after_aapl = after_legs[aapl_sell_id]
+        assert after_groups[aapl_group["group_id"]]["selected"] is True
+        assert after_groups[msft_group["group_id"]]["selected"] is False
+        assert after_groups[msft_group["group_id"]]["rejected"] is True
+        assert after_aapl["shares"] == before_aapl["shares"] == "2"
+        assert after_aapl["net_lt_realized_usd"] == before_aapl["net_lt_realized_usd"] == "-50"
+        assert [lot["broker_lot_id"] for lot in after_aapl["selected_lots"] if lot["selected"]] == [
+            "DEMO-AAPL-SHARED-1"
+        ]
+        buy = next(leg for leg in after["consolidated_legs"] if leg["side"] == "BUY")
+        assert buy["shares"] == "1"
+        assert buy["dependencies"] == [aapl_sell_id]
+        assert set(buy["group_ids"]) == {aapl_group["group_id"], msft_group["group_id"]}
+        assert after["lots_sold_count"] == 1
+        assert after["orders_count"] == 2
+    app.state.engine.dispose()
+
+
+def test_selection_rejects_unknown_or_empty_lot_subsets_and_stale_runs(
+    demo_app: tuple[FastAPI, TestClient, FakeBroker, Path]
+) -> None:
+    _, client, _, _ = demo_app
+    run = _create_run(client)
+    group_id = run["groups"][0]["group_id"]
+
+    invalid = client.post(
+        f"/api/v1/optimizer/runs/{run['run_id']}/selection",
+        json={"selected_group_ids": [group_id], "selected_sell_lots": {group_id: ["NOT-A-LOT"]}},
+    )
+    assert invalid.status_code == 422
+    assert invalid.json()["code"] == "invalid_lot_selection"
+    empty = client.post(
+        f"/api/v1/optimizer/runs/{run['run_id']}/selection",
+        json={"selected_group_ids": [group_id], "selected_sell_lots": {group_id: []}},
+    )
+    assert empty.status_code == 422
+    assert empty.json()["code"] == "empty_selected_group"
+    unknown_group = client.post(
+        f"/api/v1/optimizer/runs/{run['run_id']}/selection",
+        json={"selected_group_ids": ["not-a-group"]},
+    )
+    assert unknown_group.status_code == 422
+    assert unknown_group.json()["code"] == "invalid_group_selection"
+
+    assert client.post("/api/v1/portfolio/sync").status_code == 200
+    stale = client.post(
+        f"/api/v1/optimizer/runs/{run['run_id']}/selection",
+        json={"selected_group_ids": [group_id]},
+    )
+    assert stale.status_code == 409
+    assert stale.json()["code"] == "stale_run_source"
+
+
+def test_selection_blocks_same_generation_quote_and_lot_changes(
+    demo_app: tuple[FastAPI, TestClient, FakeBroker, Path]
+) -> None:
+    app, client, _, _ = demo_app
+    run = _create_run(client)
+    group_id = run["groups"][0]["group_id"]
+
+    with app.state.session_factory.begin() as session:
+        vti = session.query(Security).filter_by(ticker="VTI").one()
+        quote = session.query(CurrentQuote).filter_by(security_id=vti.id).one()
+        quote.last_usd = Decimal(201)
+    changed_quote = client.post(
+        f"/api/v1/optimizer/runs/{run['run_id']}/selection",
+        json={"selected_group_ids": [group_id]},
+    )
+    assert changed_quote.status_code == 409
+    assert changed_quote.json()["code"] == "stale_run_quote"
+    with app.state.session_factory.begin() as session:
+        vti = session.query(Security).filter_by(ticker="VTI").one()
+        session.query(CurrentQuote).filter_by(security_id=vti.id).one().last_usd = Decimal(200)
+
+    with app.state.session_factory.begin() as session:
+        lot = session.query(CurrentTaxLot).filter_by(broker_lot_id="DEMO-VB-LOT-1").one()
+        lot.available_shares = Decimal(0)
+    unavailable_lot = client.post(
+        f"/api/v1/optimizer/runs/{run['run_id']}/selection",
+        json={"selected_group_ids": [group_id]},
+    )
+    assert unavailable_lot.status_code == 409
+    assert unavailable_lot.json()["code"] == "stale_run_lot"
+
+
+def test_configured_tax_rates_do_not_fabricate_a_demo_tax_estimate(
+    demo_app: tuple[FastAPI, TestClient, FakeBroker, Path]
+) -> None:
+    _, client, _, _ = demo_app
+    active = client.get("/api/v1/policy").json()["active"]
+    payload = {
+        "source_revision_id": active["id"],
+        "settings": active["settings"],
+        "sleeves": active["sleeves"],
+        "allowed_securities": active["allowed_securities"],
+        "overrides": active["overrides"],
+        "reassignments": {},
+    }
+    payload["settings"]["short_term_tax_rate"] = "0.35"
+    payload["settings"]["long_term_tax_rate"] = "0.15"
+    draft = client.post("/api/v1/policy/drafts", json=payload)
+    assert draft.status_code == 201, draft.text
+    activated = client.post(f"/api/v1/policy/{draft.json()['id']}/activate")
+    assert activated.status_code == 200, activated.text
+
+    run = _create_run(client)
+    assert run["tax_profile_configured"] is True
+    assert run["estimated_tax_benefit_usd"] is None
+    assert run["estimated_tax_benefit_status"] == "optimizer_unavailable"
+
+def test_export_metadata_lot_attribution_notes_activity_and_disabled_future_routes(
+    demo_app: tuple[FastAPI, TestClient, FakeBroker, Path]
+) -> None:
+    _, client, broker, _ = demo_app
+    run = _create_run(client)
+    group = run["groups"][0]
+    run_id = run["run_id"]
+    group_id = group["group_id"]
+
+    json_export = client.get(f"/api/v1/optimizer/runs/{run_id}/export?format=json")
+    assert json_export.status_code == 200
+    export_body = json_export.json()
+    assert export_body["metadata"]["solver_version"] == "DEMO"
+    assert export_body["metadata"]["demo"] is True
+    exported_lot_ids = {
+        lot["broker_lot_id"]
+        for leg in export_body["run"]["consolidated_legs"]
+        for lot in leg["selected_lots"]
+    }
+    assert exported_lot_ids == {"DEMO-VB-LOT-1", "DEMO-VB-LOT-2"}
+
+    csv_export = client.get(f"/api/v1/optimizer/runs/{run_id}/export?format=csv")
+    assert csv_export.status_code == 200
+    rows = list(csv.DictReader(io.StringIO(csv_export.text)))
+    assert {row["broker_lot_id"] for row in rows if row["broker_lot_id"]} == exported_lot_ids
+    assert all(row["run_id"] == run_id and row["solver_version"] == "DEMO" for row in rows)
+
+    patch_preflight = client.options(
+        f"/api/v1/optimizer/runs/{run_id}/recommendations/{group_id}",
+        headers={"Origin": "http://localhost:9000", "Access-Control-Request-Method": "PATCH"},
+    )
+    assert patch_preflight.status_code == 200
+    assert "PATCH" in patch_preflight.headers["access-control-allow-methods"]
+    remote_preflight = client.options(
+        f"/api/v1/optimizer/runs/{run_id}/recommendations/{group_id}",
+        headers={"Origin": "https://remote.example", "Access-Control-Request-Method": "PATCH"},
+    )
+    assert remote_preflight.status_code == 400
+
+    annotation = client.patch(
+        f"/api/v1/optimizer/runs/{run_id}/recommendations/{group_id}",
+        json={"note": "Reviewed offline", "rejected": True, "rejection_reason": "Demo only"},
+    )
+    assert annotation.status_code == 200, annotation.text
+    assert annotation.json()["note"] == "Reviewed offline"
+    assert annotation.json()["rejected"] is True
+    assert annotation.json()["selected"] is False
+    annotated = client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations").json()
+    annotated_legs = {leg["leg_id"]: leg for leg in annotated["consolidated_legs"]}
+    assert all(annotated_legs[leg_id]["shares"] == "0" for leg_id in annotation.json()["leg_ids"] if annotated_legs[leg_id]["side"] == "SELL")
+    activity = client.get("/api/v1/activity?event_type=recommendation_annotation&status=complete")
+    assert activity.status_code == 200
+    assert activity.json()["total"] == 1
+    assert activity.json()["items"][0]["details"]["group_id"] == group_id
+
+    wash = client.get("/api/v1/wash-sales")
+    assert wash.status_code == 200
+    assert wash.json()["demo"] is True
+    assert wash.json()["current_restrictions"] == []
+    assert any("historical realized-loss lot attribution is unavailable" in warning for warning in wash.json()["warnings"])
+
+    disabled = [
+        client.get("/api/v1/auth/etrade/status"),
+        client.post("/api/v1/auth/etrade/start"),
+        client.post("/api/v1/auth/etrade/verify", json={"verifier": "12345"}),
+        client.post("/api/v1/orders/fake-leg/preview"),
+        client.post("/api/v1/orders/fake-leg/submit"),
+        client.post("/api/v1/optimizer/runs", json={"mode": "real_optimizer"}),
+    ]
+    assert disabled[0].json()["status"] == "disabled"
+    for response in disabled[1:]:
+        assert response.status_code == 503
+        assert {"code", "message", "details", "correlation_id"} <= set(response.json())
+        assert response.json()["details"]["available"] is False
+    assert broker.fetch_count == 1
+    assert not hasattr(broker, "preview_order")
+    assert not hasattr(broker, "submit_approved_order")
+    tables = set(inspect(client.app.state.engine).get_table_names())
+    assert not {"order_record", "order_fill"} & tables

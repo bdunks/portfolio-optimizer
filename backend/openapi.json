@@ -1,0 +1,5264 @@
+{
+  "components": {
+    "schemas": {
+      "ActivityEventResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "correlation_id": {
+            "title": "Correlation Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/JSONValue"
+          },
+          "event_type": {
+            "title": "Event Type",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "created_at",
+          "event_type",
+          "status",
+          "correlation_id",
+          "details"
+        ],
+        "title": "ActivityEventResponse",
+        "type": "object"
+      },
+      "ActivityPageResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ActivityEventResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "offset",
+          "limit"
+        ],
+        "title": "ActivityPageResponse",
+        "type": "object"
+      },
+      "AllocationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "current": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AllocationWeightsResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "proposed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AllocationWeightsResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AllocationTargetResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "current",
+          "proposed",
+          "target"
+        ],
+        "title": "AllocationResponse",
+        "type": "object"
+      },
+      "AllocationTargetResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "sleeve_weights_pct": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Sleeve Weights Pct",
+            "type": "object"
+          }
+        },
+        "required": [
+          "sleeve_weights_pct"
+        ],
+        "title": "AllocationTargetResponse",
+        "type": "object"
+      },
+      "AllocationWeightsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "sleeve_weights_pct": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Sleeve Weights Pct",
+            "type": "object"
+          },
+          "total_portfolio_usd": {
+            "title": "Total Portfolio Usd",
+            "type": "string"
+          }
+        },
+        "required": [
+          "total_portfolio_usd",
+          "sleeve_weights_pct"
+        ],
+        "title": "AllocationWeightsResponse",
+        "type": "object"
+      },
+      "AllowedSecurityInput": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "exposure_suitability": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exposure Suitability"
+          },
+          "priority": {
+            "default": 0,
+            "title": "Priority",
+            "type": "integer"
+          },
+          "replacement_set_id": {
+            "default": "default",
+            "title": "Replacement Set Id",
+            "type": "string"
+          },
+          "sleeve_key": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Sleeve Key",
+            "type": "string"
+          },
+          "sub_sleeve_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sub Sleeve Key"
+          },
+          "ticker": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Ticker",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticker",
+          "sleeve_key"
+        ],
+        "title": "AllowedSecurityInput",
+        "type": "object"
+      },
+      "AllowedSecurityResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "exposure_suitability": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exposure Suitability"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
+          },
+          "replacement_set_id": {
+            "title": "Replacement Set Id",
+            "type": "string"
+          },
+          "sleeve_key": {
+            "title": "Sleeve Key",
+            "type": "string"
+          },
+          "sub_sleeve_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sub Sleeve Key"
+          },
+          "ticker": {
+            "title": "Ticker",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticker",
+          "sleeve_key",
+          "sub_sleeve_key",
+          "replacement_set_id",
+          "priority",
+          "enabled",
+          "exposure_suitability"
+        ],
+        "title": "AllowedSecurityResponse",
+        "type": "object"
+      },
+      "CoverageResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "balances": {
+            "title": "Balances",
+            "type": "boolean"
+          },
+          "lookthrough": {
+            "default": false,
+            "title": "Lookthrough",
+            "type": "boolean"
+          },
+          "lots": {
+            "title": "Lots",
+            "type": "boolean"
+          },
+          "positions": {
+            "title": "Positions",
+            "type": "boolean"
+          },
+          "quotes": {
+            "title": "Quotes",
+            "type": "boolean"
+          },
+          "transactions": {
+            "title": "Transactions",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "positions",
+          "lots",
+          "transactions",
+          "balances",
+          "quotes"
+        ],
+        "title": "CoverageResponse",
+        "type": "object"
+      },
+      "ErrorEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "correlation_id": {
+            "title": "Correlation Id",
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/components/schemas/JSONValue"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "details",
+          "correlation_id"
+        ],
+        "title": "ErrorEnvelope",
+        "type": "object"
+      },
+      "EtradeAuthStatusResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id_key": {
+            "title": "Account Id Key",
+            "type": "null"
+          },
+          "authenticated": {
+            "const": false,
+            "title": "Authenticated",
+            "type": "boolean"
+          },
+          "available": {
+            "const": false,
+            "title": "Available",
+            "type": "boolean"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "phase": {
+            "const": 3,
+            "title": "Phase",
+            "type": "integer"
+          },
+          "status": {
+            "const": "disabled",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "available",
+          "authenticated",
+          "account_id_key",
+          "phase",
+          "message"
+        ],
+        "title": "EtradeAuthStatusResponse",
+        "type": "object"
+      },
+      "GroupImpactResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "cash_after_usd": {
+            "title": "Cash After Usd",
+            "type": "string"
+          },
+          "demo": {
+            "const": true,
+            "title": "Demo",
+            "type": "boolean"
+          },
+          "portfolio_effects": {
+            "$ref": "#/components/schemas/PortfolioEffectsResponse"
+          },
+          "realized_lt_usd": {
+            "title": "Realized Lt Usd",
+            "type": "string"
+          },
+          "realized_st_usd": {
+            "title": "Realized St Usd",
+            "type": "string"
+          },
+          "replacement_buy_cost_usd": {
+            "title": "Replacement Buy Cost Usd",
+            "type": "string"
+          },
+          "replacement_buy_shares": {
+            "title": "Replacement Buy Shares",
+            "type": "string"
+          },
+          "risk_tracking_score": {
+            "title": "Risk Tracking Score",
+            "type": "null"
+          },
+          "selected_sell_lots_count": {
+            "title": "Selected Sell Lots Count",
+            "type": "integer"
+          },
+          "sell_proceeds_usd": {
+            "title": "Sell Proceeds Usd",
+            "type": "string"
+          },
+          "wash_status": {
+            "const": "not_validated_demo",
+            "title": "Wash Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "demo",
+          "wash_status",
+          "selected_sell_lots_count",
+          "sell_proceeds_usd",
+          "realized_st_usd",
+          "realized_lt_usd",
+          "replacement_buy_shares",
+          "replacement_buy_cost_usd",
+          "cash_after_usd",
+          "portfolio_effects",
+          "risk_tracking_score"
+        ],
+        "title": "GroupImpactResponse",
+        "type": "object"
+      },
+      "HealthResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "broker_mode": {
+            "title": "Broker Mode",
+            "type": "string"
+          },
+          "live_broker_enabled": {
+            "const": false,
+            "title": "Live Broker Enabled",
+            "type": "boolean"
+          },
+          "order_submission_enabled": {
+            "const": false,
+            "title": "Order Submission Enabled",
+            "type": "boolean"
+          },
+          "schema_ready": {
+            "title": "Schema Ready",
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "not_ready"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "schema_ready",
+          "broker_mode",
+          "live_broker_enabled",
+          "order_submission_enabled"
+        ],
+        "title": "HealthResponse",
+        "type": "object"
+      },
+      "JSONValue": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "items": {
+              "$ref": "#/components/schemas/JSONValue"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JSONValue"
+            },
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "LotPageResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LotResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "offset",
+          "limit"
+        ],
+        "title": "LotPageResponse",
+        "type": "object"
+      },
+      "LotResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "acquired_date": {
+            "format": "date",
+            "title": "Acquired Date",
+            "type": "string"
+          },
+          "adjusted_total_basis_usd": {
+            "title": "Adjusted Total Basis Usd",
+            "type": "string"
+          },
+          "adjusted_unit_basis_usd": {
+            "title": "Adjusted Unit Basis Usd",
+            "type": "string"
+          },
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "asset_type": {
+            "enum": [
+              "EQUITY",
+              "ETF"
+            ],
+            "title": "Asset Type",
+            "type": "string"
+          },
+          "available_shares": {
+            "title": "Available Shares",
+            "type": "string"
+          },
+          "broker_lot_id": {
+            "title": "Broker Lot Id",
+            "type": "string"
+          },
+          "current_price_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Price Usd"
+          },
+          "fractional_cleanup_unsupported": {
+            "title": "Fractional Cleanup Unsupported",
+            "type": "boolean"
+          },
+          "fractional_shares": {
+            "title": "Fractional Shares",
+            "type": "string"
+          },
+          "position_cleanup_candidate": {
+            "title": "Position Cleanup Candidate",
+            "type": "boolean"
+          },
+          "quality_flags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Quality Flags",
+            "type": "array"
+          },
+          "remaining_shares": {
+            "title": "Remaining Shares",
+            "type": "string"
+          },
+          "sleeve_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sleeve Key"
+          },
+          "small_lot_cleanup_candidate": {
+            "title": "Small Lot Cleanup Candidate",
+            "type": "boolean"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "sub_sleeve_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sub Sleeve Key"
+          },
+          "term": {
+            "enum": [
+              "ST",
+              "LT"
+            ],
+            "title": "Term",
+            "type": "string"
+          },
+          "ticker": {
+            "title": "Ticker",
+            "type": "string"
+          },
+          "unrealized_pl_pct": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unrealized Pl Pct"
+          },
+          "unrealized_pl_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unrealized Pl Usd"
+          },
+          "whole_shares_available": {
+            "title": "Whole Shares Available",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticker",
+          "asset_type",
+          "broker_lot_id",
+          "acquired_date",
+          "remaining_shares",
+          "available_shares",
+          "adjusted_unit_basis_usd",
+          "adjusted_total_basis_usd",
+          "current_price_usd",
+          "unrealized_pl_usd",
+          "unrealized_pl_pct",
+          "source",
+          "as_of",
+          "term",
+          "sleeve_key",
+          "sub_sleeve_key",
+          "quality_flags",
+          "small_lot_cleanup_candidate",
+          "position_cleanup_candidate",
+          "whole_shares_available",
+          "fractional_shares",
+          "fractional_cleanup_unsupported"
+        ],
+        "title": "LotResponse",
+        "type": "object"
+      },
+      "OptimizerExportJSONResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "metadata": {
+            "$ref": "#/components/schemas/OptimizerExportMetadataResponse"
+          },
+          "run": {
+            "$ref": "#/components/schemas/OptimizerRecommendationsResponse"
+          }
+        },
+        "required": [
+          "metadata",
+          "run"
+        ],
+        "title": "OptimizerExportJSONResponse",
+        "type": "object"
+      },
+      "OptimizerExportMetadataResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "actionable": {
+            "const": false,
+            "title": "Actionable",
+            "type": "boolean"
+          },
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "demo": {
+            "const": true,
+            "title": "Demo",
+            "type": "boolean"
+          },
+          "input_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Fingerprint"
+          },
+          "policy_revision_id": {
+            "title": "Policy Revision Id",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "solver_version": {
+            "const": "DEMO",
+            "title": "Solver Version",
+            "type": "string"
+          },
+          "source_checksum": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Checksum"
+          },
+          "source_generation": {
+            "title": "Source Generation",
+            "type": "integer"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "run_id",
+          "policy_revision_id",
+          "source_generation",
+          "as_of",
+          "solver_version",
+          "demo",
+          "actionable",
+          "input_fingerprint",
+          "source_checksum",
+          "warnings"
+        ],
+        "title": "OptimizerExportMetadataResponse",
+        "type": "object"
+      },
+      "OptimizerRecommendationsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "actionable": {
+            "const": false,
+            "title": "Actionable",
+            "type": "boolean"
+          },
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "batch_settings": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JSONValue"
+            },
+            "title": "Batch Settings",
+            "type": "object"
+          },
+          "cash_after_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash After Usd"
+          },
+          "cash_before_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash Before Usd"
+          },
+          "consolidated_legs": {
+            "items": {
+              "$ref": "#/components/schemas/RecommendationLegResponse"
+            },
+            "title": "Consolidated Legs",
+            "type": "array"
+          },
+          "constraints_satisfied": {
+            "title": "Constraints Satisfied",
+            "type": "null"
+          },
+          "demo": {
+            "const": true,
+            "title": "Demo",
+            "type": "boolean"
+          },
+          "estimated_realized_lt_usd": {
+            "title": "Estimated Realized Lt Usd",
+            "type": "string"
+          },
+          "estimated_realized_st_usd": {
+            "title": "Estimated Realized St Usd",
+            "type": "string"
+          },
+          "estimated_tax_benefit_status": {
+            "enum": [
+              "tax_profile_incomplete",
+              "optimizer_unavailable"
+            ],
+            "title": "Estimated Tax Benefit Status",
+            "type": "string"
+          },
+          "estimated_tax_benefit_usd": {
+            "title": "Estimated Tax Benefit Usd",
+            "type": "null"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/RecommendationGroupResponse"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "input_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Fingerprint"
+          },
+          "lots_sold_count": {
+            "title": "Lots Sold Count",
+            "type": "integer"
+          },
+          "mode": {
+            "const": "recommendations_only",
+            "title": "Mode",
+            "type": "string"
+          },
+          "no_trade_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JSONValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "orders_count": {
+            "title": "Orders Count",
+            "type": "integer"
+          },
+          "policy_revision_id": {
+            "title": "Policy Revision Id",
+            "type": "string"
+          },
+          "portfolio_effects": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PortfolioEffectsResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "positions_exited_count": {
+            "title": "Positions Exited Count",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "solver_version": {
+            "const": "DEMO",
+            "title": "Solver Version",
+            "type": "string"
+          },
+          "source_checksum": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Checksum"
+          },
+          "source_generation": {
+            "title": "Source Generation",
+            "type": "integer"
+          },
+          "status": {
+            "const": "demo",
+            "title": "Status",
+            "type": "string"
+          },
+          "tax_profile_configured": {
+            "title": "Tax Profile Configured",
+            "type": "boolean"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "run_id",
+          "status",
+          "mode",
+          "policy_revision_id",
+          "source_generation",
+          "as_of",
+          "solver_version",
+          "demo",
+          "actionable",
+          "input_fingerprint",
+          "source_checksum",
+          "batch_settings",
+          "estimated_realized_st_usd",
+          "estimated_realized_lt_usd",
+          "estimated_tax_benefit_usd",
+          "estimated_tax_benefit_status",
+          "lots_sold_count",
+          "positions_exited_count",
+          "orders_count",
+          "cash_before_usd",
+          "cash_after_usd",
+          "portfolio_effects",
+          "constraints_satisfied",
+          "no_trade_reason",
+          "warnings",
+          "tax_profile_configured",
+          "groups",
+          "consolidated_legs"
+        ],
+        "title": "OptimizerRecommendationsResponse",
+        "type": "object"
+      },
+      "OptimizerRunInput": {
+        "additionalProperties": false,
+        "properties": {
+          "max_sell_lots_per_batch": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Sell Lots Per Batch"
+          },
+          "max_sell_tickers_per_batch": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Sell Tickers Per Batch"
+          },
+          "max_total_orders_per_batch": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Total Orders Per Batch"
+          },
+          "mode": {
+            "default": "recommendations_only",
+            "enum": [
+              "recommendations_only",
+              "real_optimizer"
+            ],
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "title": "OptimizerRunInput",
+        "type": "object"
+      },
+      "OptimizerRunResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "actionable": {
+            "const": false,
+            "title": "Actionable",
+            "type": "boolean"
+          },
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "batch_settings": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JSONValue"
+            },
+            "title": "Batch Settings",
+            "type": "object"
+          },
+          "cash_after_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash After Usd"
+          },
+          "cash_before_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash Before Usd"
+          },
+          "constraints_satisfied": {
+            "title": "Constraints Satisfied",
+            "type": "null"
+          },
+          "demo": {
+            "const": true,
+            "title": "Demo",
+            "type": "boolean"
+          },
+          "estimated_realized_lt_usd": {
+            "title": "Estimated Realized Lt Usd",
+            "type": "string"
+          },
+          "estimated_realized_st_usd": {
+            "title": "Estimated Realized St Usd",
+            "type": "string"
+          },
+          "estimated_tax_benefit_status": {
+            "enum": [
+              "tax_profile_incomplete",
+              "optimizer_unavailable"
+            ],
+            "title": "Estimated Tax Benefit Status",
+            "type": "string"
+          },
+          "estimated_tax_benefit_usd": {
+            "title": "Estimated Tax Benefit Usd",
+            "type": "null"
+          },
+          "input_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Fingerprint"
+          },
+          "lots_sold_count": {
+            "title": "Lots Sold Count",
+            "type": "integer"
+          },
+          "mode": {
+            "const": "recommendations_only",
+            "title": "Mode",
+            "type": "string"
+          },
+          "no_trade_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JSONValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "orders_count": {
+            "title": "Orders Count",
+            "type": "integer"
+          },
+          "policy_revision_id": {
+            "title": "Policy Revision Id",
+            "type": "string"
+          },
+          "portfolio_effects": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PortfolioEffectsResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "positions_exited_count": {
+            "title": "Positions Exited Count",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "solver_version": {
+            "const": "DEMO",
+            "title": "Solver Version",
+            "type": "string"
+          },
+          "source_checksum": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Checksum"
+          },
+          "source_generation": {
+            "title": "Source Generation",
+            "type": "integer"
+          },
+          "status": {
+            "const": "demo",
+            "title": "Status",
+            "type": "string"
+          },
+          "tax_profile_configured": {
+            "title": "Tax Profile Configured",
+            "type": "boolean"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "run_id",
+          "status",
+          "mode",
+          "policy_revision_id",
+          "source_generation",
+          "as_of",
+          "solver_version",
+          "demo",
+          "actionable",
+          "input_fingerprint",
+          "source_checksum",
+          "batch_settings",
+          "estimated_realized_st_usd",
+          "estimated_realized_lt_usd",
+          "estimated_tax_benefit_usd",
+          "estimated_tax_benefit_status",
+          "lots_sold_count",
+          "positions_exited_count",
+          "orders_count",
+          "cash_before_usd",
+          "cash_after_usd",
+          "portfolio_effects",
+          "constraints_satisfied",
+          "no_trade_reason",
+          "warnings",
+          "tax_profile_configured"
+        ],
+        "title": "OptimizerRunResponse",
+        "type": "object"
+      },
+      "OptimizerSelectionInput": {
+        "additionalProperties": false,
+        "properties": {
+          "selected_group_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "title": "Selected Group Ids",
+            "type": "array"
+          },
+          "selected_sell_lots": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Selected Sell Lots",
+            "type": "object"
+          }
+        },
+        "title": "OptimizerSelectionInput",
+        "type": "object"
+      },
+      "OverrideInput": {
+        "additionalProperties": false,
+        "properties": {
+          "sleeve_key": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Sleeve Key",
+            "type": "string"
+          },
+          "sub_sleeve_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sub Sleeve Key"
+          },
+          "ticker": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Ticker",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticker",
+          "sleeve_key"
+        ],
+        "title": "OverrideInput",
+        "type": "object"
+      },
+      "PolicyDraftInput": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed_securities": {
+            "items": {
+              "$ref": "#/components/schemas/AllowedSecurityInput"
+            },
+            "title": "Allowed Securities",
+            "type": "array"
+          },
+          "overrides": {
+            "items": {
+              "$ref": "#/components/schemas/OverrideInput"
+            },
+            "title": "Overrides",
+            "type": "array"
+          },
+          "reassignments": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Reassignments",
+            "type": "object"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/PolicySettingsInput"
+          },
+          "sleeves": {
+            "items": {
+              "$ref": "#/components/schemas/SleeveInput"
+            },
+            "title": "Sleeves",
+            "type": "array"
+          },
+          "source_revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Revision Id"
+          }
+        },
+        "required": [
+          "settings",
+          "sleeves"
+        ],
+        "title": "PolicyDraftInput",
+        "type": "object"
+      },
+      "PolicyOverrideResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "sleeve_key": {
+            "title": "Sleeve Key",
+            "type": "string"
+          },
+          "sub_sleeve_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sub Sleeve Key"
+          },
+          "ticker": {
+            "title": "Ticker",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticker",
+          "sleeve_key",
+          "sub_sleeve_key"
+        ],
+        "title": "PolicyOverrideResponse",
+        "type": "object"
+      },
+      "PolicyResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PolicyRevisionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "drafts": {
+            "items": {
+              "$ref": "#/components/schemas/PolicyRevisionResponse"
+            },
+            "title": "Drafts",
+            "type": "array"
+          },
+          "superseded": {
+            "items": {
+              "$ref": "#/components/schemas/PolicyRevisionResponse"
+            },
+            "title": "Superseded",
+            "type": "array"
+          }
+        },
+        "required": [
+          "active",
+          "drafts",
+          "superseded"
+        ],
+        "title": "PolicyResponse",
+        "type": "object"
+      },
+      "PolicyRevisionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "activated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activated At"
+          },
+          "activation_errors": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/PolicyValidationErrorResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activation Errors"
+          },
+          "allowed_securities": {
+            "items": {
+              "$ref": "#/components/schemas/AllowedSecurityResponse"
+            },
+            "title": "Allowed Securities",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "overrides": {
+            "items": {
+              "$ref": "#/components/schemas/PolicyOverrideResponse"
+            },
+            "title": "Overrides",
+            "type": "array"
+          },
+          "revision_number": {
+            "title": "Revision Number",
+            "type": "integer"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/PolicySettingsResponse"
+          },
+          "sleeves": {
+            "items": {
+              "$ref": "#/components/schemas/PolicySleeveResponse"
+            },
+            "title": "Sleeves",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "DRAFT",
+              "ACTIVE",
+              "SUPERSEDED"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "revision_number",
+          "status",
+          "created_at",
+          "activated_at",
+          "settings",
+          "sleeves",
+          "allowed_securities",
+          "overrides"
+        ],
+        "title": "PolicyRevisionResponse",
+        "type": "object"
+      },
+      "PolicySettingsInput": {
+        "additionalProperties": false,
+        "properties": {
+          "allow_gain_sales": {
+            "default": false,
+            "title": "Allow Gain Sales",
+            "type": "boolean"
+          },
+          "budget_period": {
+            "default": "calendar_year",
+            "title": "Budget Period",
+            "type": "string"
+          },
+          "carryforward_loss_discount_factor": {
+            "default": "0.50",
+            "title": "Carryforward Loss Discount Factor",
+            "type": "string"
+          },
+          "cash_reserve_usd": {
+            "default": "0",
+            "title": "Cash Reserve Usd",
+            "type": "string"
+          },
+          "gain_budget_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gain Budget Usd"
+          },
+          "long_term_tax_rate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Long Term Tax Rate"
+          },
+          "lt_gain_limit_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lt Gain Limit Usd"
+          },
+          "lt_loss_carryforward_usd": {
+            "default": "0",
+            "title": "Lt Loss Carryforward Usd",
+            "type": "string"
+          },
+          "max_batch_turnover_pct": {
+            "default": "5.0",
+            "title": "Max Batch Turnover Pct",
+            "type": "string"
+          },
+          "max_incremental_tax_cost_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Incremental Tax Cost Usd"
+          },
+          "max_sell_lots_per_batch": {
+            "default": 20,
+            "title": "Max Sell Lots Per Batch",
+            "type": "integer"
+          },
+          "max_sell_tickers_per_batch": {
+            "default": 10,
+            "title": "Max Sell Tickers Per Batch",
+            "type": "integer"
+          },
+          "max_total_orders_per_batch": {
+            "default": 12,
+            "title": "Max Total Orders Per Batch",
+            "type": "integer"
+          },
+          "min_buy_order_notional_usd": {
+            "default": "500.00",
+            "title": "Min Buy Order Notional Usd",
+            "type": "string"
+          },
+          "ordinary_income_deduction_limit_usd": {
+            "default": "3000",
+            "title": "Ordinary Income Deduction Limit Usd",
+            "type": "string"
+          },
+          "permit_etf_harvest": {
+            "default": false,
+            "title": "Permit Etf Harvest",
+            "type": "boolean"
+          },
+          "permit_muni_exit": {
+            "default": false,
+            "title": "Permit Muni Exit",
+            "type": "boolean"
+          },
+          "prefer_etf_buys": {
+            "default": true,
+            "title": "Prefer Etf Buys",
+            "type": "boolean"
+          },
+          "short_term_tax_rate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Short Term Tax Rate"
+          },
+          "st_gain_limit_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "St Gain Limit Usd"
+          },
+          "st_loss_carryforward_usd": {
+            "default": "0",
+            "title": "St Loss Carryforward Usd",
+            "type": "string"
+          },
+          "target_retained_net_loss_usd": {
+            "default": "3000",
+            "title": "Target Retained Net Loss Usd",
+            "type": "string"
+          },
+          "ytd_as_of": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ytd As Of"
+          },
+          "ytd_realized_lt_usd": {
+            "default": "0",
+            "title": "Ytd Realized Lt Usd",
+            "type": "string"
+          },
+          "ytd_realized_st_usd": {
+            "default": "0",
+            "title": "Ytd Realized St Usd",
+            "type": "string"
+          },
+          "ytd_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ytd Source"
+          }
+        },
+        "title": "PolicySettingsInput",
+        "type": "object"
+      },
+      "PolicySettingsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "allow_gain_sales": {
+            "title": "Allow Gain Sales",
+            "type": "boolean"
+          },
+          "budget_period": {
+            "title": "Budget Period",
+            "type": "string"
+          },
+          "carryforward_loss_discount_factor": {
+            "title": "Carryforward Loss Discount Factor",
+            "type": "string"
+          },
+          "cash_reserve_usd": {
+            "title": "Cash Reserve Usd",
+            "type": "string"
+          },
+          "gain_budget_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gain Budget Usd"
+          },
+          "long_term_tax_rate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Long Term Tax Rate"
+          },
+          "lt_gain_limit_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lt Gain Limit Usd"
+          },
+          "lt_loss_carryforward_usd": {
+            "title": "Lt Loss Carryforward Usd",
+            "type": "string"
+          },
+          "max_batch_turnover_pct": {
+            "title": "Max Batch Turnover Pct",
+            "type": "string"
+          },
+          "max_incremental_tax_cost_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Incremental Tax Cost Usd"
+          },
+          "max_sell_lots_per_batch": {
+            "title": "Max Sell Lots Per Batch",
+            "type": "integer"
+          },
+          "max_sell_tickers_per_batch": {
+            "title": "Max Sell Tickers Per Batch",
+            "type": "integer"
+          },
+          "max_total_orders_per_batch": {
+            "title": "Max Total Orders Per Batch",
+            "type": "integer"
+          },
+          "min_buy_order_notional_usd": {
+            "title": "Min Buy Order Notional Usd",
+            "type": "string"
+          },
+          "ordinary_income_deduction_limit_usd": {
+            "title": "Ordinary Income Deduction Limit Usd",
+            "type": "string"
+          },
+          "permit_etf_harvest": {
+            "title": "Permit Etf Harvest",
+            "type": "boolean"
+          },
+          "permit_muni_exit": {
+            "title": "Permit Muni Exit",
+            "type": "boolean"
+          },
+          "prefer_etf_buys": {
+            "title": "Prefer Etf Buys",
+            "type": "boolean"
+          },
+          "short_term_tax_rate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Short Term Tax Rate"
+          },
+          "st_gain_limit_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "St Gain Limit Usd"
+          },
+          "st_loss_carryforward_usd": {
+            "title": "St Loss Carryforward Usd",
+            "type": "string"
+          },
+          "target_retained_net_loss_usd": {
+            "title": "Target Retained Net Loss Usd",
+            "type": "string"
+          },
+          "ytd_as_of": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ytd As Of"
+          },
+          "ytd_realized_lt_usd": {
+            "title": "Ytd Realized Lt Usd",
+            "type": "string"
+          },
+          "ytd_realized_st_usd": {
+            "title": "Ytd Realized St Usd",
+            "type": "string"
+          },
+          "ytd_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ytd Source"
+          }
+        },
+        "required": [
+          "short_term_tax_rate",
+          "long_term_tax_rate",
+          "st_loss_carryforward_usd",
+          "lt_loss_carryforward_usd",
+          "ytd_realized_st_usd",
+          "ytd_realized_lt_usd",
+          "ytd_source",
+          "ytd_as_of",
+          "target_retained_net_loss_usd",
+          "ordinary_income_deduction_limit_usd",
+          "carryforward_loss_discount_factor",
+          "gain_budget_usd",
+          "max_incremental_tax_cost_usd",
+          "st_gain_limit_usd",
+          "lt_gain_limit_usd",
+          "budget_period",
+          "max_sell_tickers_per_batch",
+          "max_sell_lots_per_batch",
+          "max_total_orders_per_batch",
+          "max_batch_turnover_pct",
+          "min_buy_order_notional_usd",
+          "cash_reserve_usd",
+          "prefer_etf_buys",
+          "allow_gain_sales",
+          "permit_etf_harvest",
+          "permit_muni_exit"
+        ],
+        "title": "PolicySettingsResponse",
+        "type": "object"
+      },
+      "PolicySleeveResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "drift_band_pp": {
+            "title": "Drift Band Pp",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "is_cash_sleeve": {
+            "title": "Is Cash Sleeve",
+            "type": "boolean"
+          },
+          "is_direct_index_container": {
+            "title": "Is Direct Index Container",
+            "type": "boolean"
+          },
+          "is_direct_index_sleeve": {
+            "title": "Is Direct Index Sleeve",
+            "type": "boolean"
+          },
+          "parent_sleeve_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Sleeve Key"
+          },
+          "sleeve_key": {
+            "title": "Sleeve Key",
+            "type": "string"
+          },
+          "sort_order": {
+            "title": "Sort Order",
+            "type": "integer"
+          },
+          "target_pct": {
+            "title": "Target Pct",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sleeve_key",
+          "display_name",
+          "sort_order",
+          "parent_sleeve_key",
+          "target_pct",
+          "drift_band_pp",
+          "is_direct_index_container",
+          "is_direct_index_sleeve",
+          "is_cash_sleeve",
+          "enabled"
+        ],
+        "title": "PolicySleeveResponse",
+        "type": "object"
+      },
+      "PolicyValidationErrorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "PolicyValidationErrorResponse",
+        "type": "object"
+      },
+      "PortfolioAccountResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_type": {
+            "title": "Account Type",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "tax_treatment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tax Treatment"
+          }
+        },
+        "required": [
+          "display_name",
+          "account_type",
+          "tax_treatment"
+        ],
+        "title": "PortfolioAccountResponse",
+        "type": "object"
+      },
+      "PortfolioEffectsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "allocation": {
+            "$ref": "#/components/schemas/AllocationResponse"
+          },
+          "us_transition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/USTransitionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "allocation",
+          "us_transition"
+        ],
+        "title": "PortfolioEffectsResponse",
+        "type": "object"
+      },
+      "PortfolioNotSyncedResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "title": "Account",
+            "type": "null"
+          },
+          "allocation": {
+            "$ref": "#/components/schemas/AllocationResponse"
+          },
+          "as_of": {
+            "title": "As Of",
+            "type": "null"
+          },
+          "cash_usd": {
+            "title": "Cash Usd",
+            "type": "string"
+          },
+          "coverage": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Coverage",
+            "type": "object"
+          },
+          "demo": {
+            "title": "Demo",
+            "type": "boolean"
+          },
+          "portfolio_total_usd": {
+            "title": "Portfolio Total Usd",
+            "type": "string"
+          },
+          "positions": {
+            "items": {
+              "$ref": "#/components/schemas/PositionResponse"
+            },
+            "title": "Positions",
+            "type": "array"
+          },
+          "status": {
+            "const": "not_synced",
+            "title": "Status",
+            "type": "string"
+          },
+          "sync": {
+            "$ref": "#/components/schemas/SyncStatusResponse"
+          },
+          "us_transition": {
+            "title": "Us Transition",
+            "type": "null"
+          }
+        },
+        "required": [
+          "status",
+          "demo",
+          "account",
+          "as_of",
+          "cash_usd",
+          "portfolio_total_usd",
+          "positions",
+          "coverage",
+          "sync",
+          "allocation",
+          "us_transition"
+        ],
+        "title": "PortfolioNotSyncedResponse",
+        "type": "object"
+      },
+      "PortfolioReadyResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/PortfolioAccountResponse"
+          },
+          "active_policy_revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Policy Revision Id"
+          },
+          "allocation": {
+            "$ref": "#/components/schemas/AllocationResponse"
+          },
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "cash_usd": {
+            "title": "Cash Usd",
+            "type": "string"
+          },
+          "coverage": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Coverage",
+            "type": "object"
+          },
+          "demo": {
+            "title": "Demo",
+            "type": "boolean"
+          },
+          "portfolio_total_usd": {
+            "title": "Portfolio Total Usd",
+            "type": "string"
+          },
+          "position_count": {
+            "title": "Position Count",
+            "type": "integer"
+          },
+          "positions": {
+            "items": {
+              "$ref": "#/components/schemas/PositionResponse"
+            },
+            "title": "Positions",
+            "type": "array"
+          },
+          "positions_market_value_usd": {
+            "title": "Positions Market Value Usd",
+            "type": "string"
+          },
+          "settled_buying_power_usd": {
+            "title": "Settled Buying Power Usd",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "const": "ready",
+            "title": "Status",
+            "type": "string"
+          },
+          "sync": {
+            "$ref": "#/components/schemas/SyncStatusResponse"
+          },
+          "unassigned_tickers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unassigned Tickers",
+            "type": "array"
+          },
+          "us_transition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/USTransitionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "demo",
+          "source",
+          "account",
+          "as_of",
+          "cash_usd",
+          "settled_buying_power_usd",
+          "positions_market_value_usd",
+          "portfolio_total_usd",
+          "position_count",
+          "positions",
+          "active_policy_revision_id",
+          "unassigned_tickers",
+          "coverage",
+          "sync",
+          "allocation",
+          "us_transition"
+        ],
+        "title": "PortfolioReadyResponse",
+        "type": "object"
+      },
+      "PositionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_type": {
+            "enum": [
+              "EQUITY",
+              "ETF"
+            ],
+            "title": "Asset Type",
+            "type": "string"
+          },
+          "last_price_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Price Usd"
+          },
+          "market_value_usd": {
+            "title": "Market Value Usd",
+            "type": "string"
+          },
+          "quote_as_of": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote As Of"
+          },
+          "quote_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote Source"
+          },
+          "shares": {
+            "title": "Shares",
+            "type": "string"
+          },
+          "sleeve_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sleeve Key"
+          },
+          "sub_sleeve_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sub Sleeve Key"
+          },
+          "ticker": {
+            "title": "Ticker",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticker",
+          "asset_type",
+          "shares",
+          "market_value_usd",
+          "last_price_usd",
+          "quote_source",
+          "quote_as_of",
+          "sleeve_key",
+          "sub_sleeve_key"
+        ],
+        "title": "PositionResponse",
+        "type": "object"
+      },
+      "RecommendationAnnotationInput": {
+        "additionalProperties": false,
+        "properties": {
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "rejected": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejected"
+          },
+          "rejection_reason": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejection Reason"
+          }
+        },
+        "title": "RecommendationAnnotationInput",
+        "type": "object"
+      },
+      "RecommendationGroupResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "dependencies": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dependencies",
+            "type": "array"
+          },
+          "estimated_benefit_usd": {
+            "title": "Estimated Benefit Usd",
+            "type": "null"
+          },
+          "group_id": {
+            "title": "Group Id",
+            "type": "string"
+          },
+          "group_type": {
+            "const": "demo_loss_harvest",
+            "title": "Group Type",
+            "type": "string"
+          },
+          "impact": {
+            "$ref": "#/components/schemas/GroupImpactResponse"
+          },
+          "leg_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Leg Ids",
+            "type": "array"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "rationale": {
+            "title": "Rationale",
+            "type": "string"
+          },
+          "rejected": {
+            "title": "Rejected",
+            "type": "boolean"
+          },
+          "rejection_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejection Reason"
+          },
+          "selected": {
+            "title": "Selected",
+            "type": "boolean"
+          },
+          "sleeve_key": {
+            "title": "Sleeve Key",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "group_id",
+          "rank",
+          "group_type",
+          "sleeve_key",
+          "rationale",
+          "estimated_benefit_usd",
+          "impact",
+          "dependencies",
+          "selected",
+          "rejected",
+          "note",
+          "rejection_reason",
+          "leg_ids",
+          "warnings"
+        ],
+        "title": "RecommendationGroupResponse",
+        "type": "object"
+      },
+      "RecommendationLegResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "dependencies": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dependencies",
+            "type": "array"
+          },
+          "details": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JSONValue"
+            },
+            "title": "Details",
+            "type": "object"
+          },
+          "estimated_notional_usd": {
+            "title": "Estimated Notional Usd",
+            "type": "string"
+          },
+          "estimated_unit_price_usd": {
+            "title": "Estimated Unit Price Usd",
+            "type": "string"
+          },
+          "group_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Group Ids",
+            "type": "array"
+          },
+          "leg_id": {
+            "title": "Leg Id",
+            "type": "string"
+          },
+          "net_lt_realized_usd": {
+            "title": "Net Lt Realized Usd",
+            "type": "string"
+          },
+          "net_st_realized_usd": {
+            "title": "Net St Realized Usd",
+            "type": "string"
+          },
+          "selected": {
+            "title": "Selected",
+            "type": "boolean"
+          },
+          "selected_lots": {
+            "items": {
+              "$ref": "#/components/schemas/SelectedLotResponse"
+            },
+            "title": "Selected Lots",
+            "type": "array"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "shares": {
+            "title": "Shares",
+            "type": "string"
+          },
+          "side": {
+            "enum": [
+              "BUY",
+              "SELL"
+            ],
+            "title": "Side",
+            "type": "string"
+          },
+          "ticker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ticker"
+          }
+        },
+        "required": [
+          "leg_id",
+          "side",
+          "ticker",
+          "shares",
+          "estimated_unit_price_usd",
+          "estimated_notional_usd",
+          "net_st_realized_usd",
+          "selected",
+          "group_ids",
+          "net_lt_realized_usd",
+          "sequence",
+          "dependencies",
+          "selected_lots",
+          "details"
+        ],
+        "title": "RecommendationLegResponse",
+        "type": "object"
+      },
+      "SelectedLotResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "acquired_date": {
+            "format": "date",
+            "title": "Acquired Date",
+            "type": "string"
+          },
+          "adjusted_basis_usd": {
+            "title": "Adjusted Basis Usd",
+            "type": "string"
+          },
+          "broker_lot_id": {
+            "title": "Broker Lot Id",
+            "type": "string"
+          },
+          "realized_pl_usd": {
+            "title": "Realized Pl Usd",
+            "type": "string"
+          },
+          "selected": {
+            "title": "Selected",
+            "type": "boolean"
+          },
+          "shares": {
+            "title": "Shares",
+            "type": "string"
+          },
+          "st_lt": {
+            "enum": [
+              "ST",
+              "LT"
+            ],
+            "title": "St Lt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "broker_lot_id",
+          "shares",
+          "acquired_date",
+          "adjusted_basis_usd",
+          "st_lt",
+          "realized_pl_usd",
+          "selected"
+        ],
+        "title": "SelectedLotResponse",
+        "type": "object"
+      },
+      "SleeveInput": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "drift_band_pp": {
+            "default": "0",
+            "title": "Drift Band Pp",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "is_cash_sleeve": {
+            "default": false,
+            "title": "Is Cash Sleeve",
+            "type": "boolean"
+          },
+          "is_direct_index_container": {
+            "default": false,
+            "title": "Is Direct Index Container",
+            "type": "boolean"
+          },
+          "is_direct_index_sleeve": {
+            "default": false,
+            "title": "Is Direct Index Sleeve",
+            "type": "boolean"
+          },
+          "parent_sleeve_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Sleeve Key"
+          },
+          "sleeve_key": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Sleeve Key",
+            "type": "string"
+          },
+          "sort_order": {
+            "default": 0,
+            "title": "Sort Order",
+            "type": "integer"
+          },
+          "target_pct": {
+            "default": "0",
+            "title": "Target Pct",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sleeve_key",
+          "display_name"
+        ],
+        "title": "SleeveInput",
+        "type": "object"
+      },
+      "SyncResponseDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "title": "Account",
+            "type": "string"
+          },
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/CoverageResponse"
+          },
+          "demo": {
+            "title": "Demo",
+            "type": "boolean"
+          },
+          "generation": {
+            "title": "Generation",
+            "type": "integer"
+          },
+          "status": {
+            "const": "complete",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "generation",
+          "status",
+          "as_of",
+          "coverage",
+          "account",
+          "demo"
+        ],
+        "title": "SyncResponseDTO",
+        "type": "object"
+      },
+      "SyncStatusResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "generation": {
+            "title": "Generation",
+            "type": "integer"
+          },
+          "last_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Code"
+          },
+          "last_error_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Summary"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          }
+        },
+        "required": [
+          "generation",
+          "complete",
+          "started_at",
+          "completed_at",
+          "last_error_code",
+          "last_error_summary"
+        ],
+        "title": "SyncStatusResponse",
+        "type": "object"
+      },
+      "TransitionChildResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "value_usd": {
+            "title": "Value Usd",
+            "type": "string"
+          },
+          "whole_portfolio_pct": {
+            "title": "Whole Portfolio Pct",
+            "type": "string"
+          },
+          "within_us_sleeve_pct": {
+            "title": "Within Us Sleeve Pct",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value_usd",
+          "within_us_sleeve_pct",
+          "whole_portfolio_pct"
+        ],
+        "title": "TransitionChildResponse",
+        "type": "object"
+      },
+      "TransitionSnapshotResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "children": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/TransitionChildResponse"
+            },
+            "title": "Children",
+            "type": "object"
+          },
+          "etf_progress_pct": {
+            "title": "Etf Progress Pct",
+            "type": "string"
+          },
+          "us_sleeve_value_usd": {
+            "title": "Us Sleeve Value Usd",
+            "type": "string"
+          },
+          "us_sleeve_whole_portfolio_pct": {
+            "title": "Us Sleeve Whole Portfolio Pct",
+            "type": "string"
+          }
+        },
+        "required": [
+          "us_sleeve_value_usd",
+          "us_sleeve_whole_portfolio_pct",
+          "etf_progress_pct",
+          "children"
+        ],
+        "title": "TransitionSnapshotResponse",
+        "type": "object"
+      },
+      "TransitionTargetChildResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "whole_portfolio_pct": {
+            "title": "Whole Portfolio Pct",
+            "type": "string"
+          },
+          "within_us_sleeve_pct": {
+            "title": "Within Us Sleeve Pct",
+            "type": "string"
+          }
+        },
+        "required": [
+          "within_us_sleeve_pct",
+          "whole_portfolio_pct"
+        ],
+        "title": "TransitionTargetChildResponse",
+        "type": "object"
+      },
+      "TransitionTargetResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "children": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/TransitionTargetChildResponse"
+            },
+            "title": "Children",
+            "type": "object"
+          },
+          "us_sleeve_whole_portfolio_pct": {
+            "title": "Us Sleeve Whole Portfolio Pct",
+            "type": "string"
+          }
+        },
+        "required": [
+          "us_sleeve_whole_portfolio_pct",
+          "children"
+        ],
+        "title": "TransitionTargetResponse",
+        "type": "object"
+      },
+      "USTransitionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "current": {
+            "$ref": "#/components/schemas/TransitionSnapshotResponse"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "proposed_basket": {
+            "$ref": "#/components/schemas/TransitionSnapshotResponse"
+          },
+          "sleeve_key": {
+            "title": "Sleeve Key",
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/TransitionTargetResponse"
+          }
+        },
+        "required": [
+          "sleeve_key",
+          "label",
+          "current",
+          "proposed_basket",
+          "target"
+        ],
+        "title": "USTransitionResponse",
+        "type": "object"
+      },
+      "WashAcquisitionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "broker_transaction_key": {
+            "title": "Broker Transaction Key",
+            "type": "string"
+          },
+          "is_acquisition": {
+            "title": "Is Acquisition",
+            "type": "boolean"
+          },
+          "lookback_window_end_date": {
+            "format": "date",
+            "title": "Lookback Window End Date",
+            "type": "string"
+          },
+          "shares": {
+            "title": "Shares",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "ticker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ticker"
+          },
+          "trade_date": {
+            "format": "date",
+            "title": "Trade Date",
+            "type": "string"
+          },
+          "transaction_kind": {
+            "enum": [
+              "BUY",
+              "SELL",
+              "DIVIDEND",
+              "OTHER"
+            ],
+            "title": "Transaction Kind",
+            "type": "string"
+          },
+          "transaction_time": {
+            "format": "date-time",
+            "title": "Transaction Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "broker_transaction_key",
+          "ticker",
+          "transaction_kind",
+          "trade_date",
+          "transaction_time",
+          "shares",
+          "source",
+          "is_acquisition",
+          "lookback_window_end_date"
+        ],
+        "title": "WashAcquisitionResponse",
+        "type": "object"
+      },
+      "WashRestrictionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "loss_sale_date": {
+            "format": "date",
+            "title": "Loss Sale Date",
+            "type": "string"
+          },
+          "next_eligible_purchase_date": {
+            "format": "date",
+            "title": "Next Eligible Purchase Date",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "ticker": {
+            "title": "Ticker",
+            "type": "string"
+          },
+          "trigger": {
+            "title": "Trigger",
+            "type": "string"
+          },
+          "validation": {
+            "title": "Validation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticker",
+          "trigger",
+          "loss_sale_date",
+          "source",
+          "next_eligible_purchase_date",
+          "validation"
+        ],
+        "title": "WashRestrictionResponse",
+        "type": "object"
+      },
+      "WashSalesResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "acquisitions": {
+            "items": {
+              "$ref": "#/components/schemas/WashAcquisitionResponse"
+            },
+            "title": "Acquisitions",
+            "type": "array"
+          },
+          "current_restrictions": {
+            "items": {
+              "$ref": "#/components/schemas/WashRestrictionResponse"
+            },
+            "title": "Current Restrictions",
+            "type": "array"
+          },
+          "demo": {
+            "const": true,
+            "title": "Demo",
+            "type": "boolean"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/WashTransactionResponse"
+            },
+            "title": "History",
+            "type": "array"
+          },
+          "proposed_restrictions": {
+            "items": {
+              "$ref": "#/components/schemas/WashRestrictionResponse"
+            },
+            "title": "Proposed Restrictions",
+            "type": "array"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "demo",
+          "source",
+          "history",
+          "acquisitions",
+          "current_restrictions",
+          "proposed_restrictions",
+          "warnings"
+        ],
+        "title": "WashSalesResponse",
+        "type": "object"
+      },
+      "WashTransactionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "broker_transaction_key": {
+            "title": "Broker Transaction Key",
+            "type": "string"
+          },
+          "is_acquisition": {
+            "title": "Is Acquisition",
+            "type": "boolean"
+          },
+          "shares": {
+            "title": "Shares",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "ticker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ticker"
+          },
+          "trade_date": {
+            "format": "date",
+            "title": "Trade Date",
+            "type": "string"
+          },
+          "transaction_kind": {
+            "enum": [
+              "BUY",
+              "SELL",
+              "DIVIDEND",
+              "OTHER"
+            ],
+            "title": "Transaction Kind",
+            "type": "string"
+          },
+          "transaction_time": {
+            "format": "date-time",
+            "title": "Transaction Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "broker_transaction_key",
+          "ticker",
+          "transaction_kind",
+          "trade_date",
+          "transaction_time",
+          "shares",
+          "source",
+          "is_acquisition"
+        ],
+        "title": "WashTransactionResponse",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Portfolio Optimizer API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/activity": {
+      "get": {
+        "operationId": "activity_api_v1_activity_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "event_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 48,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Event Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 24,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "correlation_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Correlation Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivityPageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Activity"
+      }
+    },
+    "/api/v1/auth/etrade/start": {
+      "post": {
+        "operationId": "etrade_auth_start_api_v1_auth_etrade_start_post",
+        "responses": {
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Etrade Auth Start"
+      }
+    },
+    "/api/v1/auth/etrade/status": {
+      "get": {
+        "operationId": "etrade_auth_status_api_v1_auth_etrade_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EtradeAuthStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Etrade Auth Status"
+      }
+    },
+    "/api/v1/auth/etrade/verify": {
+      "post": {
+        "operationId": "etrade_auth_verify_api_v1_auth_etrade_verify_post",
+        "responses": {
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Etrade Auth Verify"
+      }
+    },
+    "/api/v1/lots": {
+      "get": {
+        "operationId": "lots_api_v1_lots_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "ticker",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ticker"
+            }
+          },
+          {
+            "in": "query",
+            "name": "term",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^(ST|LT)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Term"
+            }
+          },
+          {
+            "in": "query",
+            "name": "fractional",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fractional"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LotPageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Lots"
+      }
+    },
+    "/api/v1/optimizer/runs": {
+      "post": {
+        "operationId": "create_optimizer_run_api_v1_optimizer_runs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OptimizerRunInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptimizerRecommendationsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Create Optimizer Run"
+      }
+    },
+    "/api/v1/optimizer/runs/{run_id}": {
+      "get": {
+        "operationId": "optimizer_run_detail_api_v1_optimizer_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptimizerRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Optimizer Run Detail"
+      }
+    },
+    "/api/v1/optimizer/runs/{run_id}/export": {
+      "get": {
+        "operationId": "export_optimizer_run_api_v1_optimizer_runs__run_id__export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "json",
+              "pattern": "^(json|csv)$",
+              "title": "Format",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptimizerExportJSONResponse"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "JSON document or CSV download; selected by the format query parameter"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Export Optimizer Run"
+      }
+    },
+    "/api/v1/optimizer/runs/{run_id}/recommendations": {
+      "get": {
+        "operationId": "optimizer_run_recommendations_api_v1_optimizer_runs__run_id__recommendations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptimizerRecommendationsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Optimizer Run Recommendations"
+      }
+    },
+    "/api/v1/optimizer/runs/{run_id}/recommendations/{group_id}": {
+      "patch": {
+        "operationId": "annotate_recommendation_group_api_v1_optimizer_runs__run_id__recommendations__group_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecommendationAnnotationInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecommendationGroupResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Annotate Recommendation Group"
+      }
+    },
+    "/api/v1/optimizer/runs/{run_id}/selection": {
+      "post": {
+        "operationId": "optimizer_run_selection_api_v1_optimizer_runs__run_id__selection_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OptimizerSelectionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptimizerRecommendationsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Optimizer Run Selection"
+      }
+    },
+    "/api/v1/orders/{leg_id}/preview": {
+      "post": {
+        "operationId": "disabled_order_preview_api_v1_orders__leg_id__preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "leg_id",
+            "required": true,
+            "schema": {
+              "title": "Leg Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Disabled Order Preview"
+      }
+    },
+    "/api/v1/orders/{leg_id}/submit": {
+      "post": {
+        "operationId": "disabled_order_submit_api_v1_orders__leg_id__submit_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "leg_id",
+            "required": true,
+            "schema": {
+              "title": "Leg Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Disabled Order Submit"
+      }
+    },
+    "/api/v1/policy": {
+      "get": {
+        "operationId": "policy_api_v1_policy_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Policy"
+      }
+    },
+    "/api/v1/policy/drafts": {
+      "post": {
+        "operationId": "save_policy_draft_api_v1_policy_drafts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyDraftInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyRevisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Save Policy Draft"
+      }
+    },
+    "/api/v1/policy/{revision_id}/activate": {
+      "post": {
+        "operationId": "activate_policy_endpoint_api_v1_policy__revision_id__activate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "revision_id",
+            "required": true,
+            "schema": {
+              "title": "Revision Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyRevisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Activate Policy Endpoint"
+      }
+    },
+    "/api/v1/portfolio": {
+      "get": {
+        "operationId": "portfolio_api_v1_portfolio_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PortfolioNotSyncedResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PortfolioReadyResponse"
+                    }
+                  ],
+                  "title": "Response Portfolio Api V1 Portfolio Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Portfolio"
+      }
+    },
+    "/api/v1/portfolio/sync": {
+      "post": {
+        "operationId": "sync_endpoint_api_v1_portfolio_sync_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncResponseDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Sync Endpoint"
+      }
+    },
+    "/api/v1/wash-sales": {
+      "get": {
+        "operationId": "wash_sales_endpoint_api_v1_wash_sales_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WashSalesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Wash Sales Endpoint"
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Health"
+      }
+    }
+  }
+}

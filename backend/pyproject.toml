@@ -32,6 +32,9 @@ preset = "strict"
 min-severity = "warn"
 output-format = "min-text"
 
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
 [tool.ruff]
 line-length = 100
 output-format = "concise"

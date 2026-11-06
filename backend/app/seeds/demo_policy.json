@@ -1,0 +1,92 @@
+{
+  "settings": {
+    "short_term_tax_rate": null,
+    "long_term_tax_rate": null,
+    "st_loss_carryforward_usd": "0",
+    "lt_loss_carryforward_usd": "0",
+    "ytd_realized_st_usd": "0",
+    "ytd_realized_lt_usd": "0",
+    "ytd_source": null,
+    "ytd_as_of": null,
+    "target_retained_net_loss_usd": "3000.00",
+    "ordinary_income_deduction_limit_usd": "3000.00",
+    "carryforward_loss_discount_factor": "0.50",
+    "gain_budget_usd": null,
+    "max_incremental_tax_cost_usd": null,
+    "st_gain_limit_usd": null,
+    "lt_gain_limit_usd": null,
+    "budget_period": "calendar_year",
+    "max_sell_tickers_per_batch": 10,
+    "max_sell_lots_per_batch": 20,
+    "max_total_orders_per_batch": 12,
+    "max_batch_turnover_pct": "20.0",
+    "min_buy_order_notional_usd": "0.00",
+    "cash_reserve_usd": "0.00",
+    "prefer_etf_buys": true,
+    "allow_gain_sales": false,
+    "permit_etf_harvest": false,
+    "permit_muni_exit": false
+  },
+  "sleeves": [
+    {
+      "sleeve_key": "us_equities",
+      "display_name": "DEMO US Equities",
+      "sort_order": 0,
+      "target_pct": "60",
+      "drift_band_pp": "5",
+      "is_direct_index_container": true
+    },
+    {
+      "sleeve_key": "us_etf",
+      "display_name": "DEMO Broad-market ETFs",
+      "sort_order": 0,
+      "parent_sleeve_key": "us_equities",
+      "target_pct": "0",
+      "drift_band_pp": "5"
+    },
+    {
+      "sleeve_key": "direct_indexing",
+      "display_name": "DEMO Direct indexing",
+      "sort_order": 1,
+      "parent_sleeve_key": "us_equities",
+      "target_pct": "100",
+      "drift_band_pp": "5",
+      "is_direct_index_sleeve": true
+    },
+    {
+      "sleeve_key": "international",
+      "display_name": "DEMO International equities",
+      "sort_order": 1,
+      "target_pct": "30",
+      "drift_band_pp": "5"
+    },
+    {
+      "sleeve_key": "cash",
+      "display_name": "DEMO Cash",
+      "sort_order": 2,
+      "target_pct": "10",
+      "drift_band_pp": "2",
+      "is_cash_sleeve": true
+    }
+  ],
+  "allowed_securities": [
+    {
+      "ticker": "VTI",
+      "sleeve_key": "us_equities",
+      "sub_sleeve_key": "us_etf",
+      "replacement_set_id": "demo-us-total-market",
+      "priority": 1,
+      "exposure_suitability": "DEMO-only configured broad US market candidate"
+    },
+    {
+      "ticker": "ITOT",
+      "sleeve_key": "us_equities",
+      "sub_sleeve_key": "us_etf",
+      "replacement_set_id": "demo-us-total-market",
+      "priority": 2,
+      "exposure_suitability": "DEMO-only configured broad US market candidate"
+    }
+  ],
+  "overrides": [],
+  "reassignments": {}
+}

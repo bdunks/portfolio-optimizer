@@ -1,0 +1,57 @@
+[project]
+name = "backend"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "alembic>=1.20.1",
+    "authlib>=1.9.5",
+    "cvxpy>=1.9.3",
+    "fastapi[standard]>=0.162.0",
+    "httpx>=0.28.1",
+    "keyring>=25.7.0",
+    "numpy>=2.5.4",
+    "osqp>=1.1.3",
+    "polars>=2.1.0",
+    "pydantic-settings>=2.16.2",
+    "scipy>=1.18.1",
+    "sqlalchemy>=2.1.8",
+]
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.170.14",
+    "pyrefly>=1.4.1",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.4.1.post1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17.4",
+]
+
+[tool.pyrefly]
+preset = "strict"
+min-severity = "warn"
+output-format = "min-text"
+
+[tool.ruff]
+line-length = 100
+output-format = "concise"
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint]
+extend-select = [
+  "I",      # Import sorting
+  "UP",     # Modern Python syntax
+  "B",      # Common bugs
+  "SIM",    # Simplifications
+  "C4",     # Comprehensions
+  "PIE",    # Redundant code
+  "RET",    # Return statements
+  "PT",     # Pytest practices
+  "ANN",    # Function annotations, including tests
+  "RUF",    # Ruff rules, including unused noqa
+  "BLE001", # Overly broad exception handlers
+  "PGH003", # Require codes in type: ignore
+  "PGH004", # Require codes in noqa
+]

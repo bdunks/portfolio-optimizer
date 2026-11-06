@@ -21,3 +21,21 @@ All allocation sleeves, target percentages, ETF candidates, wash-sale assumption
 - Keep credentials in the backend, bind locally (`127.0.0.1`), test with deterministic fake broker data, and maintain a functional no-credentials demo.
 - State actual test/build/benchmark outcomes; do not claim an integration or benchmark was verified without running it.
 
+# Backlog
+
+Use the backlog to plan substantial or multi-step work on this project, or when the user asks to work from it. Don't create backlog entries for every small fix.
+
+Inspect relevant existing projects, milestones, and tasks before planning or structural changes. Running or completing the selected task does not require listing projects, milestones, or sibling tasks. Don't initialize or reset an existing database, delete work, promote Draft items, or mark tasks Done without a request or an agreed plan.
+
+Common backlog commands (run from the repository root):
+
+- `backlog task next --json` — find eligible work with task, milestone, and project context, including their instructions. No follow-up `task show` is required to start work.
+- `backlog task show <id> --json` — inspect a specific task and its context when needed. (`task <id>` is not a command.)
+- `backlog task list --milestone <id> --json` — inspect tasks and their order before changing a milestone.
+- `backlog milestone list --json` — inspect milestones before adding or moving work.
+- `backlog task create --milestone <id> --title TEXT --instructions TEXT --done-when TEXT --state Draft --json` — create a draft task and capture its ID.
+- `backlog task move <id> --milestone <id> --position N` — move a task to a zero-based position.
+- `backlog task done <id> [--handoff TEXT]` — complete eligible work; include a handoff for useful outcomes, decisions, deviations, or context for subsequent work. Omit it when there is nothing useful to pass on.
+- `backlog --help` and `backlog <command> --help` — see all commands and flags.
+
+For the agreed five-phase program, backlog is authoritative for task definitions, prerequisites, completion and handoffs. The program supervisor alone selects and completes tasks and milestones after their agreed verification gates pass. Phase orchestrators delegate only assigned work; implementation/review workers report results and do not select other tasks or mark work Done. Use explicit prerequisites, not milestone order alone, to enforce phase acceptance. Draft alternatives remain deferred. The CLI has no in-progress claim state: keep task selection centralized. Save active child run IDs, working directories/refs, checkpoint, partial work, retries and next action in the selected task's backlog handoff before interruption; preserve useful existing context.

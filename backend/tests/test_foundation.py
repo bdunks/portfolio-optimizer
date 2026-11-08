@@ -14,9 +14,10 @@ from app.broker.fake import FakeBroker
 from app.db.migrate import upgrade_database
 from app.db.models import PolicyRevision, Security
 from app.db.session import create_database_engine
+from app.domain.allocation import SecurityIdentity, SleeveAssignment, resolve_holding
 from app.domain.decimal_math import exact_difference
 from app.main import create_app
-from app.services.policy import resolve_holding
+from app.services.financial_input_loader import load_allocation_policy
 
 
 @pytest.fixture
@@ -171,15 +172,23 @@ def test_default_direct_index_allowed_etf_and_override_precedence(seeded_client:
     with app.state.session_factory.begin() as session:
         active = session.query(PolicyRevision).filter_by(status="ACTIVE").one()
         aapl = session.query(Security).filter_by(ticker="AAPL").one()
+        allocation = load_allocation_policy(session, active.id)
+
+        def resolved(security: Security) -> SleeveAssignment | None:
+            resolution = resolve_holding(
+                allocation,
+                SecurityIdentity(security.ticker, security.asset_type, security.is_completion_etf),
+            )
+            return resolution.assignment
         vb = session.query(Security).filter_by(ticker="VB").one()
         vti = session.query(Security).filter_by(ticker="VTI").one()
         vxf = Security(ticker="VXF", asset_type="ETF", is_completion_etf=True)
         session.add(vxf)
         session.flush()
-        assert resolve_holding(session, active.id, aapl) == ("us_equities", "direct_indexing")
-        assert resolve_holding(session, active.id, vb) == ("us_equities", "direct_indexing")
-        assert resolve_holding(session, active.id, vxf) == ("us_equities", "direct_indexing")
-        assert resolve_holding(session, active.id, vti) == ("us_equities", "us_etf")
+        assert resolved(aapl) == SleeveAssignment("us_equities", "direct_indexing")
+        assert resolved(vb) == SleeveAssignment("us_equities", "direct_indexing")
+        assert resolved(vxf) == SleeveAssignment("us_equities", "direct_indexing")
+        assert resolved(vti) == SleeveAssignment("us_equities", "us_etf")
 
     payload = _draft_payload(client)
     payload["overrides"] = [{"ticker": "VTI", "sleeve_key": "international"}]
@@ -187,7 +196,11 @@ def test_default_direct_index_allowed_etf_and_override_precedence(seeded_client:
     assert saved.status_code == 201, saved.text
     with app.state.session_factory() as session:
         vti = session.query(Security).filter_by(ticker="VTI").one()
-        assert resolve_holding(session, saved.json()["id"], vti) == ("international", None)
+        allocation = load_allocation_policy(session, saved.json()["id"])
+        resolution = resolve_holding(
+            allocation, SecurityIdentity(vti.ticker, vti.asset_type, vti.is_completion_etf)
+        )
+        assert resolution.assignment == SleeveAssignment("international")
 
 
 def test_sync_publication_is_atomic_for_failure_incomplete_and_duplicate_payloads(tmp_path: Path) -> None:

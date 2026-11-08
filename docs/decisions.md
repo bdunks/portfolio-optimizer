@@ -32,3 +32,10 @@ No owner-approved resolution of that broker capability is recorded. Preserve qua
 ## E. Consolidated recommendation leg API — approved during Phase 1A review
 
 The owner selected a canonical run-level collection of consolidated legs with group references to leg IDs. Persist one replacement BUY per ticker, with explicit dependencies on its funding SELLs; count and export each unique leg once. Do not make duplicated nested BUY objects the canonical consumer representation. Update Pydantic/OpenAPI/generated TypeScript and regression tests before frontend consumers. Subset recalculation must resize the shared BUY without orphaning dependencies; group selection is never order approval.
+
+
+## F. Proposed trade-date assumptions — approved for t-0058
+
+Live defaults use the current calendar date in `America/New_York`; weekends and holidays are not advanced. A caller-supplied date takes precedence. Deterministic DEMO runs default to fixture date `2026-11-05`, independent of wall-clock and source timestamps, and also accept an explicit date.
+
+A saved run retains its proposed trade date separately from account, quote, and run-creation timestamps. Reopening and selection re-solving use that stored assumption; a later preview or submission must revalidate the intended execution date. No Phase 5 preview or submission behavior is implemented. The trade-date migration copies an explicit date from saved provenance, or for legacy `demo-run-input-v1` runs derives the date from that run's frozen account `as_of` timestamp because the prior DEMO classifier used that date. If immutable provenance cannot establish the date, it remains null and reopening must report it as unavailable rather than substitute today's date.

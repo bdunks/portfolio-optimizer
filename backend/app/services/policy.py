@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, MutableMapping
+from collections.abc import MutableMapping
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import uuid4
@@ -16,9 +16,11 @@ from app.db.models import (
     PolicySleeve,
     Security,
 )
+from app.domain.allocation import SecurityIdentity, resolve_holding
 from app.domain.decimal_math import exact_sum
 from app.schemas import PolicyDraftInput, PolicySettingsInput, SleeveInput
 from app.services.errors import AppError
+from app.services.financial_input_loader import load_allocation_policy
 
 ONE_HUNDRED = Decimal(100)
 
@@ -32,108 +34,6 @@ def _sleeves_by_key(session: Session, revision_id: str) -> dict[str, PolicySleev
     }
 
 
-def resolve_holding(
-    session: Session,
-    revision_id: str,
-    security: Security,
-) -> tuple[str, str | None] | None:
-    """Resolve one holding with override > allowed ETF > equity/VB/VXF > cash precedence."""
-    sleeves = _sleeves_by_key(session, revision_id)
-    override = session.scalar(
-        select(PolicySecurityOverride).where(
-            PolicySecurityOverride.policy_revision_id == revision_id,
-            PolicySecurityOverride.security_id == security.id,
-        )
-    )
-    if override is not None:
-        target = sleeves.get(override.sub_sleeve_key or override.sleeve_key)
-        if target is None or not target.enabled:
-            return None
-        return override.sleeve_key, override.sub_sleeve_key
-
-    allowed = session.scalar(
-        select(PolicyAllowedSecurity)
-        .where(
-            PolicyAllowedSecurity.policy_revision_id == revision_id,
-            PolicyAllowedSecurity.ticker == security.ticker,
-            PolicyAllowedSecurity.enabled.is_(True),
-        )
-        .order_by(PolicyAllowedSecurity.priority)
-    )
-    if allowed is not None:
-        target = sleeves.get(allowed.sub_sleeve_key or allowed.sleeve_key)
-        if target is None or not target.enabled:
-            return None
-        return allowed.sleeve_key, allowed.sub_sleeve_key
-
-    if security.asset_type == "EQUITY" or (
-        security.is_completion_etf and security.ticker in {"VB", "VXF"}
-    ):
-        container = next(
-            (
-                sleeve
-                for sleeve in sleeves.values()
-                if sleeve.enabled and sleeve.is_direct_index_container
-            ),
-            None,
-        )
-        if container is None:
-            return None
-        child = next(
-            (
-                sleeve
-                for sleeve in sleeves.values()
-                if sleeve.enabled
-                and sleeve.parent_sleeve_key == container.sleeve_key
-                and sleeve.is_direct_index_sleeve
-            ),
-            None,
-        )
-        return container.sleeve_key, child.sleeve_key if child is not None else None
-    return None
-
-
-def resolve_cash(session: Session, revision_id: str) -> tuple[str, str | None] | None:
-    sleeve = session.scalar(
-        select(PolicySleeve).where(
-            PolicySleeve.policy_revision_id == revision_id,
-            PolicySleeve.enabled.is_(True),
-            PolicySleeve.is_cash_sleeve.is_(True),
-        )
-    )
-    return (sleeve.sleeve_key, None) if sleeve else None
-
-
-
-
-def _sleeve_field(sleeve: PolicySleeve | Mapping[str, object], name: str) -> object:
-    return sleeve.get(name) if isinstance(sleeve, Mapping) else getattr(sleeve, name, None)
-
-
-def sleeve_assignment_path(
-    sleeves_by_key: Mapping[str, PolicySleeve | Mapping[str, object]],
-    sleeve_key: str,
-    sub_sleeve_key: str | None = None,
-) -> tuple[str, ...]:
-    """Return enabled ancestors through the resolved leaf, root first."""
-    leaf = sub_sleeve_key or sleeve_key
-    path: list[str] = []
-    seen: set[str] = set()
-    current: str | None = leaf
-    while current is not None:
-        sleeve = sleeves_by_key.get(current)
-        if current in seen or sleeve is None or not _sleeve_field(sleeve, "enabled"):
-            return ()
-        seen.add(current)
-        path.append(current)
-        parent = _sleeve_field(sleeve, "parent_sleeve_key")
-        current = str(parent) if parent is not None else None
-    path.reverse()
-    if sub_sleeve_key and (
-        sleeve_key not in path or path.index(sub_sleeve_key) != path.index(sleeve_key) + 1
-    ):
-        return ()
-    return tuple(path)
 
 
 def accumulate_sleeve_value(
@@ -144,78 +44,6 @@ def accumulate_sleeve_value(
         values[key] = exact_sum((values.get(key, Decimal(0)), amount))
 
 
-def resolve_policy_assignment(
-    policy: Mapping[str, object],
-    ticker: str,
-    *,
-    asset_type: str,
-    is_completion_etf: bool = False,
-) -> tuple[str, str | None] | None:
-    """Resolve a frozen policy assignment with override > allowed > default precedence."""
-    sleeve_rows = policy.get("sleeves", [])
-    if not isinstance(sleeve_rows, list):
-        return None
-    sleeves_by_key = {
-        str(row["sleeve_key"]): row
-        for row in sleeve_rows
-        if isinstance(row, Mapping) and isinstance(row.get("sleeve_key"), str)
-    }
-
-    def valid_pair(row: Mapping[str, object]) -> tuple[str, str | None] | None:
-        parent = row.get("sleeve_key")
-        child = row.get("sub_sleeve_key")
-        if not isinstance(parent, str) or (child is not None and not isinstance(child, str)):
-            return None
-        child_key = child if isinstance(child, str) else None
-        if not sleeve_assignment_path(sleeves_by_key, parent, child_key):
-            return None
-        return parent, child_key
-
-    overrides = policy.get("overrides", [])
-    if isinstance(overrides, list):
-        override = next(
-            (row for row in overrides if isinstance(row, Mapping) and row.get("ticker") == ticker), None
-        )
-        if override is not None:
-            return valid_pair(override)
-
-    allowed_rows = policy.get("allowed_securities", [])
-    if isinstance(allowed_rows, list):
-        allowed = sorted(
-            (
-                row
-                for row in allowed_rows
-                if isinstance(row, Mapping) and row.get("ticker") == ticker and row.get("enabled")
-            ),
-            key=lambda row: int(row.get("priority", 0)),
-        )
-        if allowed:
-            return valid_pair(allowed[0])
-
-    if asset_type == "EQUITY" or (is_completion_etf and ticker in {"VB", "VXF"}):
-        container = next(
-            (
-                row
-                for row in sleeves_by_key.values()
-                if _sleeve_field(row, "enabled") and _sleeve_field(row, "is_direct_index_container")
-            ),
-            None,
-        )
-        if container is None:
-            return None
-        parent = str(_sleeve_field(container, "sleeve_key"))
-        child = next(
-            (
-                str(_sleeve_field(row, "sleeve_key"))
-                for row in sleeves_by_key.values()
-                if _sleeve_field(row, "enabled")
-                and _sleeve_field(row, "parent_sleeve_key") == parent
-                and _sleeve_field(row, "is_direct_index_sleeve")
-            ),
-            None,
-        )
-        return valid_pair({"sleeve_key": parent, "sub_sleeve_key": child})
-    return None
 
 def _security_by_ticker(session: Session, ticker: str) -> Security | None:
     return session.scalar(select(Security).where(Security.ticker == ticker.upper()))
@@ -296,12 +124,20 @@ def create_policy_draft(session: Session, payload: PolicyDraftInput) -> PolicyRe
     securities = {security.id: security for security in session.scalars(select(Security)).all()}
     resolved_sources: dict[str, tuple[str, str | None]] = {}
     if source is not None:
+        source_allocation = load_allocation_policy(session, source.id)
         for position in positions:
-            security = securities[position.security_id]
-            old_resolution = resolve_holding(session, source.id, security)
-            if old_resolution:
-                resolved_sources[security.ticker] = old_resolution
-
+            security = securities.get(position.security_id)
+            if security is None:
+                continue
+            old_resolution = resolve_holding(
+                source_allocation,
+                SecurityIdentity(security.ticker, security.asset_type, security.is_completion_etf),
+            )
+            if old_resolution.assignment is not None:
+                resolved_sources[security.ticker] = (
+                    old_resolution.assignment.sleeve_key,
+                    old_resolution.assignment.sub_sleeve_key,
+                )
     revision_number = int(session.scalar(select(func.max(PolicyRevision.revision_number))) or 0) + 1
     revision_id = str(uuid4())
     revision = PolicyRevision(
@@ -522,11 +358,23 @@ def validate_policy_revision(session: Session, revision: PolicyRevision) -> list
     if sum(1 for s in enabled if s.is_cash_sleeve) > 1:
         errors.append({"code": "multiple_cash_sleeves", "message": "Only one enabled cash sleeve is allowed"})
 
-    for position in session.scalars(select(CurrentPosition)).all():
-        security = session.get(Security, position.security_id)
-        if security is None or resolve_holding(session, revision.id, security) is None:
-            ticker = security.ticker if security else str(position.security_id)
-            errors.append({"code": "unassigned_holding", "message": f"Held security '{ticker}' has no enabled policy sleeve"})
+    allocation = load_allocation_policy(session, revision.id)
+    held_securities = session.execute(
+        select(CurrentPosition.security_id, Security.ticker, Security.asset_type, Security.is_completion_etf)
+        .join(Security, Security.id == CurrentPosition.security_id)
+    ).all()
+    for _, ticker, asset_type, is_completion_etf in held_securities:
+        resolution = resolve_holding(
+            allocation,
+            SecurityIdentity(ticker, asset_type, is_completion_etf),
+        )
+        if resolution.assignment is None:
+            errors.append(
+                {
+                    "code": "unassigned_holding",
+                    "message": f"Held security '{ticker}' has no enabled policy sleeve ({resolution.reason})",
+                }
+            )
 
     return errors
 
@@ -573,8 +421,9 @@ def policy_to_dict(session: Session, revision: PolicyRevision) -> dict[str, obje
         .where(PolicyAllowedSecurity.policy_revision_id == revision.id)
         .order_by(PolicyAllowedSecurity.sleeve_key, PolicyAllowedSecurity.priority)
     ).all()
-    overrides = session.scalars(
-        select(PolicySecurityOverride)
+    overrides = session.execute(
+        select(PolicySecurityOverride, Security.ticker)
+        .join(Security, Security.id == PolicySecurityOverride.security_id)
         .where(PolicySecurityOverride.policy_revision_id == revision.id)
         .order_by(PolicySecurityOverride.security_id)
     ).all()
@@ -614,11 +463,10 @@ def policy_to_dict(session: Session, revision: PolicyRevision) -> dict[str, obje
         ],
         "overrides": [
             {
-                "ticker": security.ticker,
+                "ticker": ticker,
                 "sleeve_key": override.sleeve_key,
                 "sub_sleeve_key": override.sub_sleeve_key,
             }
-            for override in overrides
-            if (security := session.get(Security, override.security_id)) is not None
+            for override, ticker in overrides
         ],
     }

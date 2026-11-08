@@ -766,6 +766,18 @@
             "title": "Policy Revision Id",
             "type": "string"
           },
+          "proposed_trade_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposed Trade Date"
+          },
           "run_id": {
             "title": "Run Id",
             "type": "string"
@@ -803,6 +815,7 @@
           "policy_revision_id",
           "source_generation",
           "as_of",
+          "proposed_trade_date",
           "solver_version",
           "demo",
           "actionable",
@@ -950,6 +963,18 @@
             "title": "Positions Exited Count",
             "type": "integer"
           },
+          "proposed_trade_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposed Trade Date"
+          },
           "run_id": {
             "title": "Run Id",
             "type": "string"
@@ -1071,6 +1096,18 @@
             ],
             "title": "Mode",
             "type": "string"
+          },
+          "proposed_trade_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposed Trade Date"
           }
         },
         "title": "OptimizerRunInput",
@@ -1198,6 +1235,18 @@
           "positions_exited_count": {
             "title": "Positions Exited Count",
             "type": "integer"
+          },
+          "proposed_trade_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposed Trade Date"
           },
           "run_id": {
             "title": "Run Id",

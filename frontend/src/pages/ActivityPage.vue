@@ -63,6 +63,10 @@
           <dd>{{ savedRunSummary.as_of }}</dd>
         </div>
         <div>
+          <dt>Proposed trade date</dt>
+          <dd>{{ savedRunSummary.proposed_trade_date ?? 'Unavailable' }}</dd>
+        </div>
+        <div>
           <dt>Solver</dt>
           <dd>{{ savedRunSummary.solver_version }}</dd>
         </div>

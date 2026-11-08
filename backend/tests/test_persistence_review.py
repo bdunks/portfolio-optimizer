@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import stat
 import subprocess
@@ -275,7 +276,12 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
     _upgrade_to(engine, "0004_database_integrity_checks")
     factory = make_session_factory(engine)
     timestamp = datetime(2026, 11, 5, 20, tzinfo=UTC)
-    frozen = {"original_bundle": "unchanged", "lot_ids": ["lot-a1", "lot-a2", "lot-b"]}
+    frozen = {
+        "schema": "demo-run-input-v1",
+        "account": {"as_of": timestamp.isoformat()},
+        "original_bundle": "unchanged",
+        "lot_ids": ["lot-a1", "lot-a2", "lot-b"],
+    }
     with factory.begin() as session:
         session.add(
             Account(
@@ -295,17 +301,50 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
         policy = PolicyRevision(id="legacy-policy", revision_number=1, status="ACTIVE", created_at=timestamp)
         session.add_all([sell_security, sell_security_b, buy_security, policy])
         session.flush()
-        run = OptimizerRun(
-            id="legacy-run",
-            policy_revision_id=policy.id,
-            source_generation=7,
-            as_of=timestamp,
-            status="COMPLETE",
-            batch_settings={"max_total_orders_per_batch": 3},
-            metrics={"orders_count": 4, "legacy_metric": "preserve me"},
-            warnings=["legacy"],
-            input_fingerprint="original-fingerprint",
-            frozen_input_bundle=frozen,
+        run_id = "legacy-run"
+        session.execute(
+            text(
+                "INSERT INTO optimizer_run "
+                "(id, policy_revision_id, source_generation, as_of, solver_version, status, "
+                "batch_settings, metrics, warnings, input_fingerprint, frozen_input_bundle) "
+                "VALUES (:id, :policy, :generation, :as_of, :solver, :status, :batch, :metrics, "
+                ":warnings, :fingerprint, :bundle)"
+            ),
+            {
+                "id": run_id,
+                "policy": policy.id,
+                "generation": 7,
+                "as_of": timestamp.strftime("%Y-%m-%d %H:%M:%S.%f"),
+                "solver": "DEMO",
+                "status": "COMPLETE",
+                "batch": json.dumps({"max_total_orders_per_batch": 3}),
+                "metrics": json.dumps({"orders_count": 4, "legacy_metric": "preserve me"}),
+                "warnings": json.dumps(["legacy"]),
+                "fingerprint": "original-fingerprint",
+                "bundle": json.dumps(frozen),
+            },
+        )
+        session.execute(
+            text(
+                "INSERT INTO optimizer_run "
+                "(id, policy_revision_id, source_generation, as_of, status, batch_settings, "
+                "metrics, warnings, frozen_input_bundle) "
+                "VALUES ('legacy-no-date', :policy, 7, :as_of, 'COMPLETE', '{}', '{}', '[]', :bundle)"
+            ),
+            {"policy": policy.id, "as_of": timestamp.strftime("%Y-%m-%d %H:%M:%S.%f"), "bundle": json.dumps({"legacy": True})},
+        )
+        session.execute(
+            text(
+                "INSERT INTO optimizer_run "
+                "(id, policy_revision_id, source_generation, as_of, status, batch_settings, "
+                "metrics, warnings, frozen_input_bundle) "
+                "VALUES ('legacy-explicit-date', :policy, 7, :as_of, 'COMPLETE', '{}', '{}', '[]', :bundle)"
+            ),
+            {
+                "policy": policy.id,
+                "as_of": timestamp.strftime("%Y-%m-%d %H:%M:%S.%f"),
+                "bundle": json.dumps({"proposed_trade_date": "2026-11-07"}),
+            },
         )
         legacy_impact = {
             "demo": True,
@@ -324,16 +363,16 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
             "risk_tracking_score": None,
         }
         group_a = RecommendationGroup(
-            id="group-a", run_id=run.id, rank=1, group_type="demo_loss_harvest", rationale="A",
+            id="group-a", run_id=run_id, rank=1, group_type="demo_loss_harvest", rationale="A",
             sleeve_key="us", impact=legacy_impact,
             selected=True, rejected=False, note="preserve note A",
         )
         group_b = RecommendationGroup(
-            id="group-b", run_id=run.id, rank=2, group_type="demo_loss_harvest", rationale="B",
+            id="group-b", run_id=run_id, rank=2, group_type="demo_loss_harvest", rationale="B",
             sleeve_key="us", impact=legacy_impact,
             selected=False, rejected=True, note="preserve note B", rejection_reason="old rejection",
         )
-        session.add_all([run, group_a, group_b])
+        session.add_all([group_a, group_b])
         session.flush()
         sell_a = RecommendationLeg(
             id="sell-a", group_id=group_a.id, account_id=1, security_id=sell_security.id,
@@ -396,13 +435,17 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
         assert session.get(RecommendationLeg, "sell-a").shares == Decimal(2)
         assert session.get(RecommendationLeg, "sell-b").shares == Decimal(1)
         assert session.get(RecommendationLeg, "sell-zero").shares == Decimal(0)
-        run = session.get(OptimizerRun, "legacy-run")
-        assert run is not None
-        assert run.metrics == {"orders_count": 3, "legacy_metric": "preserve me"}
-        assert run.batch_settings == {"max_total_orders_per_batch": 3}
-        assert run.frozen_input_bundle == frozen
-        assert run.input_fingerprint == "original-fingerprint"
-        assert run.warnings == ["legacy"]
+        run = session.execute(
+            text(
+                "SELECT metrics, batch_settings, frozen_input_bundle, input_fingerprint, warnings "
+                "FROM optimizer_run WHERE id = 'legacy-run'"
+            )
+        ).mappings().one()
+        assert json.loads(run["metrics"]) == {"orders_count": 3, "legacy_metric": "preserve me"}
+        assert json.loads(run["batch_settings"]) == {"max_total_orders_per_batch": 3}
+        assert json.loads(run["frozen_input_bundle"]) == frozen
+        assert run["input_fingerprint"] == "original-fingerprint"
+        assert json.loads(run["warnings"]) == ["legacy"]
         assert session.get(RecommendationGroup, "group-a").note == "preserve note A"
         assert session.get(RecommendationGroup, "group-a").selected is True
         assert session.get(RecommendationGroup, "group-b").note == "preserve note B"
@@ -417,9 +460,14 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
 
     # Simulate an already-upgraded 0005 database with a stale count and a deselected canonical owner.
     with factory.begin() as session:
-        run = session.get(OptimizerRun, "legacy-run")
-        assert run is not None
-        run.metrics = {**run.metrics, "orders_count": 4}
+        metrics = json.loads(
+            session.scalar(text("SELECT metrics FROM optimizer_run WHERE id = 'legacy-run'"))
+        )
+        metrics["orders_count"] = 4
+        session.execute(
+            text("UPDATE optimizer_run SET metrics = :metrics WHERE id = 'legacy-run'"),
+            {"metrics": json.dumps(metrics)},
+        )
         session.get(RecommendationGroup, "group-a").selected = False
         group_b = session.get(RecommendationGroup, "group-b")
         group_b.selected = True
@@ -428,6 +476,13 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
     with factory.begin() as session:
         run = session.get(OptimizerRun, "legacy-run")
         assert run is not None
+        assert run.proposed_trade_date == date(2026, 11, 5)
+        missing_date_run = session.get(OptimizerRun, "legacy-no-date")
+        assert missing_date_run is not None
+        assert missing_date_run.proposed_trade_date is None
+        explicit_date_run = session.get(OptimizerRun, "legacy-explicit-date")
+        assert explicit_date_run is not None
+        assert explicit_date_run.proposed_trade_date == date(2026, 11, 7)
         assert run.metrics == {"orders_count": 3, "legacy_metric": "preserve me"}
         # Restore original subset state after exercising the forward repair's shared-BUY case.
         session.get(RecommendationGroup, "group-a").selected = True
@@ -443,6 +498,13 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
         summary = client.get("/api/v1/optimizer/runs/legacy-run")
         assert summary.status_code == 200, summary.text
         assert summary.json()["orders_count"] == 3
+        assert summary.json()["proposed_trade_date"] == "2026-11-05"
+        missing_date = client.get("/api/v1/optimizer/runs/legacy-no-date")
+        assert missing_date.status_code == 200, missing_date.text
+        assert missing_date.json()["proposed_trade_date"] is None
+        explicit_date = client.get("/api/v1/optimizer/runs/legacy-explicit-date")
+        assert explicit_date.status_code == 200
+        assert explicit_date.json()["proposed_trade_date"] == "2026-11-07"
         recommendations = client.get("/api/v1/optimizer/runs/legacy-run/recommendations")
         assert recommendations.status_code == 200, recommendations.text
         assert recommendations.json()["orders_count"] == 3
@@ -475,7 +537,7 @@ def test_alembic_cli_uses_private_protected_engine_and_environment_url(tmp_path:
             assert connection.scalar(text("PRAGMA journal_mode")).lower() == "wal"
             assert connection.scalar(text("PRAGMA busy_timeout")) == 5000
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-                "0006_repair_orders_count"
+                "0007_optimizer_run_trade_date"
             )
     finally:
         engine.dispose()

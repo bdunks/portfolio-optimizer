@@ -214,6 +214,7 @@ class PolicyDraftInput(StrictModel):
 
 class OptimizerRunInput(StrictModel):
     mode: Literal["recommendations_only", "real_optimizer"] = "recommendations_only"
+    proposed_trade_date: date | None = None
     max_sell_tickers_per_batch: int | None = Field(default=None, gt=0)
     max_sell_lots_per_batch: int | None = Field(default=None, gt=0)
     max_total_orders_per_batch: int | None = Field(default=None, gt=0)
@@ -599,6 +600,7 @@ class OptimizerRunResponse(StrictModel):
     source_generation: int
     as_of: datetime
     solver_version: Literal["DEMO"]
+    proposed_trade_date: date | None = None
     demo: Literal[True]
     actionable: Literal[False]
     input_fingerprint: str | None
@@ -674,6 +676,7 @@ class OptimizerExportMetadataResponse(StrictModel):
     policy_revision_id: str
     source_generation: int
     as_of: datetime
+    proposed_trade_date: date | None
     solver_version: Literal["DEMO"]
     demo: Literal[True]
     actionable: Literal[False]

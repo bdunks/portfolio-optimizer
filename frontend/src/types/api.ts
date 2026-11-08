@@ -141,6 +141,7 @@ export type OptimizerExportMetadataResponse = {
   "policy_revision_id": string;
   "source_generation": number;
   "as_of": string;
+  "proposed_trade_date": string | null;
   "solver_version": "DEMO";
   "demo": true;
   "actionable": false;
@@ -157,6 +158,7 @@ export type OptimizerRecommendationsResponse = {
   "source_generation": number;
   "as_of": string;
   "solver_version": "DEMO";
+  "proposed_trade_date"?: string | null;
   "demo": true;
   "actionable": false;
   "input_fingerprint": string | null;
@@ -182,6 +184,7 @@ export type OptimizerRecommendationsResponse = {
 
 export type OptimizerRunInput = {
   "mode"?: "recommendations_only" | "real_optimizer";
+  "proposed_trade_date"?: string | null;
   "max_sell_tickers_per_batch"?: number | null;
   "max_sell_lots_per_batch"?: number | null;
   "max_total_orders_per_batch"?: number | null;
@@ -195,6 +198,7 @@ export type OptimizerRunResponse = {
   "source_generation": number;
   "as_of": string;
   "solver_version": "DEMO";
+  "proposed_trade_date"?: string | null;
   "demo": true;
   "actionable": false;
   "input_fingerprint": string | null;

@@ -5,7 +5,7 @@ import os
 from collections import Counter
 from collections.abc import AsyncIterator, Callable, Generator
 from contextlib import asynccontextmanager
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
 from typing import Any
@@ -28,15 +28,19 @@ from app.db.migrate import upgrade_database
 from app.db.models import (
     Account,
     ActivityEvent,
-    CurrentPosition,
     CurrentQuote,
     CurrentTaxLot,
     PolicyRevision,
-    PolicySleeve,
     Security,
     SyncState,
 )
 from app.db.session import create_database_engine, make_session_factory
+from app.domain.allocation import (
+    SecurityIdentity,
+    assignment_path,
+    resolve_cash,
+    resolve_holding,
+)
 from app.domain.decimal_math import (
     exact_difference,
     exact_percent_product,
@@ -44,6 +48,7 @@ from app.domain.decimal_math import (
     exact_sum,
     percentage,
 )
+from app.domain.trade_dates import classify_holding_period, resolve_proposed_trade_date
 from app.schemas import (
     ActivityPageResponse,
     ErrorEnvelope,
@@ -75,14 +80,12 @@ from app.services.demo_optimizer import (
     wash_sales,
 )
 from app.services.errors import AppError
+from app.services.financial_input_loader import load_allocation_policy, load_financial_inputs
 from app.services.policy import (
     accumulate_sleeve_value,
     activate_policy,
     create_policy_draft,
     policy_to_dict,
-    resolve_cash,
-    resolve_holding,
-    sleeve_assignment_path,
     validate_policy_revision,
 )
 from app.services.sync import sync_portfolio
@@ -183,12 +186,6 @@ def _whole_share_fields(shares: Decimal) -> dict[str, Any]:
     }
 
 
-def _term(acquired: date, as_of: date) -> str:
-    try:
-        anniversary = acquired.replace(year=acquired.year + 1)
-    except ValueError:
-        anniversary = acquired.replace(year=acquired.year + 1, day=28)
-    return "LT" if as_of > anniversary else "ST"
 
 
 
@@ -358,115 +355,125 @@ def create_app(
                 "us_transition": None,
             }
 
-        positions = session.scalars(
-            select(CurrentPosition).where(CurrentPosition.account_id == account.id)
-        ).all()
         active_policy = session.scalar(
             select(PolicyRevision).where(PolicyRevision.status == "ACTIVE")
         )
-        policy_sleeves = (
-            session.scalars(
-                select(PolicySleeve).where(PolicySleeve.policy_revision_id == active_policy.id)
-            ).all()
-            if active_policy
-            else []
+        proposed_trade_date = resolve_proposed_trade_date(
+            None, demo=account.source.upper() in {"DEMO", "FAKE"}
         )
-        sleeves_by_key = {s.sleeve_key: s for s in policy_sleeves}
-        security_by_id = {s.id: s for s in session.scalars(select(Security)).all()}
-        quote_by_security = {
-            q.security_id: q for q in session.scalars(select(CurrentQuote)).all()
-        }
-        total_positions = exact_sum(p.market_value_usd for p in positions)
+        inputs = load_financial_inputs(
+            session,
+            account,
+            state,
+            active_policy,
+            proposed_trade_date,
+            include_tax_lots=False,
+            include_transactions=False,
+            require_resolved_assignments=False,
+        )
+        positions = inputs.positions
+        quotes_by_ticker = {row.ticker: row for row in inputs.quotes}
+        portfolio_policy = inputs.policy.allocation
+        sleeves = portfolio_policy.sleeves
+        enabled_top = [row for row in sleeves if row.enabled and row.parent_key is None]
+        total_positions = exact_sum(row.market_value_usd for row in positions)
         portfolio_total = exact_sum((total_positions, account.cash_usd))
         position_rows: list[dict[str, Any]] = []
         sleeve_values: dict[str, Decimal] = {}
+        paths_by_ticker: dict[str, tuple[str, ...]] = {}
         unresolved: list[str] = []
         for position in positions:
-            security = security_by_id[position.security_id]
-            quote = quote_by_security.get(security.id)
-            sleeve = resolve_holding(session, active_policy.id, security) if active_policy else None
-            if sleeve:
-                accumulate_sleeve_value(sleeve_values, sleeve_assignment_path(sleeves_by_key, *sleeve), position.market_value_usd)
+            quote = quotes_by_ticker.get(position.ticker)
+            assignment = position.assignment
+            path = (
+                assignment_path(portfolio_policy, assignment.sleeve_key, assignment.sub_sleeve_key)
+                if assignment is not None
+                else None
+            )
+            if path is not None:
+                paths_by_ticker[position.ticker] = path
+                accumulate_sleeve_value(sleeve_values, path, position.market_value_usd)
             else:
-                unresolved.append(security.ticker)
+                unresolved.append(position.ticker)
             position_rows.append(
                 {
-                    "ticker": security.ticker,
-                    "asset_type": security.asset_type,
+                    "ticker": position.ticker,
+                    "asset_type": position.asset_type,
                     "shares": str(position.shares),
                     "market_value_usd": str(position.market_value_usd),
                     "last_price_usd": str(quote.last_usd) if quote and quote.last_usd is not None else None,
                     "quote_source": quote.source if quote else None,
                     "quote_as_of": quote.as_of if quote else None,
-                    "sleeve_key": sleeve[0] if sleeve else None,
-                    "sub_sleeve_key": sleeve[1] if sleeve else None,
+                    "sleeve_key": assignment.sleeve_key if assignment is not None else None,
+                    "sub_sleeve_key": assignment.sub_sleeve_key if assignment is not None else None,
                 }
             )
 
-        cash_sleeve = resolve_cash(session, active_policy.id) if active_policy else None
-        if cash_sleeve and account.cash_usd:
-            accumulate_sleeve_value(
-                sleeve_values,
-                sleeve_assignment_path(sleeves_by_key, *cash_sleeve),
-                account.cash_usd,
+        cash_resolution = resolve_cash(portfolio_policy)
+        cash_assignment = cash_resolution.assignment
+        if cash_assignment is not None and account.cash_usd:
+            cash_path = assignment_path(
+                portfolio_policy, cash_assignment.sleeve_key, cash_assignment.sub_sleeve_key
             )
+            if cash_path is not None:
+                accumulate_sleeve_value(sleeve_values, cash_path, account.cash_usd)
 
         allocation: dict[str, Any] = {"current": None, "proposed": None, "target": None}
         us_transition = None
         if active_policy:
-            sleeves = policy_sleeves
-            enabled_top = [s for s in sleeves if s.enabled and s.parent_sleeve_key is None]
             current_weights = {
-                s.sleeve_key: _percent(sleeve_values.get(s.sleeve_key, Decimal(0)), portfolio_total)
-                for s in enabled_top
+                sleeve.key: _percent(sleeve_values.get(sleeve.key, Decimal(0)), portfolio_total)
+                for sleeve in enabled_top
             }
-            target_weights = {s.sleeve_key: str(s.target_pct) for s in enabled_top}
+            target_weights = {
+                sleeve.key: str(sleeve.target_pct) if sleeve.target_pct is not None else "0"
+                for sleeve in enabled_top
+            }
             allocation["current"] = {
                 "total_portfolio_usd": str(portfolio_total),
                 "sleeve_weights_pct": current_weights,
             }
             allocation["proposed"] = allocation["current"]
             allocation["target"] = {"sleeve_weights_pct": target_weights}
-            container = next((s for s in enabled_top if s.is_direct_index_container), None)
+            container = next((sleeve for sleeve in enabled_top if sleeve.direct_index_container), None)
             if container is not None:
                 children = [
-                    s for s in sleeves if s.enabled and s.parent_sleeve_key == container.sleeve_key
+                    sleeve
+                    for sleeve in sleeves
+                    if sleeve.enabled and sleeve.parent_key == container.key
                 ]
-                us_value = sleeve_values.get(container.sleeve_key, Decimal(0))
+                us_value = sleeve_values.get(container.key, Decimal(0))
                 current_children = {
-                    child.sleeve_key: {
-                        "value_usd": str(sleeve_values.get(child.sleeve_key, Decimal(0))),
-                        "within_us_sleeve_pct": _percent(
-                            sleeve_values.get(child.sleeve_key, Decimal(0)), us_value
-                        ),
-                        "whole_portfolio_pct": _percent(
-                            sleeve_values.get(child.sleeve_key, Decimal(0)), portfolio_total
-                        ),
+                    child.key: {
+                        "value_usd": str(sleeve_values.get(child.key, Decimal(0))),
+                        "within_us_sleeve_pct": _percent(sleeve_values.get(child.key, Decimal(0)), us_value),
+                        "whole_portfolio_pct": _percent(sleeve_values.get(child.key, Decimal(0)), portfolio_total),
                     }
                     for child in children
                 }
                 target_children = {
-                    child.sleeve_key: {
-                        "within_us_sleeve_pct": str(child.target_pct),
-                        "whole_portfolio_pct": str(exact_percent_product(container.target_pct, child.target_pct)),
+                    child.key: {
+                        "within_us_sleeve_pct": str(child.target_pct) if child.target_pct is not None else "0",
+                        "whole_portfolio_pct": str(
+                            exact_percent_product(
+                                container.target_pct or Decimal(0), child.target_pct or Decimal(0)
+                            )
+                        ),
                     }
                     for child in children
                 }
-                direct_child_keys = {s.sleeve_key for s in children if s.is_direct_index_sleeve}
-                direct_child_keys = {s.sleeve_key for s in children if s.is_direct_index_sleeve}
+                direct_child_keys = {child.key for child in children if child.direct_index_sleeve}
                 etf_value = Decimal(0)
                 for position in positions:
-                    security = security_by_id[position.security_id]
-                    resolved = resolve_holding(session, active_policy.id, security)
-                    path = sleeve_assignment_path(sleeves_by_key, *resolved) if resolved else ()
+                    path = paths_by_ticker.get(position.ticker, ())
                     if (
-                        security.asset_type == "ETF"
-                        and container.sleeve_key in path
+                        position.asset_type == "ETF"
+                        and container.key in path
                         and not direct_child_keys.intersection(path)
                     ):
                         etf_value = exact_sum((etf_value, position.market_value_usd))
                 us_transition = {
-                    "sleeve_key": container.sleeve_key,
+                    "sleeve_key": container.key,
                     "label": "Percentages are shown both within the US sleeve and across the whole portfolio",
                     "current": {
                         "us_sleeve_value_usd": str(us_value),
@@ -481,7 +488,7 @@ def create_app(
                         "children": current_children,
                     },
                     "target": {
-                        "us_sleeve_whole_portfolio_pct": str(container.target_pct),
+                        "us_sleeve_whole_portfolio_pct": str(container.target_pct or Decimal(0)),
                         "children": target_children,
                     },
                 }
@@ -509,7 +516,6 @@ def create_app(
             "allocation": allocation,
             "us_transition": us_transition,
         }
-
     @application.get("/api/v1/lots", response_model=LotPageResponse, responses=API_ERROR_RESPONSES)
     def lots(
         session: Session = session_dependency,
@@ -529,8 +535,24 @@ def create_app(
         active = session.scalar(select(PolicyRevision).where(PolicyRevision.status == "ACTIVE"))
         securities = {s.id: s for s in session.scalars(select(Security)).all()}
         quotes = {q.security_id: q for q in session.scalars(select(CurrentQuote)).all()}
+        account = session.get(Account, 1)
+        proposed_trade_date = resolve_proposed_trade_date(
+            None,
+            demo=bool(account and account.source.upper() in {"DEMO", "FAKE"}),
+        )
+        allocation_policy = load_allocation_policy(session, active.id) if active else None
+        assignments = {
+            security.id: (
+                resolve_holding(
+                    allocation_policy,
+                    SecurityIdentity(security.ticker, security.asset_type, security.is_completion_etf),
+                ).assignment
+                if allocation_policy is not None
+                else None
+            )
+            for security in securities.values()
+        }
         position_lot_counts: Counter[int] = Counter(lot.security_id for lot in rows)
-        reference_date = max((quote.as_of.date() for quote in quotes.values()), default=date.today())
         filtered: list[dict[str, Any]] = []
         for lot in rows:
             security = securities[lot.security_id]
@@ -542,8 +564,8 @@ def create_app(
                 if price is not None
                 else None
             )
-            sleeve = resolve_holding(session, active.id, security) if active else None
-            lot_term = _term(lot.acquired_date, reference_date)
+            sleeve = assignments.get(security.id)
+            lot_term = classify_holding_period(lot.acquired_date, proposed_trade_date)
             shares = lot.shares
             available = lot.available_shares
             lot_dict = {
@@ -561,8 +583,8 @@ def create_app(
                 "source": lot.source,
                 "as_of": lot.as_of,
                 "term": lot_term,
-                "sleeve_key": sleeve[0] if sleeve else None,
-                "sub_sleeve_key": sleeve[1] if sleeve else None,
+                "sleeve_key": sleeve.sleeve_key if sleeve else None,
+                "sub_sleeve_key": sleeve.sub_sleeve_key if sleeve else None,
                 "quality_flags": lot.quality_flags,
                 "small_lot_cleanup_candidate": shares < 1,
                 "position_cleanup_candidate": position_lot_counts[security.id] == 1,

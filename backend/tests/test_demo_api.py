@@ -2,27 +2,35 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from collections.abc import Iterator
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
+from sqlalchemy.engine import Connection
 
 from app.broker.fake import FakeBroker
 from app.db.models import (
     CurrentQuote,
     CurrentTaxLot,
+    OptimizerRun,
     RecommendationGroup,
     RecommendationGroupLeg,
     RecommendationLeg,
     Security,
 )
+from app.db.session import create_database_engine
 from app.main import create_app
 from app.schemas import BrokerSnapshot
+from app.services.demo_optimizer import _fingerprint
 
 
 @pytest.fixture
@@ -35,16 +43,17 @@ def split_lot_snapshot() -> BrokerSnapshot:
             lots.extend(
                 [
                     lot.model_copy(
-                        update={"broker_lot_id": "DEMO-VB-LOT-1", "shares": Decimal(1), "available_shares": Decimal(1)}
+                        update={"broker_lot_id": "DEMO-VB-LOT-1", "shares": Decimal(1), "available_shares": Decimal(1), "acquired_date": date(2025, 11, 5)}
                     ),
                     lot.model_copy(
-                        update={"broker_lot_id": "DEMO-VB-LOT-2", "shares": Decimal(1), "available_shares": Decimal(1)}
+                        update={"broker_lot_id": "DEMO-VB-LOT-2", "shares": Decimal(1), "available_shares": Decimal(1), "acquired_date": date(2025, 11, 5)}
                     ),
                 ]
             )
         else:
             lots.append(lot)
-    return snapshot.model_copy(update={"lots": lots})
+    quotes = [quote.model_copy(update={"as_of": quote.as_of.replace(day=6)}) for quote in snapshot.quotes]
+    return snapshot.model_copy(update={"lots": lots, "quotes": quotes})
 
 
 @pytest.fixture
@@ -55,6 +64,32 @@ def demo_app(tmp_path: Path, split_lot_snapshot: BrokerSnapshot) -> Iterator[tup
     with TestClient(app, base_url="http://localhost") as client:
         yield app, client, broker, database_path
 
+
+
+def _downgrade_to_0006(database_path: Path) -> None:
+    backend_root = Path(__file__).resolve().parents[1]
+    config = Config(str(backend_root / "alembic.ini"))
+    config.set_main_option("script_location", str(backend_root / "migrations"))
+    engine = create_database_engine(f"sqlite:///{database_path}")
+    with engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.downgrade(config, "0006_repair_orders_count")
+    engine.dispose()
+
+
+def _sqlite_table_snapshot(connection: Connection, table: str) -> list[dict[str, object]]:
+    rows = connection.execute(text(f"SELECT * FROM {table}")).mappings().all()
+    return sorted(
+        (
+            {
+                key: value
+                for key, value in row.items()
+                if not (table == "optimizer_run" and key == "proposed_trade_date")
+            }
+            for row in rows
+        ),
+        key=repr,
+    )
 def _shared_replacement_snapshot(aapl_lot_quantities: tuple[int, ...] = (1, 1)) -> BrokerSnapshot:
     snapshot = FakeBroker.demo_snapshot()
     aapl_position = snapshot.positions[0].model_copy(
@@ -135,16 +170,165 @@ def shared_replacement_app(tmp_path: Path) -> Iterator[tuple[FastAPI, TestClient
 
 
 
-def _create_run(client: TestClient) -> dict[str, Any]:
-    response = client.post("/api/v1/optimizer/runs", json={})
+def _create_run(client: TestClient, proposed_trade_date: str | None = None) -> dict[str, Any]:
+    response = client.post(
+        "/api/v1/optimizer/runs",
+        json={"proposed_trade_date": proposed_trade_date} if proposed_trade_date else {},
+    )
     assert response.status_code == 201, response.text
     payload = response.json()
+    assert payload["proposed_trade_date"] == (proposed_trade_date or "2026-11-05")
     assert payload["status"] == "demo"
     assert payload["solver_version"] == "DEMO"
     assert payload["demo"] is True
     assert payload["actionable"] is False
     assert "real_optimizer_unavailable" in payload["warnings"]
     return payload
+
+
+
+
+def test_populated_v1_run_migrates_reopens_and_reselects_without_rewriting_bundle(
+    tmp_path: Path, split_lot_snapshot: BrokerSnapshot
+) -> None:
+    database_path = tmp_path / "legacy-v1-restart.sqlite3"
+    database_url = f"sqlite:///{database_path}"
+    app = create_app(
+        database_url=database_url,
+        broker=FakeBroker(split_lot_snapshot),
+        seed_demo_data=True,
+    )
+    with TestClient(app, base_url="http://localhost") as client:
+        run = _create_run(client)
+        assert run["groups"]
+        run_id = run["run_id"]
+        with app.state.session_factory() as session:
+            persisted = session.get(OptimizerRun, run_id)
+            assert persisted is not None
+            legacy_bundle = json.loads(json.dumps(persisted.frozen_input_bundle))
+
+        legacy_bundle["schema"] = "demo-run-input-v1"
+        legacy_bundle.pop("proposed_trade_date")
+        legacy_bundle.pop("securities")
+        legacy_bundle.pop("input_fingerprint")
+        assert legacy_bundle["lots"]
+        for lot in legacy_bundle["lots"]:
+            lot.pop("sync_generation")
+        fingerprint = _fingerprint(legacy_bundle)
+        legacy_bundle["input_fingerprint"] = fingerprint
+        expected_bundle = json.loads(json.dumps(legacy_bundle))
+        with app.state.session_factory.begin() as session:
+            persisted = session.get(OptimizerRun, run_id)
+            assert persisted is not None
+            persisted.frozen_input_bundle = legacy_bundle
+            persisted.input_fingerprint = fingerprint
+        before_summary = client.get(f"/api/v1/optimizer/runs/{run_id}").json()
+        before_recommendations = client.get(
+            f"/api/v1/optimizer/runs/{run_id}/recommendations"
+        ).json()
+        preserved_tables = (
+            "optimizer_run",
+            "recommendation_group",
+            "recommendation_leg",
+            "recommendation_group_leg",
+            "recommendation_selected_lot",
+        )
+        with app.state.engine.connect() as connection:
+            expected_tables = {
+                table: _sqlite_table_snapshot(connection, table) for table in preserved_tables
+            }
+
+    app.state.engine.dispose()
+    _downgrade_to_0006(database_path)
+    downgraded_engine = create_database_engine(database_url)
+    with downgraded_engine.connect() as connection:
+        assert "proposed_trade_date" not in {
+            column["name"] for column in inspect(connection).get_columns("optimizer_run")
+        }
+        assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one() == (
+            "0006_repair_orders_count"
+        )
+        downgraded_tables = {
+            table: _sqlite_table_snapshot(connection, table) for table in preserved_tables
+        }
+    assert downgraded_tables == expected_tables
+    downgraded_engine.dispose()
+    restarted = create_app(database_url=database_url, broker=FakeBroker(), seed_demo_data=False)
+    with TestClient(restarted, base_url="http://localhost") as client:
+        summary = client.get(f"/api/v1/optimizer/runs/{run_id}")
+        assert summary.status_code == 200, summary.text
+        assert summary.json() == before_summary
+        assert summary.json()["proposed_trade_date"] == "2026-11-05"
+        with restarted.state.session_factory() as session:
+            persisted = session.get(OptimizerRun, run_id)
+            assert persisted is not None
+            assert persisted.proposed_trade_date == date(2026, 11, 5)
+            assert persisted.frozen_input_bundle == expected_bundle
+            assert all("sync_generation" not in lot for lot in persisted.frozen_input_bundle["lots"])
+
+        recommendations = client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations")
+        assert recommendations.status_code == 200, recommendations.text
+        assert recommendations.json() == before_recommendations
+        with restarted.state.engine.connect() as connection:
+            upgraded_tables = {
+                table: _sqlite_table_snapshot(connection, table) for table in preserved_tables
+            }
+        assert upgraded_tables == expected_tables
+        group = recommendations.json()["groups"][0]
+        sell = next(
+            leg
+            for leg in recommendations.json()["consolidated_legs"]
+            if leg["side"] == "SELL" and leg["group_ids"] == [group["group_id"]]
+        )
+        lot_ids = [lot["broker_lot_id"] for lot in sell["selected_lots"]]
+        selection = client.post(
+            f"/api/v1/optimizer/runs/{run_id}/selection",
+            json={
+                "selected_group_ids": [group["group_id"]],
+                "selected_sell_lots": {group["group_id"]: lot_ids},
+            },
+        )
+        assert selection.status_code == 200, selection.text
+        assert selection.json()["proposed_trade_date"] == "2026-11-05"
+        selected_sell = next(
+            leg for leg in selection.json()["consolidated_legs"] if leg["side"] == "SELL"
+        )
+        assert {lot["st_lt"] for lot in selected_sell["selected_lots"]} == {"ST"}
+        with restarted.state.session_factory() as session:
+            persisted = session.get(OptimizerRun, run_id)
+            assert persisted is not None
+            assert persisted.frozen_input_bundle == expected_bundle
+    restarted.state.engine.dispose()
+def test_explicit_proposed_trade_date_is_persisted_and_reopened(demo_app: tuple[FastAPI, TestClient, FakeBroker, Path]) -> None:
+    app, client, _, database_path = demo_app
+    run = _create_run(client, "2026-11-06")
+    assert run["estimated_realized_st_usd"] == "0"
+    assert Decimal(run["estimated_realized_lt_usd"]) == Decimal(-40)
+    run_id = run["run_id"]
+    recommendations = client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations").json()
+    sell = next(leg for leg in recommendations["consolidated_legs"] if leg["side"] == "SELL")
+    assert {lot["st_lt"] for lot in sell["selected_lots"]} == {"LT"}
+    with app.state.session_factory() as session:
+        persisted = session.get(OptimizerRun, run_id)
+        assert persisted is not None
+        assert persisted.proposed_trade_date == date(2026, 11, 6)
+        assert persisted.frozen_input_bundle["proposed_trade_date"] == "2026-11-06"
+
+    app.state.engine.dispose()
+    restarted = create_app(
+        database_url=f"sqlite:///{database_path}",
+        broker=FakeBroker(),
+        seed_demo_data=False,
+    )
+    with TestClient(restarted, base_url="http://localhost") as restarted_client:
+        reopened = restarted_client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations")
+        assert reopened.status_code == 200, reopened.text
+        assert reopened.json()["proposed_trade_date"] == "2026-11-06"
+        reopened_sell = next(
+            leg for leg in reopened.json()["consolidated_legs"] if leg["side"] == "SELL"
+        )
+        assert {lot["st_lt"] for lot in reopened_sell["selected_lots"]} == {"LT"}
+    restarted.state.engine.dispose()
 
 
 def test_demo_run_persistence_selection_arithmetic_and_restart(
@@ -175,11 +359,17 @@ def test_demo_run_persistence_selection_arithmetic_and_restart(
         "DEMO-VB-LOT-1",
         "DEMO-VB-LOT-2",
     }
+    assert {lot["st_lt"] for lot in sell["selected_lots"]} == {"ST"}
+    lot_page = client.get("/api/v1/lots?ticker=VB").json()
+    assert {lot["term"] for lot in lot_page["items"]} == {"ST"}
+    portfolio = client.get("/api/v1/portfolio").json()
+    vb_quote_as_of = next(row["quote_as_of"] for row in portfolio["positions"] if row["ticker"] == "VB")
+    assert vb_quote_as_of.startswith("2026-11-06")
     assert buy["side"] == "BUY"
     assert buy["ticker"] == "VTI"
     assert buy["shares"] == "2"
-    assert run["estimated_realized_st_usd"] == "0"
-    assert Decimal(run["estimated_realized_lt_usd"]) == Decimal(-40)
+    assert Decimal(run["estimated_realized_st_usd"]) == Decimal(-40)
+    assert run["estimated_realized_lt_usd"] == "0"
     assert Decimal(run["cash_after_usd"]) == Decimal(850)
     current = group["impact"]["portfolio_effects"]["us_transition"]["current"]["us_sleeve_value_usd"]
     proposed = group["impact"]["portfolio_effects"]["us_transition"]["proposed_basket"]["us_sleeve_value_usd"]
@@ -205,11 +395,11 @@ def test_demo_run_persistence_selection_arithmetic_and_restart(
     selected_legs = {leg["leg_id"]: leg for leg in selected_payload["consolidated_legs"]}
     selected_sell, selected_buy = (selected_legs[leg_id] for leg_id in selected_group["leg_ids"])
     assert selected_sell["shares"] == "1"
-    assert Decimal(selected_sell["net_lt_realized_usd"]) == Decimal(-20)
+    assert Decimal(selected_sell["net_st_realized_usd"]) == Decimal(-20)
     assert selected_buy["shares"] == "1"
     assert Decimal(selected_buy["estimated_notional_usd"]) == Decimal(200)
     assert Decimal(selected_group["impact"]["sell_proceeds_usd"]) == Decimal(200)
-    assert Decimal(selected.json()["estimated_realized_lt_usd"]) == Decimal(-20)
+    assert Decimal(selected.json()["estimated_realized_st_usd"]) == Decimal(-20)
     assert selected.json()["lots_sold_count"] == 1
     assert selected.json()["orders_count"] == 2
 
@@ -289,9 +479,11 @@ def test_shared_replacement_buy_pools_proceeds_and_counts_consolidated_orders(
         assert session.query(RecommendationGroupLeg).filter_by(leg_id=buy["leg_id"]).count() == 2
 
     json_export = client.get(f"/api/v1/optimizer/runs/{run['run_id']}/export?format=json").json()
+    assert json_export["metadata"]["proposed_trade_date"] == "2026-11-05"
     assert [leg["leg_id"] for leg in json_export["run"]["consolidated_legs"]].count(buy["leg_id"]) == 1
     csv_response = client.get(f"/api/v1/optimizer/runs/{run['run_id']}/export?format=csv")
     rows = list(csv.DictReader(io.StringIO(csv_response.text)))
+    assert rows[0]["proposed_trade_date"] == "2026-11-05"
     assert [row["leg_id"] for row in rows if row["side"] == "BUY"] == [buy["leg_id"]]
 
     deselected = client.post(

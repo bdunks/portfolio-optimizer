@@ -371,6 +371,7 @@ class OptimizerRun(Base):
     policy_revision_id: Mapped[str] = mapped_column(ForeignKey("policy_revision.id"), nullable=False)
     source_generation: Mapped[int] = mapped_column(Integer, nullable=False)
     as_of: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    proposed_trade_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     solver_version: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     batch_settings: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)

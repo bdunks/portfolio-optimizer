@@ -4,6 +4,7 @@ import csv
 import hashlib
 import io
 import json
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_DOWN, Decimal
 from uuid import uuid4
@@ -27,6 +28,7 @@ from app.db.models import (
     Security,
     SyncState,
 )
+from app.domain.allocation import assignment_path, resolve_cash, resolve_holding
 from app.domain.decimal_math import (
     exact_difference,
     exact_percent_product,
@@ -35,16 +37,16 @@ from app.domain.decimal_math import (
     percentage,
     whole_share_floor,
 )
+from app.domain.financial_inputs import (
+    FinancialInputs,
+    LotInput,
+    financial_inputs_from_provenance,
+)
+from app.domain.trade_dates import classify_holding_period, resolve_proposed_trade_date
 from app.schemas import OptimizerRunInput, OptimizerSelectionInput
 from app.services.errors import AppError
-from app.services.policy import (
-    accumulate_sleeve_value,
-    policy_to_dict,
-    resolve_holding,
-    resolve_policy_assignment,
-    sleeve_assignment_path,
-    validate_policy_revision,
-)
+from app.services.financial_input_loader import load_financial_inputs
+from app.services.policy import accumulate_sleeve_value, validate_policy_revision
 
 DEMO_WARNING = "real_optimizer_unavailable"
 DEMO_WASH_WARNING = "wash_sale_validation_deferred_demo"
@@ -63,18 +65,6 @@ def _datetime_iso(value: datetime) -> str:
     return value.astimezone(UTC).isoformat()
 
 
-def _json_safe(value: object) -> object:
-    if isinstance(value, datetime):
-        return _datetime_iso(value)
-    if isinstance(value, date):
-        return value.isoformat()
-    if isinstance(value, Decimal):
-        return str(value)
-    if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_json_safe(item) for item in value]
-    return value
 
 
 def _fingerprint(value: object) -> str:
@@ -82,12 +72,6 @@ def _fingerprint(value: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _term(acquired: date, as_of: date) -> str:
-    try:
-        anniversary = acquired.replace(year=acquired.year + 1)
-    except ValueError:
-        anniversary = acquired.replace(year=acquired.year + 1, day=28)
-    return "LT" if as_of > anniversary else "ST"
 
 
 def _active_policy(session: Session) -> PolicyRevision:
@@ -110,7 +94,8 @@ def _frozen_input(
     account: Account,
     sync_state: SyncState,
     policy: PolicyRevision,
-) -> dict[str, object]:
+    proposed_trade_date: date,
+) -> FinancialInputs:
     if not sync_state.complete or sync_state.current_generation < 1:
         raise AppError("current_state_unavailable", "A complete current portfolio sync is required", status_code=409)
     required = ("positions", "lots", "transactions", "balances", "quotes")
@@ -122,26 +107,16 @@ def _frozen_input(
             status_code=422,
             details={"incomplete_sections": missing},
         )
-
     if account.cash_usd < 0 or account.settled_buying_power_usd < 0:
         raise AppError("invalid_current_balance", "Current account balances cannot be negative", status_code=422)
-    securities = {row.id: row for row in session.scalars(select(Security)).all()}
-    quotes = {row.security_id: row for row in session.scalars(select(CurrentQuote)).all()}
-    positions = session.scalars(
-        select(CurrentPosition).where(CurrentPosition.account_id == account.id).order_by(CurrentPosition.security_id)
-    ).all()
-    lots = session.scalars(
-        select(CurrentTaxLot).where(CurrentTaxLot.account_id == account.id).order_by(CurrentTaxLot.broker_lot_id)
-    ).all()
-    transactions = session.scalars(
-        select(BrokerTransaction).where(BrokerTransaction.account_id == account.id).order_by(BrokerTransaction.trade_date)
-    ).all()
 
-    position_rows: list[dict[str, object]] = []
-    for position in positions:
-        security = securities.get(position.security_id)
-        quote = quotes.get(position.security_id)
-        if security is None or position.sync_generation != sync_state.current_generation:
+    inputs = load_financial_inputs(session, account, sync_state, policy, proposed_trade_date)
+    quotes_by_ticker = {quote.ticker: quote for quote in inputs.quotes}
+    positions_by_ticker = {position.ticker: position for position in inputs.positions}
+    lots_by_ticker: dict[str, list[LotInput]] = {}
+    for position in inputs.positions:
+        quote = quotes_by_ticker.get(position.ticker)
+        if position.sync_generation != sync_state.current_generation:
             raise AppError("current_state_inconsistent", "Current position data is inconsistent", status_code=409)
         if position.shares <= 0 or position.market_value_usd < 0:
             raise AppError("invalid_position", "Current positions require positive shares and nonnegative value", status_code=422)
@@ -150,42 +125,17 @@ def _frozen_input(
                 "quote_unavailable",
                 "Every held position requires a quote from the current complete sync",
                 status_code=422,
-                details={"ticker": security.ticker},
+                details={"ticker": position.ticker},
             )
         if quote.quality.lower() != "good" or quote.last_usd <= 0:
             raise AppError(
                 "quote_unavailable",
                 "A current position has a stale or unusable quote",
                 status_code=422,
-                details={"ticker": security.ticker, "quality": quote.quality},
+                details={"ticker": position.ticker, "quality": quote.quality},
             )
-        resolved = resolve_holding(session, policy.id, security)
-        if resolved is None:
-            raise AppError(
-                "unassigned_holding",
-                "Every current holding must resolve to an active policy sleeve",
-                status_code=422,
-                details={"ticker": security.ticker},
-            )
-        position_rows.append(
-            {
-                "ticker": security.ticker,
-                "asset_type": security.asset_type,
-                "is_completion_etf": security.is_completion_etf,
-                "shares": str(position.shares),
-                "sync_generation": position.sync_generation,
-                "as_of": _datetime_iso(position.as_of),
-                "market_value_usd": str(position.market_value_usd),
-                "sleeve_key": resolved[0],
-                "sub_sleeve_key": resolved[1],
-            }
-        )
-
-    lot_shares_by_ticker: dict[str, list[Decimal]] = {}
-    lot_rows: list[dict[str, object]] = []
-    for lot in lots:
-        security = securities.get(lot.security_id)
-        if security is None or lot.sync_generation != sync_state.current_generation:
+    for lot in inputs.lots:
+        if lot.sync_generation != sync_state.current_generation:
             raise AppError("current_state_inconsistent", "Current tax-lot data is inconsistent", status_code=409)
         if lot.shares <= 0 or lot.available_shares < 0 or lot.available_shares > lot.shares:
             raise AppError(
@@ -196,28 +146,10 @@ def _frozen_input(
             )
         if lot.adjusted_unit_basis_usd < 0:
             raise AppError("invalid_lot_basis", "Adjusted lot basis cannot be negative", status_code=422)
-        lot_shares_by_ticker.setdefault(security.ticker, []).append(lot.shares)
-        lot_rows.append(
-            {
-                "ticker": security.ticker,
-                "broker_lot_id": lot.broker_lot_id,
-                "acquired_date": lot.acquired_date.isoformat(),
-                "shares": str(lot.shares),
-                "available_shares": str(lot.available_shares),
-                "adjusted_unit_basis_usd": str(lot.adjusted_unit_basis_usd),
-                "broker_wash_adjustment_usd": str(lot.broker_wash_adjustment_usd)
-                if lot.broker_wash_adjustment_usd is not None
-                else None,
-                "source": lot.source,
-                "as_of": _datetime_iso(lot.as_of),
-                "fractional_cleanup_unsupported": lot.fractional_cleanup_unsupported,
-                "quality_flags": list(lot.quality_flags),
-            }
-        )
-    position_shares_by_ticker = {row["ticker"]: _decimal(row["shares"]) for row in position_rows}
-    if set(lot_shares_by_ticker) != set(position_shares_by_ticker) or any(
-        exact_sum(lot_shares_by_ticker[ticker]) != shares
-        for ticker, shares in position_shares_by_ticker.items()
+        lots_by_ticker.setdefault(lot.ticker, []).append(lot)
+    if set(lots_by_ticker) != set(positions_by_ticker) or any(
+        exact_sum(lot.shares for lot in lots_by_ticker[ticker]) != position.shares
+        for ticker, position in positions_by_ticker.items()
     ):
         raise AppError(
             "incomplete_lots",
@@ -225,177 +157,114 @@ def _frozen_input(
             status_code=422,
         )
 
-    quote_rows: dict[str, dict[str, object]] = {}
-    for security_id, quote in quotes.items():
-        security = securities.get(security_id)
-        if security is None:
-            continue
-        quote_rows[security.ticker] = {
-            "bid_usd": str(quote.bid_usd) if quote.bid_usd is not None else None,
-            "ask_usd": str(quote.ask_usd) if quote.ask_usd is not None else None,
-            "last_usd": str(quote.last_usd) if quote.last_usd is not None else None,
-            "source": quote.source,
-            "as_of": _datetime_iso(quote.as_of),
-            "quality": quote.quality,
-            "sync_generation": quote.sync_generation,
-        }
-
-    transaction_rows: list[dict[str, object]] = []
-    for transaction in transactions:
-        security = securities.get(transaction.security_id)
-        if security is None:
-            continue
-        transaction_rows.append(
-            {
-                "broker_transaction_key": transaction.broker_transaction_key,
-                "ticker": security.ticker,
-                "transaction_kind": transaction.transaction_kind,
-                "transaction_time": _datetime_iso(transaction.transaction_time),
-                "trade_date": transaction.trade_date.isoformat(),
-                "shares": str(transaction.shares),
-                "amount_usd": str(transaction.amount_usd),
-                "is_acquisition": transaction.is_acquisition,
-                "broker_lot_id": transaction.broker_lot_id,
-                "source": transaction.source,
-            }
-        )
-
-    account_bundle = {
-        "local_account_id": account.id,
-        "account_key_fingerprint": _fingerprint(account.broker_account_id_key),
-        "display_name": account.display_name,
-        "account_type": account.account_type,
-        "tax_treatment": account.tax_treatment,
-        "source": account.source,
-        "as_of": _datetime_iso(account.as_of),
-        "cash_usd": str(account.cash_usd),
-        "settled_buying_power_usd": str(account.settled_buying_power_usd),
-    }
-    policy_bundle = _json_safe(policy_to_dict(session, policy))
-    source_payload: dict[str, object] = {
-        "schema": "demo-run-input-v1",
-        "account": account_bundle,
-        "source_generation": sync_state.current_generation,
-        "positions": position_rows,
-        "lots": lot_rows,
-        "quotes": quote_rows,
-        "policy": policy_bundle,
-        "transactions": transaction_rows,
-    }
-    source_checksum = _fingerprint(source_payload)
-    source_payload["source_checksum"] = source_checksum
-    return source_payload
+    provenance = inputs.to_provenance()
+    provenance.pop("source_checksum", None)
+    source_checksum = _fingerprint(provenance)
+    return replace(inputs, source_checksum=source_checksum)
 
 
-def _candidate_groups(bundle: dict[str, object], batch: dict[str, object]) -> list[dict[str, object]]:
-    policy = bundle["policy"]
-    assert isinstance(policy, dict)
-    settings = policy["settings"]
-    assert isinstance(settings, dict)
-    quotes = bundle["quotes"]
-    positions = bundle["positions"]
-    lots = bundle["lots"]
-    assert isinstance(quotes, dict)
-    assert isinstance(positions, list)
-    assert isinstance(lots, list)
-    policy_rows = policy["allowed_securities"]
-    assert isinstance(policy_rows, list)
-    sleeve_rows = policy["sleeves"]
-    assert isinstance(sleeve_rows, list)
-    sleeves_by_key = {str(row["sleeve_key"]): row for row in sleeve_rows}
+
+def _candidate_groups(inputs: FinancialInputs, batch: dict[str, object]) -> list[dict[str, object]]:
+    policy = inputs.policy.allocation
+    settings = inputs.policy.settings
+    quotes = {row.ticker: row for row in inputs.quotes}
+    positions = {row.ticker: row for row in inputs.positions}
+    lots_by_ticker: dict[str, list[LotInput]] = {}
+    for lot in inputs.lots:
+        lots_by_ticker.setdefault(lot.ticker, []).append(lot)
     portfolio_total = exact_sum(
-        [_decimal(row["market_value_usd"]) for row in positions]  # type: ignore[index]
-        + [_decimal(bundle["account"]["cash_usd"])]  # type: ignore[index]
+        [row.market_value_usd for row in inputs.positions] + [inputs.account.cash_usd]
     )
     max_sell_tickers = int(batch["max_sell_tickers_per_batch"])
     max_sell_lots = int(batch["max_sell_lots_per_batch"])
     max_total_orders = int(batch["max_total_orders_per_batch"])
-    max_turnover = _decimal(settings["max_batch_turnover_pct"])
-    minimum_buy = _decimal(settings["min_buy_order_notional_usd"])
-    reserve = _decimal(settings["cash_reserve_usd"])
-    cash = _decimal(bundle["account"]["cash_usd"])  # type: ignore[index]
+    max_turnover = _decimal(settings.get("max_batch_turnover_pct", Decimal(0)))
+    minimum_buy = _decimal(settings.get("min_buy_order_notional_usd", Decimal(0)))
+    reserve = _decimal(settings.get("cash_reserve_usd", Decimal(0)))
+    cash = inputs.account.cash_usd
     if cash < reserve:
         raise AppError("cash_reserve_unavailable", "Current cash is below the configured reserve", status_code=422)
 
-    by_ticker = {str(row["ticker"]): row for row in positions}  # type: ignore[index]
-    lots_by_ticker: dict[str, list[dict[str, object]]] = {}
-    for row in lots:
-        lots_by_ticker.setdefault(str(row["ticker"]), []).append(row)
-
     candidates: list[dict[str, object]] = []
-    for ticker, position in by_ticker.items():
+    for ticker, position in positions.items():
         source_quote = quotes.get(ticker)
-        source_price_raw = source_quote.get("last_usd") if isinstance(source_quote, dict) else None
-        if source_price_raw is None:
+        if source_quote is None or source_quote.last_usd is None:
             continue
-        source_price = _decimal(source_price_raw)
+        source_price = source_quote.last_usd
         source_lots: list[dict[str, object]] = []
         total_loss = Decimal(0)
         for lot in lots_by_ticker.get(ticker, []):
-            if lot["quality_flags"]:
+            if lot.quality_flags:
                 continue
-            available = _decimal(lot["available_shares"])
-            whole_shares = available.to_integral_value(rounding=ROUND_DOWN)
-            basis = _decimal(lot["adjusted_unit_basis_usd"])
-            if whole_shares <= 0 or basis <= source_price:
+            whole_shares = lot.available_shares.to_integral_value(rounding=ROUND_DOWN)
+            if whole_shares <= 0 or lot.adjusted_unit_basis_usd <= source_price:
                 continue
-            loss = exact_product(exact_difference(source_price, basis), whole_shares)
+            loss = exact_product(
+                exact_difference(source_price, lot.adjusted_unit_basis_usd), whole_shares
+            )
             if loss >= 0:
                 continue
-            source_lots.append({**lot, "proposed_shares": str(whole_shares)})
+            source_lots.append(
+                {
+                    "ticker": lot.ticker,
+                    "broker_lot_id": lot.broker_lot_id,
+                    "acquired_date": lot.acquired_date,
+                    "shares": str(lot.shares),
+                    "available_shares": str(lot.available_shares),
+                    "adjusted_unit_basis_usd": str(lot.adjusted_unit_basis_usd),
+                    "quality_flags": list(lot.quality_flags),
+                    "proposed_shares": str(whole_shares),
+                }
+            )
             total_loss = exact_sum((total_loss, loss))
         if not source_lots:
             continue
 
-        sleeve_key = str(position["sleeve_key"])
-        source_path = sleeve_assignment_path(
-            sleeves_by_key,
-            sleeve_key,
-            str(position["sub_sleeve_key"])
-            if position["sub_sleeve_key"] is not None
-            else None,
+        source_path = assignment_path(
+            policy, position.assignment.sleeve_key, position.assignment.sub_sleeve_key
         )
-        source_scope = source_path[0] if source_path else sleeve_key
+        if not source_path:
+            continue
+        source_scope = source_path[0]
         allowed = sorted(
             (
                 row
-                for row in policy_rows
-                if row["enabled"]
-                and row["ticker"] != ticker
-                and (
-                    configured_path := sleeve_assignment_path(
-                        sleeves_by_key,
-                        str(row["sleeve_key"]),
-                        str(row["sub_sleeve_key"]) if row["sub_sleeve_key"] is not None else None,
-                    )
-                )
+                for row in policy.allowed_securities
+                if row.enabled
+                and row.ticker != ticker
+                and (configured_path := assignment_path(policy, row.sleeve_key, row.sub_sleeve_key))
                 and configured_path[0] == source_scope
             ),
-            key=lambda row: (int(row["priority"]), str(row["ticker"])),
+            key=lambda row: (row.priority, row.ticker),
         )
         replacement: dict[str, object] | None = None
         for row in allowed:
-            quote = quotes.get(str(row["ticker"]))
+            quote = quotes.get(row.ticker)
+            security = inputs.security_for(row.ticker)
             if (
-                not isinstance(quote, dict)
-                or quote.get("last_usd") is None
-                or quote.get("quality") != "good"
-                or int(quote.get("sync_generation", 0)) != int(bundle["source_generation"])
+                quote is None
+                or quote.last_usd is None
+                or quote.quality != "good"
+                or quote.sync_generation != inputs.source_generation
+                or security is None
             ):
                 continue
-            replacement_assignment = resolve_policy_assignment(
-                policy, str(row["ticker"]), asset_type="ETF"
-            )
-            if replacement_assignment is None:
+            replacement_resolution = resolve_holding(policy, security.identity)
+            if replacement_resolution.assignment is None:
                 continue
-            price = _decimal(quote["last_usd"])
+            price = quote.last_usd
             if price > 0:
                 replacement = {
-                    **row,
-                    "sleeve_key": replacement_assignment[0],
-                    "sub_sleeve_key": replacement_assignment[1],
+                    "ticker": row.ticker,
+                    "sleeve_key": replacement_resolution.assignment.sleeve_key,
+                    "sub_sleeve_key": replacement_resolution.assignment.sub_sleeve_key,
                     "price": str(price),
-                    "quote": quote,
+                    "quote": {
+                        "as_of": _datetime_iso(quote.as_of),
+                        "source": quote.source,
+                        "quality": quote.quality,
+                        "sync_generation": quote.sync_generation,
+                    },
                 }
                 break
         if replacement is None:
@@ -411,11 +280,14 @@ def _candidate_groups(bundle: dict[str, object], batch: dict[str, object]) -> li
         candidates.append(
             {
                 "ticker": ticker,
-                "asset_type": position["asset_type"],
+                "asset_type": position.asset_type,
                 "source_price": str(source_price),
-                "source_quote": source_quote,
-                "sleeve_key": position["sleeve_key"],
-                "sub_sleeve_key": position["sub_sleeve_key"],
+                "source_quote": {
+                    "as_of": _datetime_iso(source_quote.as_of),
+                    "source": source_quote.source,
+                },
+                "sleeve_key": position.assignment.sleeve_key,
+                "sub_sleeve_key": position.assignment.sub_sleeve_key,
                 "sell_lots": source_lots,
                 "replacement": replacement,
                 "total_loss": str(total_loss),
@@ -441,11 +313,13 @@ def _candidate_groups(bundle: dict[str, object], batch: dict[str, object]) -> li
         proceeds_by_target: dict[str, Decimal] = {}
         target_prices: dict[str, Decimal] = {}
         for item in proposed:
-            replacement = item["replacement"]
-            assert isinstance(replacement, dict)
-            target = str(replacement["ticker"])
-            proceeds_by_target[target] = exact_sum((proceeds_by_target.get(target, Decimal(0)), _decimal(item["proceeds"])))
-            target_prices[target] = _decimal(replacement["price"])
+            replacement_item = item["replacement"]
+            assert isinstance(replacement_item, dict)
+            target = str(replacement_item["ticker"])
+            proceeds_by_target[target] = exact_sum(
+                (proceeds_by_target.get(target, Decimal(0)), _decimal(item["proceeds"]))
+            )
+            target_prices[target] = _decimal(replacement_item["price"])
         buy_tickers = {
             target
             for target, pooled_proceeds in proceeds_by_target.items()
@@ -460,15 +334,16 @@ def _candidate_groups(bundle: dict[str, object], batch: dict[str, object]) -> li
     # The minimum is a BUY-order rule: apply it to the pooled order, never one group at a time.
     pooled: dict[str, tuple[Decimal, Decimal]] = {}
     for row in result:
-        replacement = row["replacement"]
-        assert isinstance(replacement, dict)
-        target = str(replacement["ticker"])
-        proceeds, price = pooled.get(target, (Decimal(0), _decimal(replacement["price"])))
+        replacement_item = row["replacement"]
+        assert isinstance(replacement_item, dict)
+        target = str(replacement_item["ticker"])
+        proceeds, price = pooled.get(target, (Decimal(0), _decimal(replacement_item["price"])))
         pooled[target] = (exact_sum((proceeds, _decimal(row["proceeds"]))), price)
     excluded = {
         target
         for target, (proceeds, price) in pooled.items()
-        if whole_share_floor(proceeds, price) <= 0 or exact_product(whole_share_floor(proceeds, price), price) < minimum_buy
+        if whole_share_floor(proceeds, price) <= 0
+        or exact_product(whole_share_floor(proceeds, price), price) < minimum_buy
     }
     return [
         row
@@ -494,9 +369,14 @@ def _add_demo_group(session: Session, run: OptimizerRun, rank: int, data: dict[s
     assert isinstance(lots, list)
     shares = exact_sum(_decimal(lot["proposed_shares"]) for lot in lots)
     realized_by_term = {"ST": Decimal(0), "LT": Decimal(0)}
-    as_of = date.fromisoformat(str(run.as_of.date()))
+    as_of = run.proposed_trade_date
+    if as_of is None:
+        raise AppError("run_trade_date_missing", "Saved run has no proposed trade-date provenance", status_code=409)
     for lot in lots:
-        term = _term(date.fromisoformat(str(lot["acquired_date"])), as_of)
+        acquired = lot["acquired_date"]
+        if not isinstance(acquired, date):
+            acquired = date.fromisoformat(str(acquired))
+        term = classify_holding_period(acquired, as_of)
         realized_by_term[term] = exact_sum(
             (
                 realized_by_term[term],
@@ -568,8 +448,10 @@ def _add_demo_group(session: Session, run: OptimizerRun, rank: int, data: dict[s
     )
     for lot in lots:
         proposed_shares = _decimal(lot["proposed_shares"])
-        acquired = date.fromisoformat(str(lot["acquired_date"]))
-        term = _term(acquired, as_of)
+        acquired = lot["acquired_date"]
+        if not isinstance(acquired, date):
+            acquired = date.fromisoformat(str(acquired))
+        term = classify_holding_period(acquired, as_of)
         realized = exact_product(
             exact_difference(source_price, _decimal(lot["adjusted_unit_basis_usd"])), proposed_shares
         )
@@ -657,13 +539,14 @@ def create_demo_run(
     if account is None or sync_state is None or account.source.upper() not in {"DEMO", "FAKE"}:
         raise AppError("demo_account_required", "A seeded FakeBroker demo account is required", status_code=409)
     policy = _active_policy(session)
-    bundle = _frozen_input(session, account, sync_state, policy)
+    proposed_trade_date = resolve_proposed_trade_date(request.proposed_trade_date, demo=True)
+    inputs = _frozen_input(session, account, sync_state, policy, proposed_trade_date)
     configured = {
         "max_sell_tickers_per_batch": policy.max_sell_tickers_per_batch,
         "max_sell_lots_per_batch": policy.max_sell_lots_per_batch,
         "max_total_orders_per_batch": policy.max_total_orders_per_batch,
     }
-    requested = request.model_dump(exclude={"mode"}, exclude_none=True)
+    requested = request.model_dump(exclude={"mode", "proposed_trade_date"}, exclude_none=True)
     for key, value in requested.items():
         if value > configured[key]:
             raise AppError(
@@ -679,15 +562,16 @@ def create_demo_run(
         "min_buy_order_notional_usd": str(policy.min_buy_order_notional_usd),
         "cash_reserve_usd": str(policy.cash_reserve_usd),
     }
+    bundle = inputs.to_provenance()
     bundle["batch_settings"] = batch_settings
     fingerprint = _fingerprint(bundle)
     bundle["input_fingerprint"] = fingerprint
-    as_of = datetime.fromisoformat(str(bundle["account"]["as_of"]))  # type: ignore[index]
     run = OptimizerRun(
         id=str(uuid4()),
         policy_revision_id=policy.id,
         source_generation=sync_state.current_generation,
-        as_of=as_of,
+        as_of=inputs.account.as_of,
+        proposed_trade_date=proposed_trade_date,
         solver_version="DEMO",
         status="COMPLETE",
         batch_settings=batch_settings,
@@ -698,7 +582,7 @@ def create_demo_run(
     )
     session.add(run)
     session.flush()
-    candidates = _candidate_groups(bundle, batch_settings)
+    candidates = _candidate_groups(inputs, batch_settings)
     for rank, candidate in enumerate(candidates, start=1):
         _add_demo_group(session, run, rank, candidate)
     session.flush()
@@ -774,21 +658,29 @@ def _check_run_current(session: Session, run: OptimizerRun) -> None:
         or _fingerprint(fingerprint_payload) != run.input_fingerprint
     ):
         raise AppError("run_provenance_invalid", "Saved demo run provenance is incomplete or changed", status_code=409)
+    if run.proposed_trade_date is None:
+        raise AppError("run_trade_date_missing", "Saved run trade-date provenance is missing", status_code=409)
+    try:
+        frozen_inputs = financial_inputs_from_provenance(
+            bundle, proposed_trade_date=run.proposed_trade_date
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise AppError("run_provenance_invalid", "Saved run financial inputs cannot be reconstructed", status_code=409) from exc
 
-    frozen_account = bundle["account"]
     account = session.get(Account, 1)
+    frozen_account = frozen_inputs.account
     if (
         account is None
-        or account.source != frozen_account["source"]
-        or str(account.cash_usd) != frozen_account["cash_usd"]
-        or str(account.settled_buying_power_usd) != frozen_account["settled_buying_power_usd"]
-        or _datetime_iso(account.as_of) != frozen_account["as_of"]
-        or _fingerprint(account.broker_account_id_key) != frozen_account["account_key_fingerprint"]
+        or account.source != frozen_account.source
+        or account.cash_usd != frozen_account.cash_usd
+        or account.settled_buying_power_usd != frozen_account.settled_buying_power_usd
+        or account.as_of != frozen_account.as_of
+        or _fingerprint(account.broker_account_id_key) != frozen_account.account_key_fingerprint
     ):
         raise AppError("stale_run_account", "Current account values changed; create a new demo run", status_code=409)
 
     securities = {row.id: row for row in session.scalars(select(Security)).all()}
-    frozen_positions = {row["ticker"]: row for row in bundle["positions"]}
+    frozen_positions = {row.ticker: row for row in frozen_inputs.positions}
     current_positions = session.scalars(
         select(CurrentPosition).where(CurrentPosition.account_id == account.id)
     ).all()
@@ -799,24 +691,22 @@ def _check_run_current(session: Session, run: OptimizerRun) -> None:
     }
     if set(live_positions) != set(frozen_positions):
         raise AppError("stale_run_positions", "Current positions changed; create a new demo run", status_code=409)
+    frozen_quotes = {row.ticker: row for row in frozen_inputs.quotes}
 
     def quote_matches(ticker: str, security_id: int) -> bool:
-        frozen_quote = bundle.get("quotes", {}).get(ticker)
+        frozen_quote = frozen_quotes.get(ticker)
         live_quote = session.scalar(select(CurrentQuote).where(CurrentQuote.security_id == security_id))
-        if not isinstance(frozen_quote, dict) or live_quote is None:
-            return False
-        return (
-            live_quote.sync_generation == run.source_generation
+        return bool(
+            frozen_quote is not None
+            and live_quote is not None
+            and live_quote.sync_generation == run.source_generation
             and live_quote.quality.lower() == "good"
-            and (str(live_quote.bid_usd) if live_quote.bid_usd is not None else None)
-            == frozen_quote.get("bid_usd")
-            and (str(live_quote.ask_usd) if live_quote.ask_usd is not None else None)
-            == frozen_quote.get("ask_usd")
-            and (str(live_quote.last_usd) if live_quote.last_usd is not None else None)
-            == frozen_quote.get("last_usd")
-            and live_quote.source == frozen_quote.get("source")
-            and live_quote.quality == frozen_quote.get("quality")
-            and _datetime_iso(live_quote.as_of) == frozen_quote.get("as_of")
+            and live_quote.bid_usd == frozen_quote.bid_usd
+            and live_quote.ask_usd == frozen_quote.ask_usd
+            and live_quote.last_usd == frozen_quote.last_usd
+            and live_quote.source == frozen_quote.source
+            and live_quote.quality == frozen_quote.quality
+            and live_quote.as_of == frozen_quote.as_of
         )
 
     for ticker, frozen in frozen_positions.items():
@@ -824,11 +714,11 @@ def _check_run_current(session: Session, run: OptimizerRun) -> None:
         security = securities[position.security_id]
         if (
             position.sync_generation != run.source_generation
-            or str(position.shares) != frozen["shares"]
-            or str(position.market_value_usd) != frozen["market_value_usd"]
-            or _datetime_iso(position.as_of) != frozen["as_of"]
-            or security.asset_type != frozen["asset_type"]
-            or security.is_completion_etf != frozen["is_completion_etf"]
+            or position.shares != frozen.shares
+            or position.market_value_usd != frozen.market_value_usd
+            or position.as_of != frozen.as_of
+            or security.asset_type != frozen.asset_type
+            or security.is_completion_etf != frozen.is_completion_etf
             or not quote_matches(ticker, security.id)
         ):
             raise AppError(
@@ -849,7 +739,7 @@ def _check_run_current(session: Session, run: OptimizerRun) -> None:
                     details={"ticker": security.ticker if security else None},
                 )
 
-    frozen_lots = {row["broker_lot_id"]: row for row in bundle["lots"]}
+    frozen_lots = {row.broker_lot_id: row for row in frozen_inputs.lots}
     for group in session.scalars(select(RecommendationGroup).where(RecommendationGroup.run_id == run.id)).all():
         for row in _group_lot_rows(session, group.id):
             live = session.scalar(
@@ -865,18 +755,16 @@ def _check_run_current(session: Session, run: OptimizerRun) -> None:
                 or frozen is None
                 or security is None
                 or live.sync_generation != run.source_generation
-                or live.shares != _decimal(frozen["shares"])
-                or live.available_shares != _decimal(frozen["available_shares"])
-                or live.adjusted_unit_basis_usd != _decimal(frozen["adjusted_unit_basis_usd"])
-                or (
-                    str(live.broker_wash_adjustment_usd) if live.broker_wash_adjustment_usd is not None else None
-                ) != frozen["broker_wash_adjustment_usd"]
-                or live.source != frozen["source"]
-                or _datetime_iso(live.as_of) != frozen["as_of"]
-                or live.fractional_cleanup_unsupported != frozen["fractional_cleanup_unsupported"]
-                or live.quality_flags != frozen["quality_flags"]
-                or live.acquired_date.isoformat() != frozen["acquired_date"]
-                or security.ticker != frozen["ticker"]
+                or live.shares != frozen.shares
+                or live.available_shares != frozen.available_shares
+                or live.adjusted_unit_basis_usd != frozen.adjusted_unit_basis_usd
+                or live.broker_wash_adjustment_usd != frozen.broker_wash_adjustment_usd
+                or live.source != frozen.source
+                or live.as_of != frozen.as_of
+                or live.fractional_cleanup_unsupported != frozen.fractional_cleanup_unsupported
+                or tuple(live.quality_flags) != frozen.quality_flags
+                or live.acquired_date != frozen.acquired_date
+                or security.ticker != frozen.ticker
                 or live.available_shares < row.shares
             ):
                 raise AppError(
@@ -893,6 +781,12 @@ def _recalculate_selection(
     selected_lots_by_group: dict[str, list[str]],
 ) -> None:
     bundle = run.frozen_input_bundle
+    if run.proposed_trade_date is None:
+        raise AppError("run_trade_date_missing", "Saved run has no proposed trade-date provenance", status_code=409)
+    try:
+        inputs = financial_inputs_from_provenance(bundle, proposed_trade_date=run.proposed_trade_date)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise AppError("run_provenance_invalid", "Saved run financial inputs cannot be reconstructed", status_code=409) from exc
     groups = session.scalars(
         select(RecommendationGroup).where(RecommendationGroup.run_id == run.id).order_by(RecommendationGroup.rank)
     ).all()
@@ -1060,20 +954,18 @@ def _recalculate_selection(
                 action["buy_cost"] = buy_cost
                 action["apply_buy"] = action["group"].id == first_group
 
-    settings = bundle["policy"]["settings"]
-    cash = _decimal(bundle["account"]["cash_usd"])
+    settings = inputs.policy.settings
+    cash = inputs.account.cash_usd
     cash_after = exact_sum((cash, total_proceeds, total_buy_cost.copy_negate()))
-    reserve = _decimal(settings["cash_reserve_usd"])
+    reserve = _decimal(settings.get("cash_reserve_usd", Decimal(0)))
     if cash_after < reserve:
         raise AppError("selected_basket_infeasible", "Selected basket would breach the configured cash reserve", status_code=422)
     batch = run.batch_settings
     max_tickers = int(batch["max_sell_tickers_per_batch"])
     max_lots = int(batch["max_sell_lots_per_batch"])
     max_orders = int(batch["max_total_orders_per_batch"])
-    max_turnover = _decimal(settings["max_batch_turnover_pct"])
-    portfolio_total = exact_sum(
-        [_decimal(row["market_value_usd"]) for row in bundle["positions"]] + [cash]
-    )
+    max_turnover = _decimal(settings.get("max_batch_turnover_pct", Decimal(0)))
+    portfolio_total = exact_sum([row.market_value_usd for row in inputs.positions] + [cash])
     turnover_limit = exact_percent_product(portfolio_total, max_turnover)
     actual_orders = len(selected_tickers) + active_buy_count
     if len(selected_tickers) > max_tickers or selected_lot_count > max_lots or actual_orders > max_orders:
@@ -1091,7 +983,7 @@ def _recalculate_selection(
             details={"sell_proceeds_usd": str(total_proceeds), "turnover_limit_usd": str(turnover_limit)},
         )
 
-    effects = _account_effects(bundle, actions)
+    effects = _account_effects(inputs, actions)
     for action in actions:
         group = action["group"]
         group.impact = {
@@ -1122,7 +1014,7 @@ def _recalculate_selection(
         "estimated_tax_benefit_usd": None,
         "estimated_tax_benefit_status": tax_status,
         "lots_sold_count": selected_lot_count,
-        "positions_exited_count": _positions_exited(bundle, actions),
+        "positions_exited_count": _positions_exited(inputs, actions),
         "orders_count": actual_orders,
         "cash_before_usd": str(cash),
         "cash_after_usd": str(cash_after),
@@ -1132,8 +1024,8 @@ def _recalculate_selection(
     }
 
 
-def _positions_exited(bundle: dict[str, object], actions: list[dict[str, object]]) -> int:
-    positions = {row["ticker"]: _decimal(row["shares"]) for row in bundle["positions"]}
+def _positions_exited(inputs: FinancialInputs, actions: list[dict[str, object]]) -> int:
+    positions = {row.ticker: row.shares for row in inputs.positions}
     sold: dict[str, Decimal] = {}
     for action in actions:
         if action["selected"]:
@@ -1141,34 +1033,24 @@ def _positions_exited(bundle: dict[str, object], actions: list[dict[str, object]
             sold[ticker] = exact_sum((sold.get(ticker, Decimal(0)), _decimal(action["shares_sold"])))
     return sum(1 for ticker, shares in sold.items() if shares >= positions.get(ticker, Decimal(0)))
 
-
-def _account_effects(bundle: dict[str, object], actions: list[dict[str, object]]) -> dict[str, object]:
-    policy = bundle["policy"]
-    assert isinstance(policy, dict)
-    sleeves = policy["sleeves"]
-    assert isinstance(sleeves, list)
-    sleeves_by_key = {
-        str(row["sleeve_key"]): row
-        for row in sleeves
-        if row["enabled"]
-    }
-    top_sleeves = [row for row in sleeves_by_key.values() if row["parent_sleeve_key"] is None]
-    child_sleeves = [row for row in sleeves_by_key.values() if row["parent_sleeve_key"] is not None]
-    container = next((row for row in top_sleeves if row["is_direct_index_container"]), None)
+def _account_effects(inputs: FinancialInputs, actions: list[dict[str, object]]) -> dict[str, object]:
+    allocation = inputs.policy.allocation
+    sleeves_by_key = {row.key: row for row in allocation.sleeves if row.enabled}
+    top_sleeves = [row for row in sleeves_by_key.values() if row.parent_key is None]
+    child_sleeves = [row for row in sleeves_by_key.values() if row.parent_key is not None]
+    container = next((row for row in top_sleeves if row.direct_index_container), None)
     current_values: dict[str, Decimal] = {}
-    for row in bundle["positions"]:
-        path = sleeve_assignment_path(
-            sleeves_by_key,
-            str(row["sleeve_key"]),
-            str(row["sub_sleeve_key"]) if row["sub_sleeve_key"] is not None else None,
-        )
-        accumulate_sleeve_value(current_values, path, _decimal(row["market_value_usd"]))
+    for row in inputs.positions:
+        path = assignment_path(
+            allocation, row.assignment.sleeve_key, row.assignment.sub_sleeve_key
+        ) or ()
+        accumulate_sleeve_value(current_values, path, row.market_value_usd)
 
-    cash = _decimal(bundle["account"]["cash_usd"])
-    cash_sleeve = next((row for row in sleeves_by_key.values() if row["is_cash_sleeve"]), None)
+    cash = inputs.account.cash_usd
+    cash_assignment = resolve_cash(allocation).assignment
     cash_path = (
-        sleeve_assignment_path(sleeves_by_key, str(cash_sleeve["sleeve_key"]))
-        if cash_sleeve is not None
+        assignment_path(allocation, cash_assignment.sleeve_key, cash_assignment.sub_sleeve_key) or ()
+        if cash_assignment is not None
         else ()
     )
     if cash_path:
@@ -1176,30 +1058,28 @@ def _account_effects(bundle: dict[str, object], actions: list[dict[str, object]]
 
     proposed_values = dict(current_values)
     direct_children = {
-        str(child["sleeve_key"])
+        child.key
         for child in child_sleeves
         if container is not None
-        and child["parent_sleeve_key"] == container["sleeve_key"]
-        and child["is_direct_index_sleeve"]
+        and child.parent_key == container.key
+        and child.direct_index_sleeve
     }
 
     def is_transition_etf(asset_type: object, path: tuple[str, ...]) -> bool:
         return bool(
             container is not None
             and asset_type == "ETF"
-            and str(container["sleeve_key"]) in path
+            and container.key in path
             and not direct_children.intersection(path)
         )
 
     current_etf_value = Decimal(0)
-    for row in bundle["positions"]:
-        path = sleeve_assignment_path(
-            sleeves_by_key,
-            str(row["sleeve_key"]),
-            str(row["sub_sleeve_key"]) if row["sub_sleeve_key"] is not None else None,
-        )
-        if is_transition_etf(row["asset_type"], path):
-            current_etf_value = exact_sum((current_etf_value, _decimal(row["market_value_usd"])))
+    for row in inputs.positions:
+        path = assignment_path(
+            allocation, row.assignment.sleeve_key, row.assignment.sub_sleeve_key
+        ) or ()
+        if is_transition_etf(row.asset_type, path):
+            current_etf_value = exact_sum((current_etf_value, row.market_value_usd))
     proposed_etf_value = current_etf_value
 
     total_sell = Decimal(0)
@@ -1209,20 +1089,20 @@ def _account_effects(bundle: dict[str, object], actions: list[dict[str, object]]
             continue
         proceeds = _decimal(action["proceeds"])
         buy_cost = _decimal(action["buy_cost"]) if action["apply_buy"] else Decimal(0)
-        source_path = sleeve_assignment_path(
-            sleeves_by_key,
+        source_path = assignment_path(
+            allocation,
             str(action["source_sleeve_key"]),
             str(action["source_sub_sleeve_key"])
             if action["source_sub_sleeve_key"] is not None
             else None,
-        )
-        target_path = sleeve_assignment_path(
-            sleeves_by_key,
+        ) or ()
+        target_path = assignment_path(
+            allocation,
             str(action["target_sleeve_key"]),
             str(action["target_sub_sleeve_key"])
             if action["target_sub_sleeve_key"] is not None
             else None,
-        )
+        ) or ()
         accumulate_sleeve_value(proposed_values, source_path, proceeds.copy_negate())
         accumulate_sleeve_value(proposed_values, target_path, buy_cost)
         if is_transition_etf(action["source_asset_type"], source_path):
@@ -1236,17 +1116,20 @@ def _account_effects(bundle: dict[str, object], actions: list[dict[str, object]]
     if cash_path:
         accumulate_sleeve_value(proposed_values, cash_path, exact_difference(cash_after, cash))
 
-    portfolio_total = exact_sum([_decimal(row["market_value_usd"]) for row in bundle["positions"]] + [cash])
+    portfolio_total = exact_sum([row.market_value_usd for row in inputs.positions] + [cash])
     current_top = {
-        row["sleeve_key"]: percentage(current_values.get(row["sleeve_key"], Decimal(0)), portfolio_total)
+        row.key: percentage(current_values.get(row.key, Decimal(0)), portfolio_total)
         for row in top_sleeves
     }
     proposed_top = {
-        row["sleeve_key"]: percentage(proposed_values.get(row["sleeve_key"], Decimal(0)), portfolio_total)
+        row.key: percentage(proposed_values.get(row.key, Decimal(0)), portfolio_total)
         for row in top_sleeves
     }
-    target_top = {row["sleeve_key"]: str(row["target_pct"]) for row in top_sleeves}
-    allocation: dict[str, object] = {
+    target_top = {
+        row.key: str(row.target_pct) if row.target_pct is not None else "0"
+        for row in top_sleeves
+    }
+    allocation_view: dict[str, object] = {
         "current": {
             "total_portfolio_usd": str(portfolio_total),
             "sleeve_weights_pct": {key: str(value) for key, value in current_top.items()},
@@ -1259,35 +1142,35 @@ def _account_effects(bundle: dict[str, object], actions: list[dict[str, object]]
     }
     transition = None
     if container is not None:
-        children = [row for row in child_sleeves if row["parent_sleeve_key"] == container["sleeve_key"]]
-        us_current = current_values.get(container["sleeve_key"], Decimal(0))
-        us_proposed = proposed_values.get(container["sleeve_key"], Decimal(0))
+        children = [row for row in child_sleeves if row.parent_key == container.key]
+        us_current = current_values.get(container.key, Decimal(0))
+        us_proposed = proposed_values.get(container.key, Decimal(0))
 
         def child_values(values: dict[str, Decimal], total: Decimal) -> dict[str, dict[str, str]]:
             return {
-                child["sleeve_key"]: {
-                    "value_usd": str(values.get(child["sleeve_key"], Decimal(0))),
+                child.key: {
+                    "value_usd": str(values.get(child.key, Decimal(0))),
                     "within_us_sleeve_pct": str(
-                        percentage(values.get(child["sleeve_key"], Decimal(0)), total)
+                        percentage(values.get(child.key, Decimal(0)), total)
                     ),
                     "whole_portfolio_pct": str(
-                        percentage(values.get(child["sleeve_key"], Decimal(0)), portfolio_total)
+                        percentage(values.get(child.key, Decimal(0)), portfolio_total)
                     ),
                 }
                 for child in children
             }
 
         target_children = {
-            child["sleeve_key"]: {
-                "within_us_sleeve_pct": str(child["target_pct"]),
+            child.key: {
+                "within_us_sleeve_pct": str(child.target_pct) if child.target_pct is not None else "0",
                 "whole_portfolio_pct": str(
-                    exact_percent_product(_decimal(container["target_pct"]), _decimal(child["target_pct"]))
+                    exact_percent_product(container.target_pct or Decimal(0), child.target_pct or Decimal(0))
                 ),
             }
             for child in children
         }
         transition = {
-            "sleeve_key": container["sleeve_key"],
+            "sleeve_key": container.key,
             "label": "DEMO only; values include the full account and cash",
             "current": {
                 "us_sleeve_value_usd": str(us_current),
@@ -1302,12 +1185,14 @@ def _account_effects(bundle: dict[str, object], actions: list[dict[str, object]]
                 "children": child_values(proposed_values, us_proposed),
             },
             "target": {
-                "us_sleeve_whole_portfolio_pct": str(container["target_pct"]),
+                "us_sleeve_whole_portfolio_pct": str(container.target_pct or Decimal(0)),
                 "children": target_children,
             },
         }
-    return {"allocation": allocation, "us_transition": transition}
-
+    return {
+        "allocation": allocation_view,
+        "us_transition": transition,
+    }
 
 def apply_selection(
     session: Session,
@@ -1415,6 +1300,7 @@ def run_summary(run: OptimizerRun) -> dict[str, object]:
         "policy_revision_id": run.policy_revision_id,
         "source_generation": run.source_generation,
         "as_of": run.as_of,
+        "proposed_trade_date": run.proposed_trade_date,
         "solver_version": "DEMO",
         "demo": True,
         "actionable": False,
@@ -1553,6 +1439,7 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
             "policy_revision_id",
             "source_generation",
             "as_of",
+            "proposed_trade_date",
             "solver_version",
             "demo",
             "actionable",
@@ -1572,6 +1459,7 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
         "policy_revision_id",
         "source_generation",
         "as_of",
+        "proposed_trade_date",
         "solver_version",
         "demo",
         "input_fingerprint",
@@ -1712,7 +1600,9 @@ def wash_sales(session: Session) -> dict[str, object]:
                     security = session.get(Security, leg.security_id)
                     if security is None:
                         continue
-                    loss_date = latest_run.as_of.date()
+                    loss_date = latest_run.proposed_trade_date
+                    if loss_date is None:
+                        continue
                     proposed.append(
                         {
                             "run_id": latest_run.id,

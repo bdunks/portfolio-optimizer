@@ -321,6 +321,36 @@ afterEach(() => {
 });
 
 describe('RecommendationsPage', () => {
+  it('sends an explicit trade date and shows the persisted date in run provenance', async () => {
+    const { pinia } = setup(null);
+    const run = { ...makeRun('run-with-date'), proposed_trade_date: '2026-11-06' };
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      const url = urlOf(input);
+      if (url.pathname === '/api/v1/optimizer/runs' && init?.method === 'POST')
+        return Promise.resolve(jsonResponse(run));
+      return Promise.reject(
+        new Error(`Unexpected request: ${init?.method ?? 'GET'} ${url.pathname}`),
+      );
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    await flushPromises();
+    await wrapper.get('input[type="date"]').setValue('2026-11-06');
+    await wrapper.get('button.primary-button').trigger('click');
+    await flushPromises();
+
+    const createCall = fetcher.mock.calls.find(
+      ([input]) => urlOf(input).pathname === '/api/v1/optimizer/runs',
+    );
+    expect(createCall).toBeDefined();
+    expect(JSON.parse(createCall?.[1]?.body as string)).toEqual({
+      proposed_trade_date: '2026-11-06',
+      mode: 'recommendations_only',
+    });
+    expect(wrapper.text()).toContain('Proposed trade date 2026-11-06');
+    wrapper.unmount();
+  });
+
   it('shows API-only DEMO values, renders a shared BUY once, and re-solves group selections with broker lot IDs', async () => {
     const { pinia, store } = setup();
     const updatedRun = makeRun('run-current', ['group-a', 'group-b']);

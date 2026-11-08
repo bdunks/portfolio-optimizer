@@ -25,6 +25,14 @@
     </p>
 
     <section class="run-controls" aria-label="Recommendation run controls">
+      <label class="trade-date-control">
+        <span>Proposed trade date (optional)</span>
+        <input v-model="proposedTradeDate" type="date" :disabled="!canRunOptimizer" />
+      </label>
+      <p class="trade-date-help">
+        Blank uses the deterministic DEMO date 2026-11-05. This is a calendar date; no weekend or
+        holiday adjustment is applied.
+      </p>
       <p v-if="!canRunOptimizer" class="state-message">
         A new run requires a ready synchronized portfolio, healthy local API, and valid active
         policy. Nothing runs automatically.
@@ -95,6 +103,7 @@
       <span>Policy {{ currentRun?.policy_revision_id ?? 'Unavailable' }}</span>
       <span>Source generation {{ currentRun?.source_generation ?? 'Unavailable' }}</span>
       <span>As of {{ currentRun?.as_of ?? 'Unavailable' }}</span>
+      <span>Proposed trade date {{ currentRun?.proposed_trade_date ?? 'Unavailable' }}</span>
     </p>
 
     <p v-if="mutationBusy" class="pending-banner" role="status">
@@ -660,6 +669,7 @@ import { isMatchingCurrentRun } from './overview-state';
 
 const store = useWorkspaceStore();
 const savedRunId = ref('');
+const proposedTradeDate = ref('');
 const topN = ref(3);
 const sortOrder = ref<'rank-ascending' | 'rank-descending'>('rank-ascending');
 const mutationBusy = ref(false);
@@ -855,7 +865,9 @@ function loadInitialWorkspace(): void {
 async function runOptimizer(): Promise<void> {
   if (!canRunOptimizer.value) return;
   try {
-    await store.runOptimizer({});
+    await store.runOptimizer(
+      proposedTradeDate.value ? { proposed_trade_date: proposedTradeDate.value } : {},
+    );
   } catch {
     // The store retains a structured API error for this page.
   }

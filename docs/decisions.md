@@ -1,4 +1,4 @@
-# Overnight Build — Decisions and Acceptance Boundaries
+# Decisions and Acceptance Boundaries
 
 These decisions record owner approvals from planning. The specifications remain authoritative for financial semantics; do not use this file to override them silently.
 
@@ -10,7 +10,7 @@ The owner approved this option explicitly. An alternative MILP solver is deferre
 
 ## B. Phase 1 endpoint scope — approved
 
-Working offline/demo contracts cover portfolio, lots, policy, sync, run/recommendations, subset recalculation, export, wash view and activity. Deterministic recommendations must be labeled DEMO. Future-phase OAuth/optimizer/order capabilities return explicit unavailable/disabled responses until implemented; never fabricate real success. Order tables and implementation arrive in Phase 5. The old `handoff/kickoff_prompt.md` is Phase 1 guidance only and does not supersede this boundary.
+Working offline/demo contracts cover portfolio, lots, policy, sync, run/recommendations, subset recalculation, export, wash view and activity. Deterministic recommendations must be labeled DEMO. Future-phase OAuth/optimizer/order capabilities return explicit unavailable/disabled responses until implemented; never fabricate real success. Order tables and implementation arrive in Phase 5.
 
 ## C. Deadline enforcement — requested fix incorporated in technical §§1/6.5/8
 

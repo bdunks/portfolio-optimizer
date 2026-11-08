@@ -8,7 +8,7 @@ Execute the supplied, approved tasks sequentially through implementation, review
 
 
 ### Orchestration
-The parent is the architect and orchestrator, delegating implementation to `implementation-worker` pi-subagents.
+The parent is the architect and orchestrator, delegating directly to implementation-worker and fresh reviewer pi-subagents. Do not introduce an intermediate orchestration agent. Workers and reviewers cannot redelegate.
 
 - The parent owns architecture, task decomposition, interface definitions, sequencing, delegation, and integration review.
 - The parent must never write implementation code, including patches or temporary files under /tmp. Delegate implementation directly rather than generating code for Luna to apply.

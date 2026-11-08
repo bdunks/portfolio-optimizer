@@ -40,4 +40,3 @@ Common backlog commands (run from the repository root):
 
 When creating or editing backlog tasks, use well formatted human readable markdown.
 
-For the agreed five-phase program, backlog is authoritative for task definitions, prerequisites, completion and handoffs. The program supervisor alone selects and completes tasks and milestones after their agreed verification gates pass. Phase orchestrators delegate only assigned work; implementation/review workers report results and do not select other tasks or mark work Done. Use explicit prerequisites, not milestone order alone, to enforce phase acceptance. Draft alternatives remain deferred. The CLI has no in-progress claim state: keep task selection centralized. Save active child run IDs, working directories/refs, checkpoint, partial work, retries and next action in the selected task's backlog handoff before interruption; preserve useful existing context.

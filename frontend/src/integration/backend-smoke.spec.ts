@@ -1,0 +1,550 @@
+import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createPinia } from 'pinia';
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createMemoryHistory, createRouter } from 'vue-router';
+import App from '@/App.vue';
+import routes from '@/router/routes';
+import { useWorkspaceStore } from '@/stores/workspace-store';
+import type { OptimizerRecommendationsResponse } from '@/types/api';
+
+const backendDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '../../../backend');
+const buttonStub = {
+  props: ['label', 'disable', 'loading'],
+  template: '<button :disabled="disable"><slot>{{ label }}</slot></button>',
+};
+
+type BackendProcess = {
+  child: ChildProcess;
+  exit: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+  baseUrl: string;
+  logs: () => string;
+  stop: () => Promise<void>;
+};
+
+type MountedWorkspace = {
+  pinia: ReturnType<typeof createPinia>;
+  router: ReturnType<typeof createRouter>;
+  wrapper: VueWrapper;
+};
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+}
+
+async function availableLoopbackPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolveListen, rejectListen) => {
+    server.once('error', rejectListen);
+    server.listen(0, '127.0.0.1', resolveListen);
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string')
+    throw new Error('Could not allocate a loopback port');
+  await new Promise<void>((resolveClose, rejectClose) =>
+    server.close((error) => (error ? rejectClose(error) : resolveClose())),
+  );
+  return address.port;
+}
+
+async function startBackend(
+  databasePath: string,
+  port: number,
+  seedDemoData: boolean,
+): Promise<BackendProcess> {
+  if (!databasePath.startsWith(tmpdir()))
+    throw new Error('Refusing to use a database outside the test temp directory');
+  const databaseUrl = `sqlite:///${databasePath}`;
+  const child = spawn(
+    'uv',
+    ['run', '--offline', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(port)],
+    {
+      cwd: backendDirectory,
+      detached: process.platform !== 'win32',
+      env: {
+        PATH: process.env.PATH ?? '',
+        HOME: process.env.HOME ?? tmpdir(),
+        UV_NO_PROGRESS: '1',
+        PYTHONUNBUFFERED: '1',
+        PORTFOLIO_DATABASE_URL: databaseUrl,
+        PORTFOLIO_DEMO_SEED: seedDemoData ? '1' : '0',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  let output = '';
+  const capture = (chunk: Buffer): void => {
+    output = `${output}${chunk.toString()}`.slice(-12000);
+  };
+  child.stdout?.on('data', capture);
+  child.stderr?.on('data', capture);
+  const spawnError: { current: Error | null } = { current: null };
+  child.on('error', (error) => {
+    spawnError.current = error;
+  });
+  const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolveExit) => {
+      child.once('exit', (code, signal) => resolveExit({ code, signal }));
+    },
+  );
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const processHandle: BackendProcess = {
+    child,
+    exit,
+    baseUrl,
+    logs: () => output,
+    stop: async () => {
+      if (child.exitCode === null && child.signalCode === null && child.pid !== undefined) {
+        try {
+          process.kill(process.platform === 'win32' ? child.pid : -child.pid, 'SIGTERM');
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') child.kill('SIGTERM');
+        }
+        if (child.exitCode === null && child.signalCode === null) {
+          let timeout: ReturnType<typeof setTimeout> | undefined;
+          await Promise.race([
+            exit,
+            new Promise<void>((resolveTimeout) => {
+              timeout = setTimeout(resolveTimeout, 5000);
+            }),
+          ]);
+          if (timeout) clearTimeout(timeout);
+        }
+        if (child.exitCode === null && child.signalCode === null) {
+          try {
+            process.kill(process.platform === 'win32' ? child.pid : -child.pid, 'SIGKILL');
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ESRCH') child.kill('SIGKILL');
+          }
+          let timeout: ReturnType<typeof setTimeout> | undefined;
+          await Promise.race([
+            exit,
+            new Promise<void>((resolveTimeout) => {
+              timeout = setTimeout(resolveTimeout, 5000);
+            }),
+          ]);
+          if (timeout) clearTimeout(timeout);
+        }
+      }
+      expect(child.exitCode !== null || child.signalCode !== null, 'backend child was reaped').toBe(
+        true,
+      );
+    },
+  };
+
+  const readyBy = Date.now() + 30_000;
+  while (Date.now() < readyBy) {
+    if (spawnError.current) break;
+    if (child.exitCode !== null || child.signalCode !== null) break;
+    try {
+      const response = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(1000) });
+      if (response.ok && (await response.json()).schema_ready === true) return processHandle;
+    } catch {
+      // The local server is still starting; retry only this loopback health request.
+    }
+    await delay(150);
+  }
+
+  await processHandle.stop();
+  throw new Error(
+    `Isolated demo backend did not become ready${spawnError.current ? `: ${spawnError.current.message}` : ''}.\n${output}`,
+  );
+}
+
+async function mountWorkspace(): Promise<MountedWorkspace> {
+  const pinia = createPinia();
+  const router = createRouter({ history: createMemoryHistory(), routes });
+  await router.push('/');
+  await router.isReady();
+  const wrapper = mount(App, {
+    global: { plugins: [pinia, router], stubs: { QBtn: buttonStub } },
+  });
+  await flushPromises();
+  return { pinia, router, wrapper };
+}
+
+async function visit(workspace: MountedWorkspace, path: string): Promise<void> {
+  await workspace.router.push(path);
+  await flushPromises();
+  expect(workspace.router.currentRoute.value.path).toBe(path);
+}
+
+async function waitFor(check: () => boolean, description: string): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    await flushPromises();
+    if (check()) return;
+    await delay(25);
+  }
+  throw new Error(`Timed out waiting for ${description}`);
+}
+
+function assertCanonicalLegGraph(run: OptimizerRecommendationsResponse): void {
+  const legsById = new Map(run.consolidated_legs.map((leg) => [leg.leg_id, leg]));
+  expect(legsById.size).toBe(run.consolidated_legs.length);
+  const buyTickers = run.consolidated_legs
+    .filter((leg) => leg.side === 'BUY')
+    .map((leg) => leg.ticker);
+  expect(new Set(buyTickers).size).toBe(buyTickers.length);
+
+  for (const group of run.groups) {
+    expect(group.leg_ids.length).toBeGreaterThan(0);
+    for (const legId of group.leg_ids) {
+      expect(legsById.has(legId)).toBe(true);
+      expect(legsById.get(legId)?.group_ids).toContain(group.group_id);
+    }
+  }
+  for (const leg of run.consolidated_legs) {
+    for (const dependencyId of leg.dependencies) {
+      expect(leg.side).toBe('BUY');
+      expect(legsById.get(dependencyId)?.side).toBe('SELL');
+    }
+    if (leg.side === 'BUY' && leg.selected) {
+      expect(leg.dependencies.length).toBeGreaterThan(0);
+      for (const dependencyId of leg.dependencies) {
+        expect(legsById.get(dependencyId)?.selected).toBe(true);
+      }
+    }
+  }
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe('isolated local backend smoke', () => {
+  it('mounts all six API pages and exercises persisted DEMO policy, runs, selection, exports, and saved-run reopening', async () => {
+    const tempDirectory = mkdtempSync(join(tmpdir(), 'portfolio-optimizer-stage-e-'));
+    const databasePath = join(tempDirectory, 'isolated-demo.sqlite3');
+    const port = await availableLoopbackPort();
+    let backend: BackendProcess | null = null;
+    let workspace: MountedWorkspace | null = null;
+    const urlDescriptors = {
+      create: Object.getOwnPropertyDescriptor(URL, 'createObjectURL'),
+      revoke: Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL'),
+    };
+    const downloads: Blob[] = [];
+    const requests: string[] = [];
+
+    try {
+      backend = await startBackend(databasePath, port, true);
+      let backendBase = backend.baseUrl;
+      const networkFetch = globalThis.fetch.bind(globalThis);
+      vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+        const value =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const address = new URL(value, `${backendBase}/`);
+        if (address.origin !== backendBase || address.hostname !== '127.0.0.1') {
+          throw new Error(`Integration test refuses non-local API traffic: ${address.origin}`);
+        }
+        requests.push(`${init?.method ?? 'GET'} ${address.pathname}${address.search}`);
+        return networkFetch(address, init);
+      });
+
+      const health = await (await fetch(`${backend.baseUrl}/health`)).json();
+      expect(health).toMatchObject({
+        status: 'ok',
+        broker_mode: 'fake',
+        live_broker_enabled: false,
+        order_submission_enabled: false,
+      });
+      workspace = await mountWorkspace();
+      await waitFor(() => {
+        const store = useWorkspaceStore(workspace!.pinia);
+        return (
+          store.health?.status === 'ok' &&
+          store.portfolio?.status === 'ready' &&
+          store.policy?.active != null
+        );
+      }, 'initial health, portfolio, and policy API responses');
+      expect(workspace.wrapper.find('h1').text()).toBe('Overview');
+      expect(workspace.wrapper.text()).toContain('DEMO analysis only.');
+      expect(workspace.wrapper.text()).toContain('DEMO — Hypothetical Account');
+
+      await visit(workspace, '/recommendations');
+      expect(workspace.wrapper.text()).toContain('No recommendation run loaded');
+      await workspace.wrapper
+        .get('input[placeholder="Run ID from Activity"]')
+        .setValue('missing-stage-e-run');
+      await workspace.wrapper.get('form.saved-run-form').trigger('submit');
+      await flushPromises();
+      await waitFor(
+        () => workspace!.wrapper.text().includes('run_not_found'),
+        'real missing-run API error',
+      );
+      expect(workspace.wrapper.text()).toContain('run_not_found');
+      expect(workspace.wrapper.text()).toContain('Optimizer run was not found');
+
+      await visit(workspace, '/lots');
+      expect(workspace.wrapper.find('h1').text()).toBe('Tax Lots');
+      await waitFor(
+        () => workspace!.wrapper.text().includes('DEMO-VB-LOT-1'),
+        'real tax-lot API response',
+      );
+      expect(workspace.wrapper.text()).toContain('DEMO-VB-LOT-1');
+      await visit(workspace, '/wash-sales');
+      await waitFor(
+        () => useWorkspaceStore(workspace!.pinia).washSales !== null,
+        'real wash-sales API response',
+      );
+      expect(workspace.wrapper.find('h1').text()).toBe('Wash Sales');
+      expect(workspace.wrapper.text()).toContain('DEMO ONLY.');
+      await visit(workspace, '/activity');
+      expect(workspace.wrapper.find('h1').text()).toBe('Activity');
+      await waitFor(
+        () => useWorkspaceStore(workspace!.pinia).activity !== null,
+        'real seeded activity API response',
+      );
+      await workspace.wrapper.findAll('input[type="search"]')[0]!.setValue('stage-e-no-match');
+      await workspace.wrapper.get('form.filter-panel').trigger('submit');
+      await waitFor(
+        () => useWorkspaceStore(workspace!.pinia).activity?.total === 0,
+        'filtered zero-event activity response',
+      );
+      expect(workspace.wrapper.text()).toContain('No activity events returned');
+
+      await visit(workspace, '/policy');
+      await waitFor(
+        () => useWorkspaceStore(workspace!.pinia).policy?.active != null,
+        'seed policy API response',
+      );
+      expect(workspace.wrapper.text()).toContain('Tax & Batch Settings');
+      const retainedLossInput = workspace.wrapper
+        .findAll('.settings-group input')
+        .find((input) =>
+          input.element.closest('label')?.textContent?.includes('Target retained net loss'),
+        );
+      expect(retainedLossInput).toBeDefined();
+      await retainedLossInput!.setValue('2345.67');
+      const saveDraft = workspace.wrapper
+        .findAll('button')
+        .find((button) => button.text().includes('Save new draft revision'));
+      expect(saveDraft).toBeDefined();
+      await saveDraft!.trigger('click');
+      await flushPromises();
+      await waitFor(() => {
+        const store = useWorkspaceStore(workspace!.pinia);
+        return (
+          store.policy?.drafts.some(
+            (draft) => draft.settings.target_retained_net_loss_usd === '2345.67',
+          ) ?? false
+        );
+      }, 'policy draft save and reload');
+      expect(workspace.wrapper.text()).toContain('Current form matches saved revision');
+      const activateDraft = workspace.wrapper
+        .findAll('button')
+        .find((button) => button.text().includes('Activate saved revision'));
+      expect(activateDraft).toBeDefined();
+      expect((activateDraft!.element as HTMLButtonElement).disabled).toBe(false);
+      await activateDraft!.trigger('click');
+      await flushPromises();
+      await waitFor(
+        () =>
+          useWorkspaceStore(workspace!.pinia).policy?.active?.settings
+            .target_retained_net_loss_usd === '2345.67',
+        'policy activation and refreshed active revision',
+      );
+      const savedValue = useWorkspaceStore(workspace.pinia).policy?.active?.settings
+        .target_retained_net_loss_usd;
+      expect(savedValue).toBe('2345.67');
+      expect(workspace.wrapper.text()).toContain('ACTIVE · revision');
+
+      workspace.wrapper.unmount();
+      workspace = null;
+      await backend.stop();
+      backend = null;
+      backend = await startBackend(databasePath, port, false);
+      backendBase = backend.baseUrl;
+      workspace = await mountWorkspace();
+      await visit(workspace, '/policy');
+      await waitFor(
+        () =>
+          useWorkspaceStore(workspace!.pinia).policy?.active?.settings
+            .target_retained_net_loss_usd === '2345.67',
+        'restarted backend persisted active policy',
+      );
+      expect(
+        useWorkspaceStore(workspace.pinia).policy?.active?.settings.target_retained_net_loss_usd,
+      ).toBe('2345.67');
+      await waitFor(() => {
+        const retainedLossInput = workspace!.wrapper
+          .findAll('.settings-group input')
+          .find((input) =>
+            input.element.closest('label')?.textContent?.includes('Target retained net loss'),
+          );
+        return (retainedLossInput?.element as HTMLInputElement | undefined)?.value === '2345.67';
+      }, 'policy page reload of persisted target retained loss setting');
+      expect(
+        (
+          workspace.wrapper
+            .findAll('.settings-group input')
+            .find((input) =>
+              input.element.closest('label')?.textContent?.includes('Target retained net loss'),
+            )?.element as HTMLInputElement | undefined
+        )?.value,
+      ).toBe('2345.67');
+
+      await visit(workspace, '/');
+      await waitFor(() => {
+        const store = useWorkspaceStore(workspace!.pinia);
+        return (
+          store.health?.status === 'ok' &&
+          store.portfolio?.status === 'ready' &&
+          store.policy?.active != null
+        );
+      }, 'ready portfolio and active policy before running');
+      const runButton = workspace.wrapper
+        .findAll('button')
+        .find((button) => button.text().includes('Run DEMO recommendations'));
+      expect(runButton).toBeDefined();
+      await runButton!.trigger('click');
+      await flushPromises();
+      await waitFor(
+        () =>
+          workspace!.router.currentRoute.value.path === '/recommendations' &&
+          useWorkspaceStore(workspace!.pinia).currentRun !== null,
+        'real DEMO run response and recommendations navigation',
+      );
+      expect(workspace.router.currentRoute.value.path).toBe('/recommendations');
+      const store = useWorkspaceStore(workspace.pinia);
+      const firstRun = store.currentRun;
+      expect(firstRun).not.toBeNull();
+      expect(firstRun).toMatchObject({
+        status: 'demo',
+        solver_version: 'DEMO',
+        demo: true,
+        actionable: false,
+      });
+      expect(firstRun!.groups.length).toBeGreaterThan(0);
+      expect(workspace.wrapper.text()).toContain('DEMO hypothetical data');
+      const firstSell = firstRun!.consolidated_legs.find((leg) => leg.side === 'SELL');
+      expect(firstSell?.selected_lots.map((lot) => lot.broker_lot_id)).toEqual(['DEMO-VB-LOT-1']);
+      expect(firstRun!.groups[0]!.leg_ids).toContain(firstSell?.leg_id);
+      assertCanonicalLegGraph(firstRun!);
+
+      const firstRunId = firstRun!.run_id;
+      await visit(workspace, '/activity');
+      await waitFor(
+        () => workspace!.wrapper.findAll('button.reopen-button').length === 1,
+        'saved run event from Activity API',
+      );
+      expect(workspace.wrapper.findAll('button.reopen-button')).toHaveLength(1);
+      await workspace.wrapper.get('button.reopen-button').trigger('click');
+      await flushPromises();
+      await waitFor(
+        () => store.currentRunView === 'saved',
+        'saved run summary and recommendations reopening',
+      );
+      expect(workspace.router.currentRoute.value.path).toBe('/recommendations');
+      expect(store.currentRunView).toBe('saved');
+      expect(workspace.wrapper.text()).toContain('Saved run · frozen API context · read-only');
+      expect(store.currentRun?.run_id).toBe(firstRunId);
+
+      const rerunButton = workspace.wrapper
+        .findAll('button')
+        .find((button) => button.text().includes('Run DEMO recommendations'));
+      expect(rerunButton).toBeDefined();
+      await rerunButton!.trigger('click');
+      await flushPromises();
+      await waitFor(
+        () => store.currentRunView === 'current' && store.currentRun?.run_id !== firstRunId,
+        'second real DEMO run for interactive subset selection',
+      );
+      expect(store.currentRunView).toBe('current');
+      const run = store.currentRun;
+      expect(run?.groups.length).toBeGreaterThan(0);
+      assertCanonicalLegGraph(run!);
+
+      const clearSelection = workspace.wrapper
+        .findAll('button')
+        .find((button) => button.text().includes('Clear selected groups and re-solve'));
+      expect(clearSelection).toBeDefined();
+      await clearSelection!.trigger('click');
+      await flushPromises();
+      await waitFor(
+        () => store.currentRun?.orders_count === 0 && Boolean(store.currentRun.no_trade_reason),
+        'real no-trade subset response',
+      );
+      expect(store.currentRun?.orders_count).toBe(0);
+      expect(store.currentRun?.no_trade_reason).toBeTruthy();
+      expect(workspace.wrapper.text()).toContain(
+        'No beneficial trades identified / API no-trade reason',
+      );
+      assertCanonicalLegGraph(store.currentRun!);
+
+      const groupId = store.currentRun!.groups[0]!.group_id;
+      await workspace.wrapper
+        .get(`input[aria-label="Select recommendation group ${groupId}"]`)
+        .setValue(true);
+      await flushPromises();
+      await waitFor(
+        () => store.currentRun?.orders_count === 2 && store.currentRun.groups[0]?.selected === true,
+        'real selected-group re-solve with funding BUY',
+      );
+      expect(store.currentRun?.orders_count).toBe(2);
+      expect(store.currentRun?.groups[0]?.selected).toBe(true);
+      const selectedBuy = store.currentRun?.consolidated_legs.find((leg) => leg.side === 'BUY');
+      expect(selectedBuy?.ticker).toBe('VTI');
+      expect(selectedBuy?.shares).toBe('2');
+      expect(selectedBuy?.dependencies).toEqual([
+        store.currentRun?.consolidated_legs.find((leg) => leg.side === 'SELL')?.leg_id,
+      ]);
+      assertCanonicalLegGraph(store.currentRun!);
+
+      Object.defineProperty(URL, 'createObjectURL', {
+        configurable: true,
+        value: (blob: Blob) => {
+          downloads.push(blob);
+          return `blob:stage-e-${downloads.length}`;
+        },
+      });
+      Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: () => undefined });
+      vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+      for (const format of ['json', 'csv'] as const) {
+        const exportButton = workspace.wrapper
+          .findAll('button')
+          .find((button) => button.text() === `Export ${format.toUpperCase()}`);
+        expect(exportButton).toBeDefined();
+        await exportButton!.trigger('click');
+        await waitFor(
+          () => downloads.length === (format === 'json' ? 1 : 2),
+          `real ${format.toUpperCase()} export response`,
+        );
+      }
+      expect(downloads).toHaveLength(2);
+      const jsonExport = JSON.parse(await downloads[0]!.text()) as {
+        metadata: { run_id: string; demo: boolean; actionable: boolean };
+        run: { consolidated_legs: Array<{ side: string }> };
+      };
+      expect(jsonExport.metadata).toMatchObject({
+        run_id: run!.run_id,
+        demo: true,
+        actionable: false,
+      });
+      expect(jsonExport.run.consolidated_legs.some((leg) => leg.side === 'BUY')).toBe(true);
+      const csvExport = await downloads[1]!.text();
+      expect(csvExport).toContain('run_id,record_type');
+      expect(csvExport).toContain(run!.run_id);
+      expect(csvExport).toContain('DEMO-VB-LOT-1');
+      expect(requests).toContain(`GET /api/v1/optimizer/runs/${run!.run_id}/export?format=json`);
+      expect(requests).toContain(`GET /api/v1/optimizer/runs/${run!.run_id}/export?format=csv`);
+    } finally {
+      workspace?.wrapper.unmount();
+      await backend?.stop();
+      rmSync(tempDirectory, { recursive: true, force: true });
+      expect(existsSync(tempDirectory), 'isolated SQLite temp directory removed').toBe(false);
+      if (urlDescriptors.create)
+        Object.defineProperty(URL, 'createObjectURL', urlDescriptors.create);
+      else Reflect.deleteProperty(URL, 'createObjectURL');
+      if (urlDescriptors.revoke)
+        Object.defineProperty(URL, 'revokeObjectURL', urlDescriptors.revoke);
+      else Reflect.deleteProperty(URL, 'revokeObjectURL');
+    }
+  }, 120_000);
+});

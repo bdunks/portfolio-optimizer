@@ -82,6 +82,13 @@ export default defineConfig((/* ctx */) => {
       // vueDevtools: true,
       // https: true,
       open: true, // opens browser window automatically
+      host: '127.0.0.1',
+      port: 9000,
+      strictPort: true,
+      proxy: {
+        '/api/v1': { target: 'http://127.0.0.1:8000', changeOrigin: false },
+        '/health': { target: 'http://127.0.0.1:8000', changeOrigin: false },
+      },
     },
 
     // https://v2.quasar.dev/quasar-cli-vite/quasar-config-file#framework

@@ -33,6 +33,18 @@ pnpm run lint:check
 quasar build
 ```
 
+### Tests and type checks
+
+```bash
+npm test
+npm run test:integration
+npm run typecheck
+npm run lint:check
+npm run build
+```
+
+`npm run test:integration` mounts the frontend against an isolated local FastAPI demo process and temporary SQLite database. It requires the existing backend `uv` environment and does not use E*TRADE credentials or the default database.
+
 ### Customize the configuration
 
 See [Configuring quasar.config.js](https://v2.quasar.dev/quasar-cli-vite/quasar-config-file).

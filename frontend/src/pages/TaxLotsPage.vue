@@ -367,14 +367,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.workspace-page {
-  display: grid;
-  gap: 1rem;
-  max-width: 1800px;
-  margin: 0 auto;
-  padding: clamp(1rem, 2.5vw, 2rem);
-}
-.page-header,
 .security-heading,
 .results-heading,
 .sort-control,
@@ -384,34 +376,11 @@ onMounted(() => {
   justify-content: space-between;
   gap: 0.8rem;
 }
-.page-header {
-  align-items: flex-start;
-}
+
 h1,
 h2,
 p {
   margin-top: 0;
-}
-.page-header h1 {
-  margin-bottom: 0;
-  color: #10263d;
-  font-size: clamp(1.7rem, 3vw, 2rem);
-  letter-spacing: -0.04em;
-}
-.eyebrow {
-  margin: 0 0 0.25rem;
-  color: #087f7d;
-  font-size: 0.7rem;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-.page-subtitle {
-  max-width: 52rem;
-  margin: 0.4rem 0 0;
-  color: #637b8a;
-  font-size: 0.82rem;
-  line-height: 1.5;
 }
 .demo-notice {
   margin: 0;

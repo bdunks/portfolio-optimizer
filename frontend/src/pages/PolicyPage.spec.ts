@@ -248,6 +248,7 @@ describe('PolicyPage', () => {
     });
     await flushPromises();
 
+    expect(wrapper.get('.workspace-page').classes()).toContain('policy-page');
     expect(wrapper.text()).toContain('Allocation Policy');
     expect(wrapper.text()).toContain('ST/LT tax rates use fraction units');
     const target = wrapper.find('input[aria-label="Target percent"]');

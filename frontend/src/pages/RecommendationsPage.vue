@@ -1076,15 +1076,6 @@ const LegDetails = defineComponent({
 </script>
 
 <style scoped>
-.recommendations-page {
-  display: grid;
-  gap: 1rem;
-  max-width: 1800px;
-  margin: 0 auto;
-  padding: clamp(1rem, 2.5vw, 2rem);
-}
-.page-header,
-.section-heading,
 .run-title-row,
 .export-panel {
   display: flex;
@@ -1092,28 +1083,20 @@ const LegDetails = defineComponent({
   justify-content: space-between;
   gap: 1rem;
 }
-.page-header h1,
+
 .section-heading h2,
 .run-title-row h2,
 .export-panel h2 {
   margin: 0;
   color: #10263d;
 }
-.page-subtitle,
+
 .section-heading p,
 .run-title-row p,
 .export-panel p {
   margin: 0.35rem 0 0;
   color: #61798a;
   line-height: 1.5;
-}
-.eyebrow {
-  margin: 0 0 0.3rem;
-  color: #087f7d;
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 .demo-notice,
 .warning-banner,
@@ -1363,6 +1346,7 @@ pre {
   padding: 0.8rem;
   border: 1px solid #dce6eb;
   border-radius: 0.65rem;
+  min-width: 0;
 }
 .selection-tools legend {
   padding: 0 0.3rem;
@@ -1380,12 +1364,15 @@ pre {
 }
 .group-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 0.65rem;
 }
 .group-card {
   border: 1px solid #dce6eb;
   border-radius: 0.7rem;
   background: #fff;
+  min-width: 0;
 }
 .group-card > summary {
   display: flex;
@@ -1399,6 +1386,8 @@ pre {
 }
 .group-body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 0.75rem;
   padding: 0 0.85rem 0.9rem;
 }
@@ -1451,6 +1440,7 @@ a {
   border-radius: 0.6rem;
   background: #fbfdfe;
   scroll-margin-top: 1rem;
+  min-width: 0;
 }
 .leg-card h3 {
   margin: 0;
@@ -1468,6 +1458,7 @@ a {
 .lot-table-wrap {
   max-width: 100%;
   overflow-x: auto;
+  min-width: 0;
 }
 table {
   width: 100%;

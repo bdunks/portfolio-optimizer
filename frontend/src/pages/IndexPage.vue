@@ -1,5 +1,5 @@
 <template>
-  <q-page class="overview-page">
+  <q-page class="workspace-page overview-page">
     <header class="page-header">
       <div>
         <p class="eyebrow">Workspace overview</p>
@@ -396,53 +396,6 @@ onMounted(loadInitialWorkspace);
 </script>
 
 <style scoped>
-.overview-page {
-  display: grid;
-  gap: 1.1rem;
-  max-width: 1800px;
-  margin: 0 auto;
-  padding: clamp(1rem, 2.5vw, 2rem);
-}
-
-.page-header,
-.section-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 1rem;
-}
-
-.page-header h1 {
-  margin: 0;
-  color: #10263d;
-  font-size: clamp(1.7rem, 3vw, 2rem);
-  letter-spacing: -0.04em;
-}
-
-.eyebrow {
-  margin: 0 0 0.25rem;
-  color: #087f7d;
-  font-size: 0.7rem;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.page-subtitle,
-.section-subtitle {
-  margin: 0.3rem 0 0;
-  color: #637b8a;
-  font-size: 0.82rem;
-  line-height: 1.5;
-}
-
-.page-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 0.55rem;
-}
-
 .run-help,
 .empty-note {
   margin: 0;
@@ -544,7 +497,6 @@ onMounted(loadInitialWorkspace);
 
 .section-heading .section-subtitle {
   max-width: 40rem;
-  font-size: 0.76rem;
 }
 
 .account-card,

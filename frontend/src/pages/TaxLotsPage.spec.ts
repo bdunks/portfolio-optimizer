@@ -63,6 +63,7 @@ describe('TaxLotsPage', () => {
     const wrapper = mount(TaxLotsPage);
     await flushPromises();
 
+    expect(wrapper.get('.workspace-page').classes()).toContain('workspace-page');
     expect(wrapper.text()).toContain('SYN');
     expect(wrapper.text()).toContain('BROKER-LOT-0007');
     expect(wrapper.text()).toContain('1.2500 / 1.2500');

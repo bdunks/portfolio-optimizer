@@ -339,6 +339,8 @@ describe('RecommendationsPage', () => {
     expect(wrapper.text()).toContain('DEMO ONLY · non-actionable');
     expect(wrapper.text()).toContain('The real optimizer is unavailable');
     expect(wrapper.text()).toContain('Unavailable (not returned by API)');
+    expect(wrapper.get('.workspace-page').classes()).toContain('recommendations-page');
+    expect(wrapper.get('h1').text()).toBe('Recommendations');
     expect(
       wrapper.findAll('.leg-card').filter((card) => card.attributes('id') === 'leg-buy-shared'),
     ).toHaveLength(1);

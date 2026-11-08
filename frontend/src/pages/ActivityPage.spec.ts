@@ -126,6 +126,7 @@ describe('ActivityPage', () => {
     await router.isReady();
     const wrapper = mount(ActivityPage, { global: { plugins: [router] } });
     await flushPromises();
+    expect(wrapper.get('.workspace-page').classes()).toContain('activity-page');
 
     const searchInputs = wrapper.findAll('input[type="search"]');
     await searchInputs[0]!.setValue('optimizer_run');

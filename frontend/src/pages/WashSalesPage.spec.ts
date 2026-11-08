@@ -90,6 +90,7 @@ describe('WashSalesPage', () => {
     const wrapper = mount(WashSalesPage);
     await flushPromises();
 
+    expect(wrapper.get('.workspace-page').classes()).toContain('workspace-page');
     expect(wrapper.text()).toContain('synthetic-test-source');
     expect(wrapper.text()).toContain('TX-BUY-1');
     expect(wrapper.text()).toContain('2025-02-03');

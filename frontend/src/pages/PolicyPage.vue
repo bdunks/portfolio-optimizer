@@ -1,5 +1,9 @@
 <template>
-  <q-page class="policy-page" :inert="saving || activating" :aria-busy="saving || activating">
+  <q-page
+    class="workspace-page policy-page"
+    :inert="saving || activating"
+    :aria-busy="saving || activating"
+  >
     <header class="page-header">
       <div>
         <p class="eyebrow">Allocation and tax profile</p>
@@ -1575,44 +1579,12 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.policy-page {
-  display: grid;
-  gap: 1rem;
-  max-width: 1800px;
-  margin: 0 auto;
-  padding: clamp(1rem, 2.5vw, 2rem);
-  color: #172e41;
-}
-.page-header,
-.section-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 1rem;
-}
-.page-header h1 {
-  margin: 0;
-  color: #10263d;
-  font-size: clamp(1.7rem, 3vw, 2rem);
-  letter-spacing: -0.04em;
-}
-.eyebrow {
-  margin: 0 0 0.25rem;
-  color: #087f7d;
-  font-size: 0.7rem;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-.page-subtitle,
-.section-subtitle {
+.policy-page .page-subtitle,
+.policy-page .section-subtitle {
   max-width: 58rem;
-  margin: 0.3rem 0 0;
-  color: #637b8a;
+  margin-top: 0.3rem;
   font-size: 0.82rem;
-  line-height: 1.5;
 }
-.page-actions,
 .button-row {
   display: flex;
   flex-wrap: wrap;
@@ -1706,6 +1678,7 @@ button:disabled {
   grid-template-columns: minmax(14rem, 1.2fr) minmax(18rem, 2fr) auto;
   gap: 0.8rem;
   align-items: end;
+  min-width: 0;
 }
 .revision-id {
   display: grid;
@@ -1792,6 +1765,7 @@ button:disabled {
   color: #17634e;
 }
 .table-scroll {
+  min-width: 0;
   overflow-x: auto;
   border: 1px solid #e6edf1;
   border-radius: 0.65rem;
@@ -1978,6 +1952,8 @@ button:disabled {
 }
 .sr-only {
   position: absolute;
+  left: 0;
+  top: 0;
   width: 1px;
   height: 1px;
   padding: 0;

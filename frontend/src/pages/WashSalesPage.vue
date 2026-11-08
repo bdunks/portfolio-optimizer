@@ -303,45 +303,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.workspace-page {
-  display: grid;
-  gap: 1rem;
-  max-width: 1800px;
-  margin: 0 auto;
-  padding: clamp(1rem, 2.5vw, 2rem);
-}
-.page-header,
-.section-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-}
-.page-header h1 {
-  margin: 0;
-  color: #10263d;
-  font-size: clamp(1.7rem, 3vw, 2rem);
-  letter-spacing: -0.04em;
-}
-.eyebrow {
-  margin: 0 0 0.25rem;
-  color: #087f7d;
-  font-size: 0.7rem;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-.page-subtitle,
-.section-subtitle {
-  max-width: 52rem;
-  margin: 0.4rem 0 0;
-  color: #637b8a;
-  font-size: 0.82rem;
-  line-height: 1.5;
-}
-.section-subtitle {
-  font-size: 0.76rem;
-}
 .demo-notice {
   margin: 0;
   padding: 0.8rem 1rem;

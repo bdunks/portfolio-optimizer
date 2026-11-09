@@ -7,9 +7,16 @@
       subtitle="Account-wide lot search; complete-set intent for a current DEMO run only."
     >
       <template #actions>
-        <button type="button" class="primary-button" :disabled="isLoading" @click="refreshLots">
+        <q-btn
+          unelevated
+          no-caps
+          type="button"
+          class="primary-button"
+          :disable="isLoading"
+          @click="refreshLots"
+        >
           {{ isLoading ? 'Loading…' : 'Refresh lots' }}
-        </button>
+        </q-btn>
       </template>
     </WorkspacePageHeader>
 
@@ -31,59 +38,99 @@
       </label>
       <label>
         <span>Holding term</span>
-        <select v-model="termFilter">
-          <option value="">All terms</option>
-          <option value="ST">Short term</option>
-          <option value="LT">Long term</option>
-        </select>
+        <q-select
+          v-model="termFilter"
+          :options="[
+            { label: 'All terms', value: '' },
+            { label: 'Short term', value: 'ST' },
+            { label: 'Long term', value: 'LT' },
+          ]"
+          emit-value
+          map-options
+          outlined
+          dense
+          hide-bottom-space
+          aria-label="Holding term"
+        />
       </label>
       <label>
         <span>Fractional cleanup</span>
-        <select v-model="fractionalFilter">
-          <option value="">All lots</option>
-          <option value="true">Unsupported fractional cleanup</option>
-          <option value="false">No unsupported fractional cleanup</option>
-        </select>
+        <q-select
+          v-model="fractionalFilter"
+          :options="[
+            { label: 'All lots', value: '' },
+            { label: 'Unsupported fractional cleanup', value: 'true' },
+            { label: 'No unsupported fractional cleanup', value: 'false' },
+          ]"
+          emit-value
+          map-options
+          outlined
+          dense
+          hide-bottom-space
+          aria-label="Fractional cleanup"
+        />
       </label>
       <label>
         <span>Rows per API page</span>
-        <select v-model.number="pageLimit">
-          <option :value="50">50</option>
-          <option :value="100">100</option>
-          <option :value="250">250</option>
-          <option :value="500">500</option>
-        </select>
+        <q-select
+          v-model="pageLimit"
+          :options="[
+            { label: '50', value: 50 },
+            { label: '100', value: 100 },
+            { label: '250', value: 250 },
+            { label: '500', value: 500 },
+          ]"
+          emit-value
+          map-options
+          outlined
+          dense
+          hide-bottom-space
+          aria-label="Rows per API page"
+        />
       </label>
       <label>
         <span>Sort API results by</span>
-        <select v-model="sortKey" :disabled="isLoading" @change="applyFilters">
-          <option value="ticker">Security</option>
-          <option value="broker_lot_id">Broker lot ID</option>
-          <option value="acquired_date">Acquired date</option>
-          <option value="remaining_shares">Remaining shares</option>
-          <option value="available_shares">Available shares</option>
-          <option value="adjusted_unit_basis_usd">Unit basis</option>
-          <option value="adjusted_total_basis_usd">Total basis</option>
-          <option value="current_price_usd">Current price</option>
-          <option value="unrealized_pl_usd">Unrealized P/L (USD)</option>
-          <option value="unrealized_pl_pct">Unrealized P/L (%)</option>
-          <option value="term">Holding term</option>
-          <option value="sleeve_key">Sleeve</option>
-          <option value="sub_sleeve_key">Sub-sleeve</option>
-        </select>
+        <q-select
+          v-model="sortKey"
+          :options="[
+            { label: 'Security', value: 'ticker' },
+            { label: 'Broker lot ID', value: 'broker_lot_id' },
+            { label: 'Acquired date', value: 'acquired_date' },
+            { label: 'Remaining shares', value: 'remaining_shares' },
+            { label: 'Available shares', value: 'available_shares' },
+            { label: 'Unit basis', value: 'adjusted_unit_basis_usd' },
+            { label: 'Total basis', value: 'adjusted_total_basis_usd' },
+            { label: 'Current price', value: 'current_price_usd' },
+            { label: 'Unrealized P/L (USD)', value: 'unrealized_pl_usd' },
+            { label: 'Unrealized P/L (%)', value: 'unrealized_pl_pct' },
+            { label: 'Holding term', value: 'term' },
+            { label: 'Sleeve', value: 'sleeve_key' },
+            { label: 'Sub-sleeve', value: 'sub_sleeve_key' },
+          ]"
+          emit-value
+          map-options
+          outlined
+          dense
+          hide-bottom-space
+          :disable="isLoading"
+          aria-label="Sort API results by"
+          @update:model-value="applyFilters"
+        />
       </label>
-      <button
+      <q-btn
+        unelevated
+        no-caps
         type="button"
         class="icon-button"
-        :disabled="isLoading"
+        :disable="isLoading"
         :aria-label="sortDirection === 'asc' ? 'Sort ascending' : 'Sort descending'"
         @click="toggleSortDirection"
       >
         {{ sortDirection === 'asc' ? 'Ascending' : 'Descending' }}
-      </button>
-      <button type="submit" class="secondary-button" :disabled="isLoading">
+      </q-btn>
+      <q-btn unelevated no-caps type="submit" class="secondary-button" :disable="isLoading">
         Apply API filters
-      </button>
+      </q-btn>
     </WorkspaceFilterPanel>
 
     <p v-if="store.actionState.loadLots.pending && !store.lots" class="state-message" role="status">
@@ -92,9 +139,16 @@
     <WorkspaceEmptyState v-else-if="!store.lots" title="No lot page loaded">
       Load the current API page to see broker-reported lots.
       <template #action>
-        <button type="button" class="secondary-button" :disabled="isLoading" @click="refreshLots">
+        <q-btn
+          unelevated
+          no-caps
+          type="button"
+          class="secondary-button"
+          :disable="isLoading"
+          @click="refreshLots"
+        >
           Retry loading lots
-        </button>
+        </q-btn>
       </template>
     </WorkspaceEmptyState>
     <WorkspaceEmptyState v-else-if="store.lots.items.length === 0" title="No lots returned">
@@ -147,18 +201,16 @@
               <tbody>
                 <tr v-for="lot in group.lots" :key="lot.broker_lot_id">
                   <td>
-                    <label class="review-toggle">
-                      <input
-                        type="checkbox"
-                        :checked="requestedLotIds.has(lot.broker_lot_id)"
-                        :disabled="!canChangeLotIntent"
-                        :aria-label="`Request ${lot.ticker} lot ${lot.broker_lot_id}`"
-                        @change="changeLotIntent(lot, $event)"
-                      />
-                      <span>
-                        {{ requestedLotIds.has(lot.broker_lot_id) ? 'Requested' : 'Request' }}
-                      </span>
-                    </label>
+                    <q-checkbox
+                      class="review-toggle"
+                      dense
+                      color="primary"
+                      :model-value="requestedLotIds.has(lot.broker_lot_id)"
+                      :disable="!canChangeLotIntent"
+                      :aria-label="`Request ${lot.ticker} lot ${lot.broker_lot_id}`"
+                      :label="requestedLotIds.has(lot.broker_lot_id) ? 'Requested' : 'Request'"
+                      @update:model-value="changeLotIntent(lot, $event)"
+                    />
                     <small v-if="confirmedLotIds.has(lot.broker_lot_id)" class="sub-value">
                       Backend-confirmed in loaded DEMO run
                     </small>
@@ -282,14 +334,16 @@
       <ul v-if="store.lotReviewIntent.length > 0">
         <li v-for="entry in store.lotReviewIntent" :key="entry.broker_lot_id">
           {{ entry.ticker }} · {{ entry.broker_lot_id }} · generation {{ entry.source_generation }}
-          <button
+          <q-btn
+            unelevated
+            no-caps
             type="button"
             class="text-button"
-            :disabled="store.reviewMutationPending"
+            :disable="store.reviewMutationPending"
             @click="removeRequestedLot(entry)"
           >
             Remove from requested set
-          </button>
+          </q-btn>
         </li>
       </ul>
       <p v-else class="sub-value">
@@ -300,18 +354,22 @@
         {{ confirmedBrokerLotIds.join(', ') || 'none' }}
       </p>
       <div class="intent-actions">
-        <button
+        <q-btn
+          unelevated
+          no-caps
           type="button"
           class="secondary-button"
-          :disabled="!canChangeLotIntent"
+          :disable="!canChangeLotIntent"
           @click="clearRequestedLots"
         >
           Explicitly request an empty set
-        </button>
-        <button
+        </q-btn>
+        <q-btn
+          unelevated
+          no-caps
           type="button"
           class="primary-button"
-          :disabled="!canApplyLotIntent"
+          :disable="!canApplyLotIntent"
           @click="applyRequestedLots"
         >
           {{
@@ -321,7 +379,7 @@
                 ? 'Apply empty set and clear confirmed basket'
                 : 'Apply complete set to current DEMO run'
           }}
-        </button>
+        </q-btn>
       </div>
     </section>
   </section>
@@ -496,13 +554,12 @@ function toggleSortDirection(): void {
   applyFilters();
 }
 
-function changeLotIntent(lot: LotResponse, event: Event): void {
-  if (!(event.target instanceof HTMLInputElement)) return;
+function changeLotIntent(lot: LotResponse, requested: boolean): void {
   store.setLotReviewIntent(
     lot.broker_lot_id,
     lot.ticker,
     store.lots?.source_generation ?? null,
-    event.target.checked,
+    requested,
   );
 }
 
@@ -695,9 +752,6 @@ tbody th {
   align-items: center;
   gap: 0.25rem;
   white-space: nowrap;
-}
-.review-toggle input {
-  min-height: auto;
 }
 .sub-value {
   display: block;

@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import type { WashSalesResponse } from '@/types/api';
 import WashSalesPage from './WashSalesPage.vue';
+import { QSelect } from 'quasar';
+import { setQuasarModelValue } from '@/test-utils/quasar-mount';
 
 const response: WashSalesResponse = {
   demo: true,
@@ -112,7 +114,7 @@ describe('WashSalesPage', () => {
     const wrapper = mount(WashSalesPage);
     await flushPromises();
 
-    await wrapper.find('select').setValue('BUY');
+    await setQuasarModelValue(wrapper, QSelect, 'Transaction kind', 'BUY');
     expect(wrapper.text()).toContain('1.2500');
     expect(wrapper.text()).not.toContain('TX-SELL-2');
   });

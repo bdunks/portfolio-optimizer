@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { flushPromises } from '@vue/test-utils';
-import { mountWorkspacePageWithQuasar } from '@/test-utils/quasar-mount';
+import { mountWorkspacePageWithQuasar, setQuasarModelValue } from '@/test-utils/quasar-mount';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import type {
@@ -10,6 +10,7 @@ import type {
   PolicySettingsResponse,
 } from '@/types/api';
 import PolicyPage from './PolicyPage.vue';
+import { QCheckbox, QSelect } from 'quasar';
 
 const settings: PolicySettingsResponse = {
   short_term_tax_rate: '0.2500',
@@ -255,10 +256,7 @@ describe('PolicyPage', () => {
     expect(wrapper.text()).toContain('Allocation Policy');
     expect(wrapper.text()).toContain('ST/LT tax rates use fraction units');
     const target = wrapper.find('input[aria-label="Target percent"]');
-    const transitionDestination = wrapper.find(
-      'input[aria-label="Transition destination sub-sleeve"]',
-    );
-    await transitionDestination.setValue(true);
+    await setQuasarModelValue(wrapper, QCheckbox, 'Transition destination sub-sleeve', true);
     await target.setValue('99.9999999999999999');
     expect((wrapper.get('button.primary-button').element as HTMLButtonElement).disabled).toBe(
       false,
@@ -384,8 +382,8 @@ describe('PolicyPage', () => {
     });
     await flushPromises();
 
-    await wrapper.findAll('.toggle-field input')[0]!.setValue(false);
-    await wrapper.find('select[aria-label="Reassign holdings from US equity"]').setValue('other');
+    await setQuasarModelValue(wrapper, QCheckbox, 'Enabled', false);
+    await setQuasarModelValue(wrapper, QSelect, 'Reassign holdings from US equity', 'other');
     await wrapper.find('button.primary-button').trigger('click');
     await flushPromises();
 
@@ -562,7 +560,7 @@ describe('PolicyPage', () => {
     });
     await flushPromises();
 
-    await wrapper.findAll('.toggle-field input')[0]!.setValue(false);
+    await setQuasarModelValue(wrapper, QCheckbox, 'Enabled', false);
 
     expect(wrapper.find('.delete-panel').exists()).toBe(false);
     expect(wrapper.get('.inline-error[role="alert"]').text()).toContain(

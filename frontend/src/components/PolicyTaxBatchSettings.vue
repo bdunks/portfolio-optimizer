@@ -194,48 +194,56 @@
       <div class="toggle-grid">
         <label class="field"
           ><span>Prefer ETF buys</span
-          ><select
-            :value="props.settings.prefer_etf_buys"
-            @change="updateToggle('prefer_etf_buys', $event)"
-          >
-            <option :value="null">Choose</option>
-            <option :value="true">Enabled</option>
-            <option :value="false">Disabled</option>
-          </select></label
-        >
+          ><q-select
+            :model-value="props.settings.prefer_etf_buys"
+            :options="toggleOptions"
+            emit-value
+            map-options
+            outlined
+            dense
+            hide-bottom-space
+            aria-label="Prefer ETF buys"
+            @update:model-value="updateToggle('prefer_etf_buys', $event)"
+        /></label>
         <label class="field"
           ><span>Allow appreciated-gain sales</span
-          ><select
-            :value="props.settings.allow_gain_sales"
-            @change="updateToggle('allow_gain_sales', $event)"
-          >
-            <option :value="null">Choose</option>
-            <option :value="true">Enabled</option>
-            <option :value="false">Disabled</option>
-          </select></label
-        >
+          ><q-select
+            :model-value="props.settings.allow_gain_sales"
+            :options="toggleOptions"
+            emit-value
+            map-options
+            outlined
+            dense
+            hide-bottom-space
+            aria-label="Allow appreciated-gain sales"
+            @update:model-value="updateToggle('allow_gain_sales', $event)"
+        /></label>
         <label class="field"
           ><span>Permit ETF harvesting</span
-          ><select
-            :value="props.settings.permit_etf_harvest"
-            @change="updateToggle('permit_etf_harvest', $event)"
-          >
-            <option :value="null">Choose</option>
-            <option :value="true">Enabled</option>
-            <option :value="false">Disabled</option>
-          </select></label
-        >
+          ><q-select
+            :model-value="props.settings.permit_etf_harvest"
+            :options="toggleOptions"
+            emit-value
+            map-options
+            outlined
+            dense
+            hide-bottom-space
+            aria-label="Permit ETF harvesting"
+            @update:model-value="updateToggle('permit_etf_harvest', $event)"
+        /></label>
         <label class="field"
           ><span>Permit municipal-bond exit</span
-          ><select
-            :value="props.settings.permit_muni_exit"
-            @change="updateToggle('permit_muni_exit', $event)"
-          >
-            <option :value="null">Choose</option>
-            <option :value="true">Enabled</option>
-            <option :value="false">Disabled</option>
-          </select></label
-        >
+          ><q-select
+            :model-value="props.settings.permit_muni_exit"
+            :options="toggleOptions"
+            emit-value
+            map-options
+            outlined
+            dense
+            hide-bottom-space
+            aria-label="Permit municipal-bond exit"
+            @update:model-value="updateToggle('permit_muni_exit', $event)"
+        /></label>
       </div>
       <p class="unit-note">
         No minimum SELL notional is configured here. The minimum notional applies only to
@@ -254,18 +262,21 @@ const emit = defineEmits<{
   'update:settings': [settings: EditablePolicySettings];
 }>();
 const sectionId = useId();
+const toggleOptions = [
+  { label: 'Choose', value: null },
+  { label: 'Enabled', value: true },
+  { label: 'Disabled', value: false },
+];
 function updateTextSetting(key: keyof EditablePolicySettings, event: Event): void {
   const value = (event.target as HTMLInputElement).value;
   emit('update:settings', { ...props.settings, [key]: value });
 }
 
-function updateToggle(key: keyof EditablePolicySettings, event: Event): void {
-  const value = (event.target as HTMLSelectElement).value;
-  const booleanValue = value === 'true' ? true : value === 'false' ? false : null;
-  emit('update:settings', {
-    ...props.settings,
-    [key]: booleanValue,
-  });
+function updateToggle(
+  key: 'prefer_etf_buys' | 'allow_gain_sales' | 'permit_etf_harvest' | 'permit_muni_exit',
+  value: boolean | null,
+): void {
+  emit('update:settings', { ...props.settings, [key]: value });
 }
 </script>
 

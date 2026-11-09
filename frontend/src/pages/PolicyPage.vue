@@ -11,20 +11,36 @@
       subtitle="Configure versioned sleeve targets, replacement ETF candidates, holding overrides, and every persisted tax and batch setting. Target values remain exact decimal strings."
     >
       <template #actions>
-        <button type="button" class="secondary-button" :disabled="loading" @click="refreshPolicy">
-          {{ loading ? 'Loading…' : 'Refresh policy list' }}
-        </button>
-        <button type="button" class="primary-button" :disabled="!canSave" @click="saveDraft">
-          {{ saving ? 'Saving…' : 'Save new draft revision' }}
-        </button>
-        <button
+        <q-btn
+          unelevated
+          no-caps
           type="button"
           class="secondary-button"
-          :disabled="!canActivate"
+          :disable="loading"
+          @click="refreshPolicy"
+        >
+          {{ loading ? 'Loading…' : 'Refresh policy list' }}
+        </q-btn>
+        <q-btn
+          unelevated
+          no-caps
+          type="button"
+          class="primary-button"
+          :disable="!canSave"
+          @click="saveDraft"
+        >
+          {{ saving ? 'Saving…' : 'Save new draft revision' }}
+        </q-btn>
+        <q-btn
+          unelevated
+          no-caps
+          type="button"
+          class="secondary-button"
+          :disable="!canActivate"
           @click="activateSaved"
         >
           {{ activating ? 'Activating…' : 'Activate saved revision' }}
-        </button>
+        </q-btn>
       </template>
     </WorkspacePageHeader>
 
@@ -69,53 +85,73 @@
       <div class="revision-controls">
         <label class="field revision-select">
           <span>Select source revision</span>
-          <select
+          <q-select
             v-model="revisionChoice"
-            :disabled="saving || activating"
+            :options="[
+              { label: 'New policy (no source revision)', value: '' },
+              ...revisions.map((revision) => ({
+                label: `Revision ${revision.revision_number} · ${revision.status} · ${revision.id}`,
+                value: revision.id,
+              })),
+            ]"
+            emit-value
+            map-options
+            outlined
+            dense
+            hide-bottom-space
+            :disable="saving || activating"
             aria-label="Select policy source revision"
-            @change="requestRevisionChange"
-          >
-            <option value="">New policy (no source revision)</option>
-            <option v-for="revision in revisions" :key="revision.id" :value="revision.id">
-              Revision {{ revision.revision_number }} · {{ revision.status }} · {{ revision.id }}
-            </option>
-          </select>
+            @update:model-value="requestRevisionChange"
+          />
         </label>
         <div class="revision-id">
           <span>Source revision ID</span>
           <code>{{ sourceRevisionId ?? 'None — creating the first policy revision' }}</code>
         </div>
-        <button type="button" class="text-button" :disabled="loading" @click="refreshPolicy">
+        <q-btn
+          unelevated
+          no-caps
+          type="button"
+          class="text-button"
+          :disable="loading"
+          @click="refreshPolicy"
+        >
           Load latest revisions
-        </button>
+        </q-btn>
       </div>
       <div v-if="pendingRevisionId !== null" class="notice-card" role="alert">
         <p>There are unsaved edits. Loading another revision will discard them.</p>
         <div class="button-row">
-          <button
+          <q-btn
+            unelevated
+            no-caps
             type="button"
             class="primary-button"
-            :disabled="!canSave"
+            :disable="!canSave"
             @click="saveAndLoadRevision"
           >
             Save edits and load
-          </button>
-          <button
+          </q-btn>
+          <q-btn
+            unelevated
+            no-caps
             type="button"
             class="secondary-button"
-            :disabled="saving || activating"
+            :disable="saving || activating"
             @click="cancelRevisionChange"
           >
             Keep editing
-          </button>
-          <button
+          </q-btn>
+          <q-btn
+            unelevated
+            no-caps
             type="button"
             class="danger-button"
-            :disabled="saving || activating"
+            :disable="saving || activating"
             @click="discardAndLoadRevision"
           >
             Discard edits and load
-          </button>
+          </q-btn>
         </div>
       </div>
       <p v-if="dirty" class="state-message" role="status">
@@ -391,8 +427,8 @@ async function refreshPolicy(): Promise<void> {
   // Refresh only the revision list; the controller deliberately retains the in-memory form.
 }
 
-function requestRevisionChange(): void {
-  editor.requestRevisionChange(revisionChoice.value, revisions.value);
+function requestRevisionChange(value: string): void {
+  editor.requestRevisionChange(value, revisions.value);
 }
 
 function cancelRevisionChange(): void {

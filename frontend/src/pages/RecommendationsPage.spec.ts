@@ -705,20 +705,21 @@ describe('RecommendationsPage', () => {
     const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
     await flushPromises();
 
-    const groupCheckbox = wrapper.get('input[aria-label="Select recommendation group group-a"]');
-    await groupCheckbox.setValue(true);
+    const groupCheckbox = wrapper.get(
+      '[role="checkbox"][aria-label="Select recommendation group group-a"]',
+    );
+    await groupCheckbox.trigger('click');
     expect(wrapper.text()).toContain('Previous basket effects are withheld');
     expect(wrapper.text()).not.toContain('-4.00 USD');
-    expect((groupCheckbox.element as HTMLInputElement).checked).toBe(false);
+    expect(groupCheckbox.attributes('aria-checked')).toBe('false');
 
     resolveSelection?.(jsonResponse(updatedRun));
     await flushPromises();
     expect(
-      (
-        wrapper.get('input[aria-label="Select recommendation group group-a"]')
-          .element as HTMLInputElement
-      ).checked,
-    ).toBe(true);
+      wrapper
+        .get('[role="checkbox"][aria-label="Select recommendation group group-a"]')
+        .attributes('aria-checked'),
+    ).toBe('true');
   });
 
   it('keeps the last successful selection after a failed last-lot removal and sends no orphan group', async () => {
@@ -744,8 +745,9 @@ describe('RecommendationsPage', () => {
     vi.stubGlobal('fetch', fetcher);
     const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
     await flushPromises();
-    const lot = wrapper.get('input[aria-label="Select SELL lot BROKER-A1 in group group-a"]');
-    await lot.setValue(false);
+    await wrapper
+      .get('[role="checkbox"][aria-label="Select SELL lot BROKER-A1 in group group-a"]')
+      .trigger('click');
     await flushPromises();
 
     const payload = JSON.parse(fetcher.mock.calls[0]?.[1]?.body as string) as {
@@ -755,11 +757,10 @@ describe('RecommendationsPage', () => {
     expect(payload).toEqual({ selected_group_ids: [], selected_sell_lots: {} });
     expect(store.currentRun).toBe(selectedRun);
     expect(
-      (
-        wrapper.get('input[aria-label="Select SELL lot BROKER-A1 in group group-a"]')
-          .element as HTMLInputElement
-      ).checked,
-    ).toBe(true);
+      wrapper
+        .get('[role="checkbox"][aria-label="Select SELL lot BROKER-A1 in group group-a"]')
+        .attributes('aria-checked'),
+    ).toBe('true');
     expect(wrapper.text()).toContain(
       'Selection re-solve failed; the last successful API selection remains in view',
     );
@@ -976,11 +977,10 @@ describe('RecommendationsPage', () => {
     expect(frozenContextPanel.text()).toContain('3210.00');
     expect(frozenContextPanel.text()).not.toContain('Active US (renamed)');
     expect(
-      (
-        wrapper.get('input[aria-label="Select recommendation group group-a"]')
-          .element as HTMLInputElement
-      ).disabled,
-    ).toBe(true);
+      wrapper
+        .get('[role="checkbox"][aria-label="Select recommendation group group-a"]')
+        .attributes('aria-disabled'),
+    ).toBe('true');
     expect(fetcher.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
   });
   it('keeps stale-run group labels frozen while current portfolio effects use active-policy labels', async () => {
@@ -1177,8 +1177,9 @@ describe('RecommendationsPage', () => {
     const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
     await flushPromises();
 
-    const lotA2 = wrapper.get('input[aria-label="Select SELL lot BROKER-A2 in group group-a"]');
-    await lotA2.setValue(true);
+    await wrapper
+      .get('[role="checkbox"][aria-label="Select SELL lot BROKER-A2 in group group-a"]')
+      .trigger('click');
     await flushPromises();
 
     const selectionCall = fetcher.mock.calls.find(([input]) =>
@@ -1215,8 +1216,9 @@ describe('RecommendationsPage', () => {
     const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
     await flushPromises();
 
-    const lotA2 = wrapper.get('input[aria-label="Select SELL lot BROKER-A2 in group group-a"]');
-    await lotA2.setValue(true);
+    await wrapper
+      .get('[role="checkbox"][aria-label="Select SELL lot BROKER-A2 in group group-a"]')
+      .trigger('click');
     await flushPromises();
 
     const selectionCall = fetcher.mock.calls.find(([input]) =>
@@ -1259,7 +1261,9 @@ describe('RecommendationsPage', () => {
     const groupA = wrapper.get('[aria-label="Notes and rejection for group-a"]');
     await groupA.get('textarea').setValue('unsaved note A');
     await groupA.get('input').setValue('unsaved rejection A');
-    await wrapper.get('input[aria-label="Select recommendation group group-b"]').setValue(true);
+    await wrapper
+      .get('[role="checkbox"][aria-label="Select recommendation group group-b"]')
+      .trigger('click');
     await flushPromises();
 
     const subsetGroupA = wrapper.get('[aria-label="Notes and rejection for group-a"]');

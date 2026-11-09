@@ -1,4 +1,6 @@
 import { mount } from '@vue/test-utils';
+import { QCheckbox } from 'quasar';
+import { findQuasarComponent, setQuasarModelValue } from '@/test-utils/quasar-mount';
 import { describe, expect, it } from 'vitest';
 import SellLotAttribution from './SellLotAttribution.vue';
 import type { RecommendationLegResponse } from '@/types/api';
@@ -48,7 +50,12 @@ describe('SellLotAttribution', () => {
     expect(wrapper.text()).toContain('2');
     expect(wrapper.text()).not.toContain('Available shares');
 
-    await wrapper.get('input[type="checkbox"]').setValue(false);
+    await setQuasarModelValue(
+      wrapper,
+      QCheckbox,
+      'Select SELL lot BROKER-A1 in group group-a',
+      false,
+    );
     expect(wrapper.emitted('lotSelection')).toEqual([
       [{ groupId: 'group-a', brokerLotId: 'BROKER-A1', selected: false }],
     ]);
@@ -63,8 +70,13 @@ describe('SellLotAttribution', () => {
         pending: true,
       },
     });
-    expect(pending.get('input[type="checkbox"]').attributes('disabled')).toBeDefined();
-
+    expect(
+      findQuasarComponent(
+        pending,
+        QCheckbox,
+        'Select SELL lot BROKER-A1 in group group-a',
+      ).attributes('aria-disabled'),
+    ).toBe('true');
     const empty = mount(SellLotAttribution, {
       props: { leg: sellLeg([]), groupId: 'group-empty', canChangeSelection: false },
     });

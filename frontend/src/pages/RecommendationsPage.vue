@@ -7,16 +7,18 @@
       subtitle="Review ranked groups and API-proposed legs. Group or sell-lot selection requests a backend re-solve; selection is never an order approval."
     >
       <template #actions>
-        <button
+        <q-btn
+          unelevated
+          no-caps
           type="button"
           class="primary-button"
-          :disabled="!canRunOptimizer"
+          :disable="!canRunOptimizer"
           @click="runOptimizer"
         >
           {{
             store.actionState.runOptimizer.pending ? 'Running DEMO…' : 'Run DEMO recommendations'
           }}
-        </button>
+        </q-btn>
       </template>
     </WorkspacePageHeader>
 
@@ -48,17 +50,19 @@
             placeholder="Run ID from Activity"
           />
         </label>
-        <button
+        <q-btn
+          unelevated
+          no-caps
           type="submit"
           class="secondary-button"
-          :disabled="
+          :disable="
             !savedRunId ||
             store.actionState.openSavedRun.pending ||
             runPresentation.reviewMutationPending
           "
         >
           {{ store.actionState.openSavedRun.pending ? 'Opening saved run…' : 'Open frozen run' }}
-        </button>
+        </q-btn>
       </form>
     </section>
 
@@ -185,59 +189,121 @@
         <WorkspaceFilterPanel label="Recommendation filters" class="filter-panel">
           <label>
             <span>Sleeve</span>
-            <select v-model="filters.sleeve">
-              <option value="">All sleeves</option>
-              <option v-for="sleeve in sleeveOptions" :key="sleeve" :value="sleeve">
-                {{ sleeveLabel(sleeve) }}
-              </option>
-            </select>
+            <q-select
+              v-model="filters.sleeve"
+              :options="[
+                { label: 'All sleeves', value: '' },
+                ...sleeveOptions.map((sleeve) => ({
+                  label: sleeveLabel(sleeve),
+                  value: sleeve,
+                })),
+              ]"
+              emit-value
+              map-options
+              outlined
+              dense
+              hide-bottom-space
+              aria-label="Sleeve"
+            />
           </label>
           <label>
             <span>Action</span>
-            <select v-model="filters.action">
-              <option value="">Any action</option>
-              <option value="SELL">SELL</option>
-              <option value="BUY">BUY</option>
-            </select>
+            <q-select
+              v-model="filters.action"
+              :options="[
+                { label: 'Any action', value: '' },
+                { label: 'SELL', value: 'SELL' },
+                { label: 'BUY', value: 'BUY' },
+              ]"
+              emit-value
+              map-options
+              outlined
+              dense
+              hide-bottom-space
+              aria-label="Action"
+            />
           </label>
           <label>
             <span>Tax term</span>
-            <select v-model="filters.term">
-              <option value="">Any term</option>
-              <option value="ST">Short term</option>
-              <option value="LT">Long term</option>
-            </select>
+            <q-select
+              v-model="filters.term"
+              :options="[
+                { label: 'Any term', value: '' },
+                { label: 'Short term', value: 'ST' },
+                { label: 'Long term', value: 'LT' },
+              ]"
+              emit-value
+              map-options
+              outlined
+              dense
+              hide-bottom-space
+              aria-label="Tax term"
+            />
           </label>
           <label>
             <span>Expected benefit</span>
-            <select v-model="filters.benefit">
-              <option value="">Any</option>
-              <option value="unavailable">Unavailable in API</option>
-            </select>
+            <q-select
+              v-model="filters.benefit"
+              :options="[
+                { label: 'Any', value: '' },
+                { label: 'Unavailable in API', value: 'unavailable' },
+              ]"
+              emit-value
+              map-options
+              outlined
+              dense
+              hide-bottom-space
+              aria-label="Expected benefit"
+            />
           </label>
           <label>
             <span>Warnings</span>
-            <select v-model="filters.warning">
-              <option value="">Any</option>
-              <option value="with">With warnings</option>
-              <option value="without">No warnings returned</option>
-            </select>
+            <q-select
+              v-model="filters.warning"
+              :options="[
+                { label: 'Any', value: '' },
+                { label: 'With warnings', value: 'with' },
+                { label: 'No warnings returned', value: 'without' },
+              ]"
+              emit-value
+              map-options
+              outlined
+              dense
+              hide-bottom-space
+              aria-label="Warnings"
+            />
           </label>
           <label>
             <span>Group type</span>
-            <select v-model="filters.groupType">
-              <option value="">Any type</option>
-              <option v-for="type in groupTypeOptions" :key="type" :value="type">
-                {{ type }}
-              </option>
-            </select>
+            <q-select
+              v-model="filters.groupType"
+              :options="[
+                { label: 'Any type', value: '' },
+                ...groupTypeOptions.map((type) => ({ label: type, value: type })),
+              ]"
+              emit-value
+              map-options
+              outlined
+              dense
+              hide-bottom-space
+              aria-label="Group type"
+            />
           </label>
           <label>
             <span>Sort by API priority rank</span>
-            <select v-model="sortOrder">
-              <option value="rank-ascending">Highest priority first (ascending rank)</option>
-              <option value="rank-descending">Lowest priority first (descending rank)</option>
-            </select>
+            <q-select
+              v-model="sortOrder"
+              :options="[
+                { label: 'Highest priority first (ascending rank)', value: 'rank-ascending' },
+                { label: 'Lowest priority first (descending rank)', value: 'rank-descending' },
+              ]"
+              emit-value
+              map-options
+              outlined
+              dense
+              hide-bottom-space
+              aria-label="Sort by API priority rank"
+            />
           </label>
         </WorkspaceFilterPanel>
 
@@ -247,12 +313,12 @@
             <span>Top N groups by API rank</span>
             <input v-model.number="topN" type="number" min="1" :max="currentRunGroupCount" />
           </label>
-          <button type="button" class="secondary-button" @click="selectTopGroups">
+          <q-btn unelevated no-caps type="button" class="secondary-button" @click="selectTopGroups">
             Select top N and re-solve
-          </button>
-          <button type="button" class="secondary-button" @click="clearSelection">
+          </q-btn>
+          <q-btn unelevated no-caps type="button" class="secondary-button" @click="clearSelection">
             Clear selected groups and re-solve
-          </button>
+          </q-btn>
           <span v-if="!canChangeSelection" class="read-only-note">
             Saved, stale, or unverified run context is read-only. Open/run a current matching run to
             change selection.
@@ -336,22 +402,26 @@
             demo/actionability metadata.
           </p>
         </div>
-        <button
+        <q-btn
+          unelevated
+          no-caps
           type="button"
           class="secondary-button"
-          :disabled="store.actionState.exportRun.pending"
+          :disable="store.actionState.exportRun.pending"
           @click="exportRun('csv')"
         >
           Export CSV
-        </button>
-        <button
+        </q-btn>
+        <q-btn
+          unelevated
+          no-caps
           type="button"
           class="secondary-button"
-          :disabled="store.actionState.exportRun.pending"
+          :disable="store.actionState.exportRun.pending"
           @click="exportRun('json')"
         >
           Export JSON
-        </button>
+        </q-btn>
       </section>
     </template>
   </section>

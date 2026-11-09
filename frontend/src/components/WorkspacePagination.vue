@@ -1,6 +1,6 @@
 <template>
   <nav class="workspace-pagination" :aria-label="label">
-    <QBtn
+    <q-btn
       type="button"
       flat
       dense
@@ -10,13 +10,13 @@
       @click="requestPage(-1)"
     >
       Previous page
-    </QBtn>
+    </q-btn>
     <span class="workspace-pagination__status" aria-live="polite">
       <slot name="status" :page-number="metadata.pageNumber" :page-count="metadata.pageCount">
         Page {{ metadata.pageNumber }} of {{ metadata.pageCount }}
       </slot>
     </span>
-    <QBtn
+    <q-btn
       type="button"
       flat
       dense
@@ -26,13 +26,12 @@
       @click="requestPage(1)"
     >
       Next page
-    </QBtn>
+    </q-btn>
   </nav>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import { QBtn } from 'quasar';
 import { getPaginationMetadata } from './workspace-pagination-state';
 
 const props = withDefaults(

@@ -1,9 +1,12 @@
-import { config, mount, type GlobalMountOptions } from '@vue/test-utils';
-import { defineComponent, h, type Component, type Plugin } from 'vue';
+import { config, mount, type GlobalMountOptions, type VueWrapper } from '@vue/test-utils';
+import { defineComponent, h, nextTick, type Component, type Plugin } from 'vue';
 import {
   QBadge,
   QBanner,
   QBtn,
+  QCheckbox,
+  QInput,
+  QSelect,
   QCard,
   QCardSection,
   QDrawer,
@@ -25,6 +28,9 @@ const quasarComponents = {
   QBadge,
   QBanner,
   QBtn,
+  QCheckbox,
+  QInput,
+  QSelect,
   QCard,
   QCardSection,
   QDrawer,
@@ -72,6 +78,37 @@ export function installQuasarForTests(): void {
     ...config.global.config,
     warnHandler: warnOnUnresolvedComponents,
   };
+}
+
+export function findQuasarComponent(
+  wrapper: VueWrapper,
+  component: Component,
+  label: string,
+): VueWrapper {
+  const found = wrapper.findAllComponents(component).find((candidate) => {
+    const root = candidate.element;
+    const props = candidate.props() as Record<string, unknown>;
+    const attrs = candidate.vm.$attrs as Record<string, unknown>;
+    const labels = root.querySelectorAll('[aria-label]');
+    let ariaLabelMatches =
+      root.getAttribute('aria-label') === label || attrs['aria-label'] === label;
+    for (let index = 0; !ariaLabelMatches && index < labels.length; index += 1) {
+      ariaLabelMatches = labels.item(index)?.getAttribute('aria-label') === label;
+    }
+    return props.label === label || ariaLabelMatches;
+  });
+  if (!found) throw new Error(`Quasar control not found: ${label}`);
+  return found;
+}
+
+export async function setQuasarModelValue(
+  wrapper: VueWrapper,
+  component: Component,
+  label: string,
+  value: unknown,
+): Promise<void> {
+  findQuasarComponent(wrapper, component, label).vm.$emit('update:modelValue', value);
+  await nextTick();
 }
 
 export function mountWithQuasar(

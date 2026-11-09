@@ -34,16 +34,16 @@
         <tbody>
           <tr v-for="lot in leg.selected_lots" :key="lot.broker_lot_id">
             <td>
-              <label class="lot-selection">
-                <input
-                  type="checkbox"
-                  :checked="lot.selected"
-                  :disabled="pending || !canChangeSelection || rejected"
-                  :aria-label="`Select SELL lot ${lot.broker_lot_id} in group ${groupId}`"
-                  @change="changeLotSelection(lot.broker_lot_id, lot.selected, $event)"
-                />
-                {{ lot.selected ? 'API selected' : 'Not selected' }}
-              </label>
+              <q-checkbox
+                class="lot-selection"
+                dense
+                color="primary"
+                :model-value="lot.selected"
+                :disable="pending || !canChangeSelection || rejected"
+                :aria-label="`Select SELL lot ${lot.broker_lot_id} in group ${groupId}`"
+                :label="lot.selected ? 'API selected' : 'Not selected'"
+                @update:model-value="changeLotSelection(lot.broker_lot_id, $event)"
+              />
             </td>
             <th scope="row"><BrokerLotIdentity :broker-lot-id="lot.broker_lot_id" /></th>
             <td>{{ lot.acquired_date }}</td>
@@ -80,10 +80,7 @@ const emit = defineEmits<{
   lotSelection: [intent: LotSelectionIntent];
 }>();
 
-function changeLotSelection(brokerLotId: string, confirmed: boolean, event: Event): void {
-  const input = event.currentTarget as HTMLInputElement;
-  const selected = input.checked;
-  input.checked = confirmed;
+function changeLotSelection(brokerLotId: string, selected: boolean): void {
   emit('lotSelection', { groupId: props.groupId, brokerLotId, selected });
 }
 </script>
@@ -139,9 +136,5 @@ function changeLotSelection(brokerLotId: string, confirmed: boolean, event: Even
   color: #526c7c;
   font-size: 0.76rem;
   font-weight: 650;
-}
-
-.lot-selection input {
-  min-width: auto;
 }
 </style>

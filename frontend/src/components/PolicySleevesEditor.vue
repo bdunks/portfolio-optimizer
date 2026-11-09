@@ -11,7 +11,9 @@
           configured.
         </p>
       </div>
-      <button type="button" class="secondary-button" @click="addSleeve">+ Add sleeve</button>
+      <q-btn unelevated no-caps type="button" class="secondary-button" @click="addSleeve"
+        >+ Add sleeve</q-btn
+      >
     </div>
     <div v-if="targetIssues.length" class="validation-card" role="status" aria-live="polite">
       <strong>Target check — activation is not valid yet</strong>
@@ -48,24 +50,28 @@
           >
             <td>
               <div class="order-tools">
-                <button
+                <q-btn
+                  unelevated
+                  no-caps
                   type="button"
                   class="icon-button"
                   :aria-label="`Move ${sleeve.display_name || 'sleeve'} up`"
-                  :disabled="!canMoveSleeve(index, -1)"
+                  :disable="!canMoveSleeve(index, -1)"
                   @click="moveSleeve(index, -1)"
                 >
                   ↑
-                </button>
-                <button
+                </q-btn>
+                <q-btn
+                  unelevated
+                  no-caps
                   type="button"
                   class="icon-button"
                   :aria-label="`Move ${sleeve.display_name || 'sleeve'} down`"
-                  :disabled="!canMoveSleeve(index, 1)"
+                  :disable="!canMoveSleeve(index, 1)"
                   @click="moveSleeve(index, 1)"
                 >
                   ↓
-                </button>
+                </q-btn>
               </div>
               <code class="sleeve-key">{{ sleeve.sleeve_key || 'new sleeve' }}</code>
             </td>
@@ -82,20 +88,23 @@
             <td>
               <label class="compact-field"
                 ><span class="sr-only">Parent sleeve</span>
-                <select
-                  :value="sleeve.parent_sleeve_key"
+                <q-select
+                  :model-value="sleeve.parent_sleeve_key"
+                  :options="[
+                    { label: 'Top level', value: null },
+                    ...parentOptions(sleeve).map((parent) => ({
+                      label: parent.display_name || parent.sleeve_key,
+                      value: parent.sleeve_key,
+                    })),
+                  ]"
+                  emit-value
+                  map-options
+                  outlined
+                  dense
+                  hide-bottom-space
                   aria-label="Parent sleeve"
-                  @change="setSleeveParent(sleeve.sleeve_key, $event)"
-                >
-                  <option :value="null">Top level</option>
-                  <option
-                    v-for="parent in parentOptions(sleeve)"
-                    :key="parent.sleeve_key"
-                    :value="parent.sleeve_key"
-                  >
-                    {{ parent.display_name || parent.sleeve_key }}
-                  </option>
-                </select>
+                  @update:model-value="setSleeveParent(sleeve.sleeve_key, $event)"
+                />
               </label>
             </td>
             <td>
@@ -121,74 +130,77 @@
               /></label>
             </td>
             <td class="designation-cell">
-              <label
-                ><input
-                  type="checkbox"
-                  :checked="sleeve.is_direct_index_container"
-                  @change="setDirectIndexContainer(sleeve.sleeve_key, $event)"
-                />
-                Direct-index container</label
-              >
-              <label
-                ><input
-                  :checked="sleeve.is_direct_index_sleeve"
-                  type="checkbox"
-                  @change="setSleeveRole(sleeve.sleeve_key, 'is_direct_index_sleeve', $event)"
-                />
-                Direct-index sleeve</label
-              >
-              <label
-                ><input
-                  type="checkbox"
-                  aria-label="Transition destination sub-sleeve"
-                  :checked="sleeve.is_transition_destination"
-                  @change="setTransitionDestination(sleeve.sleeve_key, $event)"
-                />
-                Transition destination sub-sleeve</label
-              >
-              <label
-                ><input
-                  :checked="sleeve.is_cash_sleeve"
-                  type="checkbox"
-                  @change="setSleeveRole(sleeve.sleeve_key, 'is_cash_sleeve', $event)"
-                />
-                Cash sleeve</label
-              >
+              <q-checkbox
+                dense
+                color="primary"
+                :model-value="sleeve.is_direct_index_container"
+                label="Direct-index container"
+                @update:model-value="setDirectIndexContainer(sleeve.sleeve_key, $event)"
+              />
+              <q-checkbox
+                dense
+                color="primary"
+                :model-value="sleeve.is_direct_index_sleeve"
+                label="Direct-index sleeve"
+                @update:model-value="
+                  setSleeveRole(sleeve.sleeve_key, 'is_direct_index_sleeve', $event)
+                "
+              />
+              <q-checkbox
+                dense
+                color="primary"
+                label="Transition destination sub-sleeve"
+                :model-value="sleeve.is_transition_destination"
+                @update:model-value="setTransitionDestination(sleeve.sleeve_key, $event)"
+              />
+              <q-checkbox
+                dense
+                color="primary"
+                :model-value="sleeve.is_cash_sleeve"
+                label="Cash sleeve"
+                @update:model-value="setSleeveRole(sleeve.sleeve_key, 'is_cash_sleeve', $event)"
+              />
             </td>
             <td>
-              <label class="toggle-field"
-                ><input
-                  :checked="sleeve.enabled"
-                  type="checkbox"
-                  @change="setSleeveEnabled(sleeve.sleeve_key, $event)"
-                /><span>{{ sleeve.enabled ? 'Enabled' : 'Disabled' }}</span></label
-              >
+              <q-checkbox
+                class="toggle-field"
+                dense
+                color="primary"
+                :model-value="sleeve.enabled"
+                :label="sleeve.enabled ? 'Enabled' : 'Disabled'"
+                @update:model-value="setSleeveEnabled(sleeve.sleeve_key, $event)"
+              />
               <label v-if="!sleeve.enabled" class="compact-field reassignment-field">
                 <span>Reassign held assets to</span>
-                <select
-                  :value="reassignments[sleeve.sleeve_key] ?? ''"
-                  @change="setReassignment(sleeve.sleeve_key, $event)"
+                <q-select
+                  :model-value="reassignments[sleeve.sleeve_key] ?? ''"
+                  :options="[
+                    { label: 'Choose destination', value: '' },
+                    ...reassignmentOptions(sleeve.sleeve_key).map((target) => ({
+                      label: target.display_name || target.sleeve_key,
+                      value: target.sleeve_key,
+                    })),
+                  ]"
+                  emit-value
+                  map-options
+                  outlined
+                  dense
+                  hide-bottom-space
                   :aria-label="`Reassign holdings from ${sleeve.display_name || sleeve.sleeve_key}`"
-                >
-                  <option value="">Choose destination</option>
-                  <option
-                    v-for="target in reassignmentOptions(sleeve.sleeve_key)"
-                    :key="target.sleeve_key"
-                    :value="target.sleeve_key"
-                  >
-                    {{ target.display_name || target.sleeve_key }}
-                  </option>
-                </select>
+                  @update:model-value="setReassignment(sleeve.sleeve_key, $event)"
+                />
               </label>
             </td>
             <td>
-              <button
+              <q-btn
+                unelevated
+                no-caps
                 type="button"
                 class="danger-button small-button"
                 @click="beginDeleteSleeve(sleeve.sleeve_key)"
               >
                 Delete
-              </button>
+              </q-btn>
             </td>
           </tr>
           <tr v-if="sleeves.length === 0">
@@ -214,16 +226,22 @@
       </p>
       <label v-if="heldInSleeve(pendingDeleteSleeve.sleeve_key).length" class="field">
         <span>Holding reassignment destination</span>
-        <select v-model="deleteTargetKey" aria-label="Holding reassignment destination">
-          <option value="">Choose destination</option>
-          <option
-            v-for="target in reassignmentOptions(pendingDeleteSleeve.sleeve_key)"
-            :key="target.sleeve_key"
-            :value="target.sleeve_key"
-          >
-            {{ target.display_name || target.sleeve_key }}
-          </option>
-        </select>
+        <q-select
+          v-model="deleteTargetKey"
+          :options="[
+            { label: 'Choose destination', value: '' },
+            ...reassignmentOptions(pendingDeleteSleeve.sleeve_key).map((target) => ({
+              label: target.display_name || target.sleeve_key,
+              value: target.sleeve_key,
+            })),
+          ]"
+          emit-value
+          map-options
+          outlined
+          dense
+          hide-bottom-space
+          aria-label="Holding reassignment destination"
+        />
       </label>
       <div
         v-for="child in childrenOf(pendingDeleteSleeve.sleeve_key)"
@@ -232,28 +250,35 @@
       >
         <label class="field"
           ><span>Move child “{{ child.display_name || child.sleeve_key }}” under</span>
-          <select
+          <q-select
             v-model="childReparents[child.sleeve_key]"
+            :options="[
+              { label: 'Choose new parent', value: '' },
+              { label: 'Top level', value: null },
+              ...reparentOptions(pendingDeleteSleeve.sleeve_key, child.sleeve_key).map(
+                (parent) => ({
+                  label: parent.display_name || parent.sleeve_key,
+                  value: parent.sleeve_key,
+                }),
+              ),
+            ]"
+            emit-value
+            map-options
+            outlined
+            dense
+            hide-bottom-space
             :aria-label="`New parent for ${child.display_name || child.sleeve_key}`"
-          >
-            <option value="">Choose new parent</option>
-            <option :value="null">Top level</option>
-            <option
-              v-for="parent in reparentOptions(pendingDeleteSleeve.sleeve_key, child.sleeve_key)"
-              :key="parent.sleeve_key"
-              :value="parent.sleeve_key"
-            >
-              {{ parent.display_name || parent.sleeve_key }}
-            </option>
-          </select>
+          />
         </label>
       </div>
       <p v-if="deleteError" class="inline-error" role="alert">{{ deleteError }}</p>
       <div class="button-row">
-        <button type="button" class="danger-button" @click="confirmDeleteSleeve">
+        <q-btn unelevated no-caps type="button" class="danger-button" @click="confirmDeleteSleeve">
           Confirm delete
-        </button>
-        <button type="button" class="text-button" @click="cancelDeleteSleeve">Cancel</button>
+        </q-btn>
+        <q-btn unelevated no-caps type="button" class="text-button" @click="cancelDeleteSleeve"
+          >Cancel</q-btn
+        >
       </div>
     </div>
   </section>
@@ -324,17 +349,8 @@ function setSleeveText(
   else updateSleeve(key, { drift_band_pp: value });
 }
 
-function selectedValue(event: Event): unknown {
-  const select = event.target as HTMLSelectElement;
-  const option = select.options[select.selectedIndex] as
-    (HTMLOptionElement & { _value?: unknown }) | undefined;
-  if (!option) return null;
-  return '_value' in option ? option._value : option.value;
-}
-
-function setSleeveParent(key: string, event: Event): void {
-  const value = selectedValue(event);
-  if (value === null || typeof value === 'string') updateSleeve(key, { parent_sleeve_key: value });
+function setSleeveParent(key: string, value: string | null): void {
+  updateSleeve(key, { parent_sleeve_key: value });
 }
 
 function addSleeve(): void {
@@ -392,15 +408,12 @@ function updateReassignment(sourceKey: string, targetKey: string | null): void {
   emitReassignments(next, holdings);
 }
 
-function setReassignment(sourceKey: string, event: Event): void {
-  const targetKey = (event.target as HTMLSelectElement).value;
+function setReassignment(sourceKey: string, targetKey: string): void {
   updateReassignment(sourceKey, targetKey || null);
 }
 
-function setSleeveEnabled(key: string, event: Event): void {
-  const enabled = (event.target as HTMLInputElement).checked;
+function setSleeveEnabled(key: string, enabled: boolean): void {
   if (!enabled && hasEnabledChild(key)) {
-    (event.target as HTMLInputElement).checked = true;
     deleteError.value = 'Disable or reparent enabled child sleeves before disabling this parent.';
     return;
   }
@@ -409,8 +422,7 @@ function setSleeveEnabled(key: string, event: Event): void {
   deleteError.value = '';
 }
 
-function setDirectIndexContainer(key: string, event: Event): void {
-  const enabled = (event.target as HTMLInputElement).checked;
+function setDirectIndexContainer(key: string, enabled: boolean): void {
   emitSleeves(
     sleeves.value.map((sleeve) => ({
       ...sleeve,
@@ -422,15 +434,13 @@ function setDirectIndexContainer(key: string, event: Event): void {
 function setSleeveRole(
   key: string,
   role: 'is_direct_index_sleeve' | 'is_cash_sleeve',
-  event: Event,
+  enabled: boolean,
 ): void {
-  const enabled = (event.target as HTMLInputElement).checked;
   if (role === 'is_direct_index_sleeve') updateSleeve(key, { is_direct_index_sleeve: enabled });
   else updateSleeve(key, { is_cash_sleeve: enabled });
 }
 
-function setTransitionDestination(key: string, event: Event): void {
-  const enabled = (event.target as HTMLInputElement).checked;
+function setTransitionDestination(key: string, enabled: boolean): void {
   emitSleeves(
     sleeves.value.map((sleeve) => ({
       ...sleeve,

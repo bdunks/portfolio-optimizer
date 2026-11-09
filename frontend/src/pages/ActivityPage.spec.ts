@@ -12,6 +12,8 @@ import type {
 } from '@/types/api';
 import ActivityPage from './ActivityPage.vue';
 import { useWorkspaceStore } from '@/stores/workspace-store';
+import { QSelect } from 'quasar';
+import { findQuasarComponent, setQuasarModelValue } from '@/test-utils/quasar-mount';
 
 const frozenDisplayContext: FrozenRunDisplayContextResponse = {
   available: true,
@@ -163,7 +165,7 @@ describe('ActivityPage', () => {
     await searchInputs[1]!.setValue('complete');
     await searchInputs[2]!.setValue('correlation-synthetic');
     await wrapper.find('input[type="datetime-local"]').setValue('2025-02-01T00:00');
-    await wrapper.findAll('select')[0]!.setValue('50');
+    await setQuasarModelValue(wrapper, QSelect, 'Rows per page', 50);
     await wrapper.get('form').trigger('submit');
     await flushPromises();
 
@@ -220,7 +222,7 @@ describe('ActivityPage', () => {
       '2025-02-01T00:00',
       '2025-02-03T12:30:45.123',
     ]);
-    expect((wrapper.findAll('select')[0]!.element as HTMLSelectElement).value).toBe('50');
+    expect(findQuasarComponent(wrapper, QSelect, 'Rows per page').text()).toContain('50');
     expect(wrapper.text()).toContain('Since (UTC)');
     expect(wrapper.text()).toContain('Until (UTC)');
 

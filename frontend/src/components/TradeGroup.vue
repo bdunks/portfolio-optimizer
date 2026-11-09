@@ -8,18 +8,16 @@
     </summary>
 
     <div class="group-body">
-      <label class="group-selection">
-        <input
-          type="checkbox"
-          :checked="group.selected"
-          :disabled="pending || !canChangeSelection || group.rejected || !hasSellLots"
-          :aria-label="`Select recommendation group ${group.group_id}`"
-          @change="changeGroupSelection"
-        />
-        <span>{{
-          group.selected ? 'API-confirmed selected group' : 'Select this group and re-solve'
-        }}</span>
-      </label>
+      <q-checkbox
+        class="group-selection"
+        dense
+        color="primary"
+        :model-value="group.selected"
+        :disable="pending || !canChangeSelection || group.rejected || !hasSellLots"
+        :aria-label="`Select recommendation group ${group.group_id}`"
+        :label="group.selected ? 'API-confirmed selected group' : 'Select this group and re-solve'"
+        @update:model-value="changeGroupSelection"
+      />
 
       <dl class="group-facts">
         <div>
@@ -123,22 +121,29 @@
       <section class="annotation-panel" :aria-label="`Notes and rejection for ${group.group_id}`">
         <label>
           <span>Group note (up to 2,000 characters; save an empty value to clear)</span>
-          <textarea
-            :value="noteDraft"
+          <q-input
+            type="textarea"
+            :model-value="noteDraft"
             rows="2"
             maxlength="2000"
-            :disabled="pending || !canChangeSelection"
-            @input="emitText('noteDraftChange', $event)"
+            :disable="pending || !canChangeSelection"
+            outlined
+            dense
+            hide-bottom-space
+            aria-label="Group note (up to 2,000 characters; save an empty value to clear)"
+            @update:model-value="emitText('noteDraftChange', $event)"
           />
         </label>
-        <button
+        <q-btn
+          unelevated
+          no-caps
           type="button"
           class="text-button"
-          :disabled="pending || !canChangeSelection"
+          :disable="pending || !canChangeSelection"
           @click="emit('saveNote', { groupId: group.group_id, note: noteDraft })"
         >
           Save note
-        </button>
+        </q-btn>
 
         <label v-if="!group.rejected">
           <span>Rejection reason (up to 500 characters)</span>
@@ -150,11 +155,13 @@
             @input="emitText('rejectionDraftChange', $event)"
           />
         </label>
-        <button
+        <q-btn
+          unelevated
+          no-caps
           v-if="!group.rejected"
           type="button"
           class="secondary-button"
-          :disabled="
+          :disable="
             pending ||
             !canChangeSelection ||
             !rejectionDraft.trim() ||
@@ -163,16 +170,18 @@
           @click="emit('rejectGroup', { groupId: group.group_id, reason: rejectionDraft })"
         >
           Reject group (does not approve any order)
-        </button>
-        <button
+        </q-btn>
+        <q-btn
+          unelevated
+          no-caps
           v-else
           type="button"
           class="secondary-button"
-          :disabled="pending || !canChangeSelection"
+          :disable="pending || !canChangeSelection"
           @click="emit('restoreGroup', { groupId: group.group_id })"
         >
           Restore rejected group (remains unselected)
-        </button>
+        </q-btn>
         <p class="annotation-help">
           Rejection is saved in one backend update; the API response preserves or updates the full
           basket atomically. Restoring leaves the group unselected and keeps its note.
@@ -225,16 +234,19 @@ const emit = defineEmits<{
   restoreGroup: [intent: GroupActionIntent];
 }>();
 
-function changeGroupSelection(event: Event): void {
-  const input = event.currentTarget as HTMLInputElement;
-  const selected = input.checked;
-  input.checked = props.group.selected;
+function changeGroupSelection(selected: boolean): void {
   emit('groupSelection', { groupId: props.group.group_id, selected });
 }
 
-function emitText(eventName: 'noteDraftChange' | 'rejectionDraftChange', event: Event): void {
-  const value = (event.currentTarget as HTMLInputElement | HTMLTextAreaElement).value;
-  const intent: GroupTextIntent = { groupId: props.group.group_id, value };
+function emitText(
+  eventName: 'noteDraftChange' | 'rejectionDraftChange',
+  value: Event | string | number | null,
+): void {
+  const text =
+    value instanceof Event
+      ? (value.currentTarget as HTMLInputElement | HTMLTextAreaElement).value
+      : String(value ?? '');
+  const intent: GroupTextIntent = { groupId: props.group.group_id, value: text };
   if (eventName === 'noteDraftChange') emit('noteDraftChange', intent);
   else emit('rejectionDraftChange', intent);
 }
@@ -301,10 +313,6 @@ const hasSharedLeg = props.hasSharedLeg;
   align-items: center;
   justify-content: start;
   gap: 0.45rem;
-}
-
-.group-selection input {
-  min-width: auto;
 }
 
 .group-selection {

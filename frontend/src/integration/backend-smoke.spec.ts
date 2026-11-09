@@ -652,8 +652,8 @@ describe('isolated local backend smoke', () => {
 
       const groupId = store.currentRun!.groups[0]!.group_id;
       await workspace.wrapper
-        .get(`input[aria-label="Select recommendation group ${groupId}"]`)
-        .setValue(true);
+        .get(`[role="checkbox"][aria-label="Select recommendation group ${groupId}"]`)
+        .trigger('click');
       await flushPromises();
       await waitFor(
         () => store.currentRun?.orders_count === 2 && store.currentRun.groups[0]?.selected === true,
@@ -670,9 +670,12 @@ describe('isolated local backend smoke', () => {
       assertCanonicalLegGraph(store.currentRun!);
 
       await visit(workspace, '/lots');
-      const vbLotInput = 'input[aria-label="Request VB lot DEMO-VB-LOT-1"]';
-      await waitFor(() => workspace!.wrapper.find(vbLotInput).exists(), 'current VB lot page');
-      await workspace.wrapper.get(vbLotInput).setValue(true);
+      const vbLotLabel = 'Request VB lot DEMO-VB-LOT-1';
+      await waitFor(
+        () => workspace!.wrapper.find(`[role="checkbox"][aria-label="${vbLotLabel}"]`).exists(),
+        'current VB lot page',
+      );
+      await workspace.wrapper.get(`[role="checkbox"][aria-label="${vbLotLabel}"]`).trigger('click');
       const applyLotIntent = () =>
         workspace!.wrapper
           .findAll('button')
@@ -696,9 +699,14 @@ describe('isolated local backend smoke', () => {
       const confirmedAfterValidIntent = store.currentRun;
       await waitFor(() => !store.reviewMutationPending, 'lot intent mutation queue release');
 
-      const aaplLotInput = 'input[aria-label="Request AAPL lot DEMO-AAPL-LOT-1"]';
-      await waitFor(() => workspace!.wrapper.find(aaplLotInput).exists(), 'AAPL current lot row');
-      await workspace.wrapper.get(aaplLotInput).setValue(true);
+      const aaplLotLabel = 'Request AAPL lot DEMO-AAPL-LOT-1';
+      await waitFor(
+        () => workspace!.wrapper.find(`[role="checkbox"][aria-label="${aaplLotLabel}"]`).exists(),
+        'AAPL current lot row',
+      );
+      await workspace.wrapper
+        .get(`[role="checkbox"][aria-label="${aaplLotLabel}"]`)
+        .trigger('click');
       await waitFor(
         () => store.lotReviewIntent.length === 2 && !store.reviewMutationPending,
         'complete desired set after adding unsupported AAPL lot',

@@ -5,6 +5,8 @@ import { createPinia, setActivePinia } from 'pinia';
 import type { LotResponse, OptimizerRecommendationsResponse } from '@/types/api';
 import { useWorkspaceStore } from '@/stores/workspace-store';
 import TaxLotsPage from './TaxLotsPage.vue';
+import { QCheckbox, QSelect } from 'quasar';
+import { findQuasarComponent, setQuasarModelValue } from '@/test-utils/quasar-mount';
 
 const lot: LotResponse = {
   ticker: 'SYN',
@@ -124,7 +126,7 @@ describe('TaxLotsPage', () => {
     expect(wrapper.text()).toContain('DEMO ONLY');
     expect(wrapper.text()).toContain('complete replacement set');
 
-    await wrapper.get('input[aria-label="Request SYN lot BROKER-LOT-0007"]').setValue(true);
+    await setQuasarModelValue(wrapper, QCheckbox, 'Request SYN lot BROKER-LOT-0007', true);
     expect(wrapper.text()).toContain('Requested lot intent · 1');
     expect(wrapper.text()).toContain(
       'Backend-confirmed selected SELL lot IDs in the loaded run: none',
@@ -146,8 +148,8 @@ describe('TaxLotsPage', () => {
     await flushPromises();
 
     await wrapper.get('input[type="search"]').setValue('ALL-ACCOUNT-RESULT');
-    await wrapper.findAll('select')[0]!.setValue('ST');
-    await wrapper.findAll('select')[1]!.setValue('true');
+    await setQuasarModelValue(wrapper, QSelect, 'Holding term', 'ST');
+    await setQuasarModelValue(wrapper, QSelect, 'Fractional cleanup', 'true');
     await wrapper.get('form[aria-label="Tax lot filters"]').trigger('submit');
     await flushPromises();
 
@@ -161,7 +163,7 @@ describe('TaxLotsPage', () => {
     // The API owns filtering; returned API rows are not filtered again in the browser.
     expect(wrapper.text()).toContain('BROKER-LOT-0007');
 
-    await wrapper.findAll('select')[3]!.setValue('unrealized_pl_usd');
+    await setQuasarModelValue(wrapper, QSelect, 'Sort API results by', 'unrealized_pl_usd');
     await flushPromises();
     const sortedRequest = requestUrl(fetcher.mock.calls[2]![0]);
     expect(sortedRequest.searchParams.get('sort_by')).toBe('unrealized_pl_usd');
@@ -222,7 +224,7 @@ describe('TaxLotsPage', () => {
     const wrapper = mount(TaxLotsPage);
     await flushPromises();
 
-    await wrapper.get('input[aria-label="Request SYN lot BROKER-LOT-0007"]').setValue(true);
+    await setQuasarModelValue(wrapper, QCheckbox, 'Request SYN lot BROKER-LOT-0007', true);
     expect(store.currentRun).toBe(originalRun);
     const applyButton = wrapper
       .findAll('button')
@@ -268,7 +270,7 @@ describe('TaxLotsPage', () => {
     const wrapper = mount(TaxLotsPage);
     await flushPromises();
 
-    await wrapper.get('input[aria-label="Request SYN lot BROKER-LOT-0007"]').setValue(true);
+    await setQuasarModelValue(wrapper, QCheckbox, 'Request SYN lot BROKER-LOT-0007', true);
     const applyButton = () =>
       wrapper
         .findAll('button')
@@ -360,7 +362,7 @@ describe('TaxLotsPage', () => {
     const wrapper = mount(TaxLotsPage);
     await flushPromises();
 
-    await wrapper.get('input[aria-label="Request SYN lot BROKER-LOT-0007"]').setValue(true);
+    await setQuasarModelValue(wrapper, QCheckbox, 'Request SYN lot BROKER-LOT-0007', true);
     await wrapper
       .findAll('button')
       .find((button) => button.text().includes('Apply complete set to current DEMO run'))!
@@ -387,22 +389,29 @@ describe('TaxLotsPage', () => {
     const store = useWorkspaceStore();
     const firstMount = mount(TaxLotsPage);
     await flushPromises();
-    await firstMount.get('input[aria-label="Request SYN lot BROKER-LOT-0007"]').setValue(true);
+    await setQuasarModelValue(firstMount, QCheckbox, 'Request SYN lot BROKER-LOT-0007', true);
     firstMount.unmount();
 
     const secondMount = mount(TaxLotsPage);
     await flushPromises();
-    const requestSelector = 'input[aria-label="Request SYN lot BROKER-LOT-0007"]';
-    expect((secondMount.get(requestSelector).element as HTMLInputElement).checked).toBe(true);
+    expect(
+      findQuasarComponent(secondMount, QCheckbox, 'Request SYN lot BROKER-LOT-0007').attributes(
+        'aria-checked',
+      ),
+    ).toBe('true');
     expect(store.lotReviewIntent).toHaveLength(1);
 
     store.observeSourceGeneration(2);
     await flushPromises();
     expect(store.lotReviewIntent).toEqual([]);
     expect(store.lotReviewIntentNotice).toContain('Source generation changed to 2');
-    const lotInput = secondMount.get(requestSelector);
-    expect((lotInput.element as HTMLInputElement).checked).toBe(false);
-    expect((lotInput.element as HTMLInputElement).disabled).toBe(true);
+    const lotCheckbox = findQuasarComponent(
+      secondMount,
+      QCheckbox,
+      'Request SYN lot BROKER-LOT-0007',
+    );
+    expect(lotCheckbox.attributes('aria-checked')).toBe('false');
+    expect(lotCheckbox.attributes('aria-disabled')).toBe('true');
     expect(secondMount.text()).toContain('Refresh lots before marking or submitting any set');
   });
 
@@ -414,8 +423,11 @@ describe('TaxLotsPage', () => {
     const wrapper = mount(TaxLotsPage);
     await flushPromises();
 
-    const lotInput = wrapper.get('input[aria-label="Request SYN lot BROKER-LOT-0007"]');
-    expect((lotInput.element as HTMLInputElement).disabled).toBe(true);
+    expect(
+      findQuasarComponent(wrapper, QCheckbox, 'Request SYN lot BROKER-LOT-0007').attributes(
+        'aria-disabled',
+      ),
+    ).toBe('true');
     expect(wrapper.text()).toContain('It is unvalidated; lot intent cannot be submitted');
     expect(wrapper.text()).toContain('No current DEMO run is available');
   });

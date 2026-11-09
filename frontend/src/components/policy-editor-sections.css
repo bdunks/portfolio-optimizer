@@ -223,9 +223,7 @@ button:disabled {
   font-weight: 700;
 }
 .compact-field input,
-.compact-field select,
-.field input,
-.field select {
+.field input {
   width: 100%;
   min-width: 0;
   min-height: 2.15rem;
@@ -237,9 +235,7 @@ button:disabled {
   font: inherit;
   font-size: 0.76rem;
 }
-.compact-field input:focus,
-.compact-field select:focus,
-.field select:focus {
+.compact-field input:focus {
   border-color: #087f7d;
   outline: 2px solid rgb(8 127 125 / 18%);
 }
@@ -252,7 +248,7 @@ button:disabled {
 .designation-cell {
   min-width: 12rem !important;
 }
-.designation-cell label,
+.designation-cell .q-checkbox,
 .toggle-field {
   display: flex;
   align-items: center;
@@ -261,10 +257,6 @@ button:disabled {
   color: #526c7c;
   font-size: 0.68rem;
   font-weight: 600;
-}
-.designation-cell input,
-.toggle-field input {
-  accent-color: #087f7d;
 }
 .toggle-field {
   margin: 0.2rem 0;

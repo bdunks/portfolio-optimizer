@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { mount } from '@vue/test-utils';
 import { reactive } from 'vue';
+import { QCheckbox, QSelect } from 'quasar';
+import { findQuasarComponent, setQuasarModelValue } from '@/test-utils/quasar-mount';
 import { describe, expect, it } from 'vitest';
 import PolicyHoldingOverridesEditor from './PolicyHoldingOverridesEditor.vue';
 import PolicyReplacementSetsEditor from './PolicyReplacementSetsEditor.vue';
@@ -69,7 +71,7 @@ describe('purpose-built policy editor sections', () => {
     expect(settings.max_sell_tickers_per_batch).toBe('12');
     await field('Cash reserve').get('input').setValue('0.00');
     expect(settings.cash_reserve_usd).toBe('0.00');
-    await field('Prefer ETF buys').get('select').setValue('false');
+    await setQuasarModelValue(wrapper, QSelect, 'Prefer ETF buys', false);
     expect(settings.prefer_etf_buys).toBe(false);
   });
 
@@ -140,14 +142,16 @@ describe('purpose-built policy editor sections', () => {
     await wrapper.find('button[aria-label="Move Other up"]').trigger('click');
     expect(draft.sleeves.map((item) => item.sleeve_key).slice(-2)).toEqual(['other', 'cash']);
 
-    const container = wrapper.findAll('tbody input[type="checkbox"]')[0]!;
+    const container = wrapper.findAllComponents(QCheckbox)[0]!;
     const otherContainer = wrapper
-      .findAll('tr')
+      .findAllComponents(QCheckbox)
       .find(
-        (row) => row.find('.sleeve-key').exists() && row.find('.sleeve-key').text() === 'other',
-      )!
-      .find('td.designation-cell input[type="checkbox"]');
-    await otherContainer.setValue(true);
+        (checkbox) =>
+          checkbox.props().label === 'Direct-index container' &&
+          checkbox.element.closest('tr')?.querySelector('.sleeve-key')?.textContent?.trim() ===
+            'other',
+      )!;
+    otherContainer.vm.$emit('update:modelValue', true);
     expect(draft.sleeves.find((item) => item.sleeve_key === 'us')?.is_direct_index_container).toBe(
       false,
     );
@@ -168,11 +172,9 @@ describe('purpose-built policy editor sections', () => {
           button.element.closest('tr')?.querySelector('.sleeve-key')?.textContent?.trim() === 'us',
       )!
       .trigger('click');
-    await wrapper.find('select[aria-label="Holding reassignment destination"]').setValue('other');
-    await wrapper.find('select[aria-label="New parent for Direct indexing"]').setValue('other');
-    await wrapper
-      .find('select[aria-label="New parent for Transition destination"]')
-      .setValue('other');
+    await setQuasarModelValue(wrapper, QSelect, 'Holding reassignment destination', 'other');
+    await setQuasarModelValue(wrapper, QSelect, 'New parent for Direct indexing', 'other');
+    await setQuasarModelValue(wrapper, QSelect, 'New parent for Transition destination', 'other');
     await wrapper.find('button.danger-button:not(.small-button)').trigger('click');
 
     expect(draft.sleeves.some((item) => item.sleeve_key === 'us')).toBe(false);
@@ -230,7 +232,7 @@ describe('purpose-built policy editor sections', () => {
       .find('input[aria-label="Exposure suitability note"]')
       .setValue('Total-market ETF');
     expect(draft.allowedSecurities[0]?.exposure_suitability).toBe('Total-market ETF');
-    await wrapper.find('tbody input[type="checkbox"]').setValue(false);
+    await setQuasarModelValue(wrapper, QCheckbox, 'Enabled', false);
     expect(draft.allowedSecurities[0]?.enabled).toBe(false);
     await wrapper.find('button[aria-label="Remove ITOT"]').trigger('click');
     expect(draft.allowedSecurities.map((item) => item.ticker)).toEqual(['VTI']);
@@ -261,16 +263,16 @@ describe('purpose-built policy editor sections', () => {
     });
 
     expect(wrapper.text()).toContain('us → direct');
-    expect(wrapper.find('select[aria-label="Explicit override for OLD"]').text()).toContain(
+    expect(findQuasarComponent(wrapper, QSelect, 'Explicit override for OLD').text()).toContain(
       'Current assignment — disabled',
     );
-    await wrapper.find('select[aria-label="Explicit override for AAPL"]').setValue('other');
+    await setQuasarModelValue(wrapper, QSelect, 'Explicit override for AAPL', 'other');
     expect(draft.overrides.find((item) => item.ticker === 'AAPL')).toEqual({
       ticker: 'AAPL',
       sleeve_key: 'other',
       sub_sleeve_key: null,
     });
-    await wrapper.find('select[aria-label="Explicit override for AAPL"]').setValue('');
+    await setQuasarModelValue(wrapper, QSelect, 'Explicit override for AAPL', '');
     expect(draft.overrides.map((item) => item.ticker)).toEqual(['OLD']);
     expect(wrapper.text()).toContain('OLD');
   });
@@ -329,7 +331,7 @@ describe('purpose-built policy editor sections', () => {
         portfolioLoading: false,
       },
     });
-    await overrideWrapper.find('select[aria-label="Explicit override for AAPL"]').setValue('other');
+    await setQuasarModelValue(overrideWrapper, QSelect, 'Explicit override for AAPL', 'other');
     expect(overrideDraft.overrides).toBe(overridesBefore);
     expect(overrideDraft.overrides[0]?.sleeve_key).toBe('us');
     const overrideUpdate = overrideWrapper.emitted('update:overrides')?.[0]?.[0] as {

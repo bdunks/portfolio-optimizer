@@ -7,9 +7,16 @@
       subtitle="Transaction history and purchase restrictions returned by the local wash-sales API. This page does not perform or imply wash-sale validation."
     >
       <template #actions>
-        <button type="button" class="primary-button" :disabled="isLoading" @click="refresh">
+        <q-btn
+          unelevated
+          no-caps
+          type="button"
+          class="primary-button"
+          :disable="isLoading"
+          @click="refresh"
+        >
           {{ isLoading ? 'Loading…' : 'Refresh wash data' }}
-        </button>
+        </q-btn>
       </template>
     </WorkspacePageHeader>
 
@@ -32,13 +39,22 @@
       </label>
       <label>
         <span>Transaction kind</span>
-        <select v-model="transactionKind">
-          <option value="">All transaction kinds</option>
-          <option value="BUY">BUY</option>
-          <option value="SELL">SELL</option>
-          <option value="DIVIDEND">DIVIDEND</option>
-          <option value="OTHER">OTHER</option>
-        </select>
+        <q-select
+          v-model="transactionKind"
+          :options="[
+            { label: 'All transaction kinds', value: '' },
+            { label: 'BUY', value: 'BUY' },
+            { label: 'SELL', value: 'SELL' },
+            { label: 'DIVIDEND', value: 'DIVIDEND' },
+            { label: 'OTHER', value: 'OTHER' },
+          ]"
+          emit-value
+          map-options
+          outlined
+          dense
+          hide-bottom-space
+          aria-label="Transaction kind"
+        />
       </label>
     </WorkspaceFilterPanel>
 
@@ -52,9 +68,16 @@
     <WorkspaceEmptyState v-else-if="!washSales" title="No wash-sale data loaded">
       Retry to request the current API response. No history or restrictions have been inferred.
       <template #action>
-        <button type="button" class="secondary-button" :disabled="isLoading" @click="refresh">
+        <q-btn
+          unelevated
+          no-caps
+          type="button"
+          class="secondary-button"
+          :disable="isLoading"
+          @click="refresh"
+        >
           Retry loading wash data
-        </button>
+        </q-btn>
       </template>
     </WorkspaceEmptyState>
     <template v-else>

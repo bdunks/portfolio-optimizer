@@ -35,26 +35,32 @@
             <td>
               <label class="compact-field override-select"
                 ><span class="sr-only">Explicit override for {{ holding.ticker }}</span>
-                <select
-                  :value="overrideTarget(holding.ticker)"
+                <q-select
+                  :model-value="overrideTarget(holding.ticker)"
+                  :options="[
+                    { label: 'Use default resolution', value: '' },
+                    ...(currentOverrideTargetIsDisabled(holding.ticker)
+                      ? [
+                          {
+                            label: 'Current assignment — disabled; choose a valid target or remove',
+                            value: overrideTarget(holding.ticker),
+                            disable: true,
+                          },
+                        ]
+                      : []),
+                    ...overrideOptions.map((target) => ({
+                      label: target.display_name || target.sleeve_key,
+                      value: target.sleeve_key,
+                    })),
+                  ]"
+                  emit-value
+                  map-options
+                  outlined
+                  dense
+                  hide-bottom-space
                   :aria-label="`Explicit override for ${holding.ticker}`"
-                  @change="setOverrideTarget(holding.ticker, $event)"
-                >
-                  <option value="">Use default resolution</option>
-                  <option
-                    v-if="currentOverrideTargetIsDisabled(holding.ticker)"
-                    :value="overrideTarget(holding.ticker)"
-                  >
-                    Current assignment — disabled; choose a valid target or remove
-                  </option>
-                  <option
-                    v-for="target in overrideOptions"
-                    :key="target.sleeve_key"
-                    :value="target.sleeve_key"
-                  >
-                    {{ target.display_name || target.sleeve_key }}
-                  </option>
-                </select>
+                  @update:model-value="setOverrideTarget(holding.ticker, $event)"
+                />
               </label>
             </td>
           </tr>
@@ -118,8 +124,7 @@ function overrideTarget(ticker: string): string {
   return override?.sub_sleeve_key ?? override?.sleeve_key ?? '';
 }
 
-function setOverrideTarget(ticker: string, event: Event): void {
-  const targetKey = (event.target as HTMLSelectElement).value;
+function setOverrideTarget(ticker: string, targetKey: string): void {
   const existing = overrides.value.findIndex((override) => override.ticker === ticker);
   const next = overrides.value.map((override) => ({ ...override }));
   if (!targetKey) {

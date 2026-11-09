@@ -9,9 +9,9 @@
           assumption, not a wash-sale guarantee or automated exposure-equivalence check.
         </p>
       </div>
-      <button type="button" class="secondary-button" @click="addSecurity">
+      <q-btn unelevated no-caps type="button" class="secondary-button" @click="addSecurity">
         + Add ETF candidate
-      </button>
+      </q-btn>
     </div>
     <WorkspaceTableFrame class="table-scroll" label="Replacement security candidates">
       <table class="editor-table securities-table">
@@ -35,23 +35,28 @@
           >
             <td>
               <div class="order-tools">
-                <button
+                <q-btn
+                  unelevated
+                  no-caps
                   type="button"
                   class="icon-button"
                   :aria-label="`Move ${security.ticker || 'candidate'} up`"
-                  :disabled="!canMoveSecurity(index, -1)"
+                  :disable="!canMoveSecurity(index, -1)"
                   @click="moveSecurity(index, -1)"
                 >
-                  ↑</button
-                ><button
+                  ↑
+                </q-btn>
+                <q-btn
+                  unelevated
+                  no-caps
                   type="button"
                   class="icon-button"
                   :aria-label="`Move ${security.ticker || 'candidate'} down`"
-                  :disabled="!canMoveSecurity(index, 1)"
+                  :disable="!canMoveSecurity(index, 1)"
                   @click="moveSecurity(index, 1)"
                 >
                   ↓
-                </button>
+                </q-btn>
               </div>
             </td>
             <td>
@@ -88,40 +93,44 @@
             <td>
               <label class="compact-field"
                 ><span class="sr-only">Candidate parent sleeve</span
-                ><select
-                  :value="security.sleeve_key"
+                ><q-select
+                  :model-value="security.sleeve_key"
+                  :options="[
+                    { label: 'Choose sleeve', value: '' },
+                    ...enabledTopLevelSleeves.map((sleeve) => ({
+                      label: sleeve.display_name || sleeve.sleeve_key,
+                      value: sleeve.sleeve_key,
+                    })),
+                  ]"
+                  emit-value
+                  map-options
+                  outlined
+                  dense
+                  hide-bottom-space
                   aria-label="Candidate parent sleeve"
-                  @change="setSecurityParent(index, $event)"
-                >
-                  <option value="">Choose sleeve</option>
-                  <option
-                    v-for="sleeve in enabledTopLevelSleeves"
-                    :key="sleeve.sleeve_key"
-                    :value="sleeve.sleeve_key"
-                  >
-                    {{ sleeve.display_name || sleeve.sleeve_key }}
-                  </option>
-                </select></label
-              >
+                  @update:model-value="setSecurityParent(index, $event)"
+              /></label>
             </td>
             <td>
               <label class="compact-field"
                 ><span class="sr-only">Candidate sub-sleeve</span
-                ><select
-                  :value="security.sub_sleeve_key"
+                ><q-select
+                  :model-value="security.sub_sleeve_key"
+                  :options="[
+                    { label: 'None', value: null },
+                    ...enabledChildren(security.sleeve_key).map((child) => ({
+                      label: child.display_name || child.sleeve_key,
+                      value: child.sleeve_key,
+                    })),
+                  ]"
+                  emit-value
+                  map-options
+                  outlined
+                  dense
+                  hide-bottom-space
                   aria-label="Candidate sub-sleeve"
-                  @change="setSecuritySubSleeve(index, $event)"
-                >
-                  <option :value="null">None</option>
-                  <option
-                    v-for="child in enabledChildren(security.sleeve_key)"
-                    :key="child.sleeve_key"
-                    :value="child.sleeve_key"
-                  >
-                    {{ child.display_name || child.sleeve_key }}
-                  </option>
-                </select></label
-              >
+                  @update:model-value="setSecuritySubSleeve(index, $event)"
+              /></label>
             </td>
             <td>
               <label class="compact-field"
@@ -134,23 +143,26 @@
               /></label>
             </td>
             <td>
-              <label class="toggle-field"
-                ><input
-                  :checked="security.enabled"
-                  type="checkbox"
-                  @change="setSecurityEnabled(index, $event)"
-                /><span>{{ security.enabled ? 'Enabled' : 'Disabled' }}</span></label
-              >
+              <q-checkbox
+                class="toggle-field"
+                dense
+                color="primary"
+                :model-value="security.enabled"
+                :label="security.enabled ? 'Enabled' : 'Disabled'"
+                @update:model-value="setSecurityEnabled(index, $event)"
+              />
             </td>
             <td>
-              <button
+              <q-btn
+                unelevated
+                no-caps
                 type="button"
                 class="danger-button small-button"
                 :aria-label="`Remove ${security.ticker || 'ETF candidate'}`"
                 @click="removeSecurity(index)"
               >
                 Remove
-              </button>
+              </q-btn>
             </td>
           </tr>
           <tr v-if="allowedSecurities.length === 0">
@@ -211,22 +223,12 @@ function setSecurityText(
   else updateSecurity(index, { exposure_suitability: value });
 }
 
-function selectedValue(event: Event): unknown {
-  const select = event.target as HTMLSelectElement;
-  const option = select.options[select.selectedIndex] as
-    (HTMLOptionElement & { _value?: unknown }) | undefined;
-  if (!option) return null;
-  return '_value' in option ? option._value : option.value;
+function setSecurityParent(index: number, value: string): void {
+  updateSecurity(index, { sleeve_key: value });
 }
 
-function setSecurityParent(index: number, event: Event): void {
-  const value = selectedValue(event);
-  if (typeof value === 'string') updateSecurity(index, { sleeve_key: value });
-}
-
-function setSecuritySubSleeve(index: number, event: Event): void {
-  const value = selectedValue(event);
-  if (value === null || typeof value === 'string') updateSecurity(index, { sub_sleeve_key: value });
+function setSecuritySubSleeve(index: number, value: string | null): void {
+  updateSecurity(index, { sub_sleeve_key: value });
 }
 
 function setSecurityPriority(index: number, event: Event): void {
@@ -234,8 +236,8 @@ function setSecurityPriority(index: number, event: Event): void {
   updateSecurity(index, { priority: value.trim() ? Number(value) : Number.NaN });
 }
 
-function setSecurityEnabled(index: number, event: Event): void {
-  updateSecurity(index, { enabled: (event.target as HTMLInputElement).checked });
+function setSecurityEnabled(index: number, enabled: boolean): void {
+  updateSecurity(index, { enabled });
 }
 
 function addSecurity(): void {

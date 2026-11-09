@@ -1,4 +1,6 @@
 import { mount } from '@vue/test-utils';
+import { QCheckbox } from 'quasar';
+import { findQuasarComponent, setQuasarModelValue } from '@/test-utils/quasar-mount';
 import { describe, expect, it } from 'vitest';
 import TradeGroup from './TradeGroup.vue';
 import type { TradeGroupLegReference } from './trade-review-types';
@@ -92,10 +94,12 @@ function mountGroup(props: Partial<InstanceType<typeof TradeGroup>['$props']> = 
 describe('TradeGroup', () => {
   it('emits group, lot, note, and reject intent without performing page actions', async () => {
     const wrapper = mountGroup();
-    expect(wrapper.get('input[aria-label="Select recommendation group group-a"]')).toBeDefined();
+    expect(
+      findQuasarComponent(wrapper, QCheckbox, 'Select recommendation group group-a').exists(),
+    ).toBe(true);
     expect(wrapper.get('[aria-label="Notes and rejection for group-a"]')).toBeDefined();
 
-    await wrapper.get('input[aria-label="Select recommendation group group-a"]').setValue(true);
+    await setQuasarModelValue(wrapper, QCheckbox, 'Select recommendation group group-a', true);
     expect(wrapper.emitted('groupSelection')).toEqual([[{ groupId: 'group-a', selected: true }]]);
 
     await wrapper.get('textarea').setValue('Review this proposal');
@@ -123,9 +127,12 @@ describe('TradeGroup', () => {
       [{ groupId: 'group-a', reason: 'Avoid this trade' }],
     ]);
 
-    await wrapper
-      .get('input[aria-label="Select SELL lot BROKER-A1 in group group-a"]')
-      .setValue(false);
+    await setQuasarModelValue(
+      wrapper,
+      QCheckbox,
+      'Select SELL lot BROKER-A1 in group group-a',
+      false,
+    );
     expect(wrapper.emitted('lotSelection')).toEqual([
       [{ groupId: 'group-a', brokerLotId: 'BROKER-A1', selected: false }],
     ]);
@@ -134,14 +141,18 @@ describe('TradeGroup', () => {
   it('disables group review controls while pending and exposes missing references without claims', () => {
     const pending = mountGroup({ pending: true });
     expect(
-      pending.get('input[aria-label="Select recommendation group group-a"]').attributes('disabled'),
-    ).toBeDefined();
+      findQuasarComponent(pending, QCheckbox, 'Select recommendation group group-a').attributes(
+        'aria-disabled',
+      ),
+    ).toBe('true');
     expect(pending.get('textarea').attributes('disabled')).toBeDefined();
     expect(
-      pending
-        .get('input[aria-label="Select SELL lot BROKER-A1 in group group-a"]')
-        .attributes('disabled'),
-    ).toBeDefined();
+      findQuasarComponent(
+        pending,
+        QCheckbox,
+        'Select SELL lot BROKER-A1 in group group-a',
+      ).attributes('aria-disabled'),
+    ).toBe('true');
 
     const missing = mountGroup({
       legs: [],

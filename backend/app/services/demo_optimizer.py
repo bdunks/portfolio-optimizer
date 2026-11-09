@@ -1036,8 +1036,13 @@ def run_summary(run: OptimizerRun) -> dict[str, object]:
     }
 
 
-def _leg_dict(session: Session, leg: RecommendationLeg) -> dict[str, object]:
-    security = session.get(Security, leg.security_id)
+def _leg_dict(
+    leg: RecommendationLeg,
+    ticker: str | None,
+    group_ids: list[str],
+    selected_lot_rows: list[RecommendationSelectedLot],
+) -> dict[str, object]:
+    """Adapt preloaded canonical-leg data to the response without performing I/O."""
     details = dict(leg.details)
     if isinstance(details.get("depends_on_leg_ids"), list):
         dependencies = list(details["depends_on_leg_ids"])
@@ -1045,9 +1050,8 @@ def _leg_dict(session: Session, leg: RecommendationLeg) -> dict[str, object]:
         dependencies = [details["depends_on_leg_id"]]
     else:
         dependencies = []
-    selected_lots = []
-    if leg.side == "SELL":
-        selected_lots = [
+    selected_lots = (
+        [
             {
                 "broker_lot_id": row.broker_lot_id,
                 "shares": str(row.shares),
@@ -1057,22 +1061,15 @@ def _leg_dict(session: Session, leg: RecommendationLeg) -> dict[str, object]:
                 "realized_pl_usd": str(row.realized_pl_usd),
                 "selected": row.selected,
             }
-            for row in session.scalars(
-                select(RecommendationSelectedLot)
-                .where(RecommendationSelectedLot.leg_id == leg.id)
-                .order_by(RecommendationSelectedLot.broker_lot_id)
-            ).all()
+            for row in selected_lot_rows
         ]
-    group_ids = session.scalars(
-        select(RecommendationGroupLeg.group_id)
-        .join(RecommendationGroup, RecommendationGroup.id == RecommendationGroupLeg.group_id)
-        .where(RecommendationGroupLeg.leg_id == leg.id)
-        .order_by(RecommendationGroup.rank)
-    ).all()
+        if leg.side == "SELL"
+        else []
+    )
     return {
         "leg_id": leg.id,
         "side": leg.side,
-        "ticker": security.ticker if security else None,
+        "ticker": ticker,
         "shares": str(leg.shares),
         "estimated_unit_price_usd": str(leg.estimated_unit_price_usd),
         "estimated_notional_usd": str(exact_product(leg.shares, leg.estimated_unit_price_usd)),
@@ -1081,13 +1078,13 @@ def _leg_dict(session: Session, leg: RecommendationLeg) -> dict[str, object]:
         "sequence": leg.sequence,
         "dependencies": dependencies,
         "selected": leg.shares > 0,
-        "group_ids": list(group_ids),
+        "group_ids": group_ids,
         "selected_lots": selected_lots,
         "details": details,
     }
 
 
-def _group_dict(session: Session, group: RecommendationGroup) -> dict[str, object]:
+def _group_dict(group: RecommendationGroup, leg_ids: list[str]) -> dict[str, object]:
     return {
         "group_id": group.id,
         "rank": group.rank,
@@ -1101,37 +1098,87 @@ def _group_dict(session: Session, group: RecommendationGroup) -> dict[str, objec
         "rejected": group.rejected,
         "note": group.note,
         "rejection_reason": group.rejection_reason,
-        "leg_ids": [leg.id for leg in _group_legs(session, group.id)],
+        "leg_ids": leg_ids,
         "warnings": [DEMO_WARNING, DEMO_WASH_WARNING, DEMO_RISK_WARNING],
     }
 
 
 def run_recommendations(session: Session, run: OptimizerRun) -> dict[str, object]:
     groups = session.scalars(
-        select(RecommendationGroup).where(RecommendationGroup.run_id == run.id).order_by(RecommendationGroup.rank)
-    ).all()
-    group_rank = {group.id: group.rank for group in groups}
-    legs = session.scalars(
-        select(RecommendationLeg)
-        .join(RecommendationGroupLeg, RecommendationGroupLeg.leg_id == RecommendationLeg.id)
-        .join(RecommendationGroup, RecommendationGroup.id == RecommendationGroupLeg.group_id)
+        select(RecommendationGroup)
         .where(RecommendationGroup.run_id == run.id)
-        .distinct()
-    ).unique().all()
+        .order_by(RecommendationGroup.rank)
+    ).all()
+    if not groups:
+        return {**run_summary(run), "groups": [], "consolidated_legs": []}
+
+    group_ids = [group.id for group in groups]
+    group_rank = {group.id: group.rank for group in groups}
+    memberships = session.scalars(
+        select(RecommendationGroupLeg).where(RecommendationGroupLeg.group_id.in_(group_ids))
+    ).all()
+    group_leg_ids: dict[str, list[str]] = {group.id: [] for group in groups}
+    leg_group_ids: dict[str, list[str]] = {}
+    for membership in memberships:
+        group_leg_ids[membership.group_id].append(membership.leg_id)
+        leg_group_ids.setdefault(membership.leg_id, []).append(membership.group_id)
+
+    legs = (
+        session.scalars(
+            select(RecommendationLeg)
+            .join(RecommendationGroupLeg, RecommendationGroupLeg.leg_id == RecommendationLeg.id)
+            .join(RecommendationGroup, RecommendationGroup.id == RecommendationGroupLeg.group_id)
+            .where(RecommendationGroup.run_id == run.id)
+            .distinct()
+        )
+        .unique()
+        .all()
+    )
+    legs_by_id = {leg.id: leg for leg in legs}
+    for linked_group_ids in leg_group_ids.values():
+        linked_group_ids.sort(key=lambda group_id: (group_rank.get(group_id, 0), group_id))
+    for linked_leg_ids in group_leg_ids.values():
+        linked_leg_ids.sort(key=lambda leg_id: (legs_by_id[leg_id].sequence, leg_id))
+
+    security_ids = sorted({leg.security_id for leg in legs})
+    securities = session.scalars(select(Security).where(Security.id.in_(security_ids))).all()
+    tickers_by_security_id = {security.id: security.ticker for security in securities}
+    sell_leg_ids = [leg.id for leg in legs if leg.side == "SELL"]
+    selected_lot_rows = (
+        session.scalars(
+            select(RecommendationSelectedLot)
+            .where(RecommendationSelectedLot.leg_id.in_(sell_leg_ids))
+            .order_by(RecommendationSelectedLot.leg_id, RecommendationSelectedLot.broker_lot_id)
+        ).all()
+        if sell_leg_ids
+        else []
+    )
+    selected_lots_by_leg: dict[str, list[RecommendationSelectedLot]] = {}
+    for row in selected_lot_rows:
+        selected_lots_by_leg.setdefault(row.leg_id, []).append(row)
+
     legs.sort(
         key=lambda leg: (
             leg.side == "BUY",
-            min((group_rank[group_id] for group_id in _leg_dict(session, leg)["group_ids"]), default=0),
+            min((group_rank[group_id] for group_id in leg_group_ids.get(leg.id, [])), default=0),
             leg.sequence,
             leg.id,
         )
     )
+    serialized_legs = [
+        _leg_dict(
+            leg,
+            tickers_by_security_id.get(leg.security_id),
+            leg_group_ids.get(leg.id, []),
+            selected_lots_by_leg.get(leg.id, []),
+        )
+        for leg in legs
+    ]
     return {
         **run_summary(run),
-        "groups": [_group_dict(session, group) for group in groups],
-        "consolidated_legs": [_leg_dict(session, leg) for leg in legs],
+        "groups": [_group_dict(group, group_leg_ids[group.id]) for group in groups],
+        "consolidated_legs": serialized_legs,
     }
-
 
 
 def get_run(session: Session, run_id: str) -> OptimizerRun:
@@ -1175,8 +1222,17 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
         "demo",
         "input_fingerprint",
         "source_checksum",
+        "orders_count",
+        "lots_sold_count",
+        "positions_exited_count",
+        "estimated_realized_st_usd",
+        "estimated_realized_lt_usd",
+        "cash_before_usd",
+        "cash_after_usd",
+        "portfolio_effects_json",
         "actionable",
         "group_id",
+        "group_ids",
         "rank",
         "selected",
         "rejected",
@@ -1185,6 +1241,8 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
         "side",
         "ticker",
         "shares",
+        "estimated_notional_usd",
+        "dependencies",
         "estimated_unit_price_usd",
         "broker_lot_id",
         "lot_shares",
@@ -1207,6 +1265,17 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
             "record_type": "metadata",
             "warnings": ";".join(metadata["warnings"]),
             "estimated_tax_benefit_status": response["estimated_tax_benefit_status"],
+            "orders_count": response["orders_count"],
+            "lots_sold_count": response["lots_sold_count"],
+            "positions_exited_count": response["positions_exited_count"],
+            "estimated_realized_st_usd": response["estimated_realized_st_usd"],
+            "estimated_realized_lt_usd": response["estimated_realized_lt_usd"],
+            "estimated_tax_benefit_usd": response["estimated_tax_benefit_usd"],
+            "cash_before_usd": response["cash_before_usd"],
+            "cash_after_usd": response["cash_after_usd"],
+            "portfolio_effects_json": json.dumps(
+                response["portfolio_effects"], sort_keys=True, separators=(",", ":"), default=str
+            ),
         }
     )
     groups_by_id = {group["group_id"]: group for group in response["groups"]}
@@ -1220,6 +1289,7 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
                     "estimated_tax_benefit_usd": "",
                     "estimated_tax_benefit_status": response["estimated_tax_benefit_status"],
                     "group_id": ";".join(leg["group_ids"]),
+                    "group_ids": json.dumps(leg["group_ids"], separators=(",", ":")),
                     "rank": ";".join(str(group["rank"]) for group in linked_groups),
                     "selected": leg["selected"],
                     "rejected": any(group["rejected"] for group in linked_groups) if leg["side"] == "SELL" else "",
@@ -1228,6 +1298,8 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
                     "side": leg["side"],
                     "ticker": leg["ticker"],
                     "shares": leg["shares"],
+                    "estimated_notional_usd": leg["estimated_notional_usd"],
+                    "dependencies": json.dumps(leg["dependencies"], separators=(",", ":")),
                     "estimated_unit_price_usd": leg["estimated_unit_price_usd"],
                     "broker_lot_id": lot["broker_lot_id"] if lot else "",
                     "lot_shares": lot["shares"] if lot else "",

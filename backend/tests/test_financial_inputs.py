@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import event, select
-from sqlalchemy.engine import Engine
+from query_test_support import count_selects
+from sqlalchemy import select
 
 from app.broker.fake import FakeBroker
 from app.db.models import Account, PolicyRevision, SyncState
@@ -23,6 +22,7 @@ from app.domain.allocation import (
     resolve_holding,
 )
 from app.domain.financial_inputs import FinancialInputs, financial_inputs_from_provenance
+from app.domain.portfolio_accounting import evaluate_portfolio
 from app.domain.trade_dates import (
     DEMO_PROPOSED_TRADE_DATE,
     classify_holding_period,
@@ -166,19 +166,6 @@ def _large_snapshot() -> BrokerSnapshot:
     return BrokerSnapshot.model_validate(snapshot_data)
 
 
-def _count_selects[T](engine: Engine, action: Callable[[], T]) -> tuple[T, int]:
-    statements: list[str] = []
-
-    def count(_conn: object, _cursor: object, statement: str, _parameters: object, _context: object, _many: bool) -> None:
-        if statement.lstrip().upper().startswith("SELECT"):
-            statements.append(statement)
-
-    event.listen(engine, "before_cursor_execute", count)
-    try:
-        result = action()
-    finally:
-        event.remove(engine, "before_cursor_execute", count)
-    return result, len(statements)
 
 def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tmp_path: Path) -> None:
     app = create_app(
@@ -187,12 +174,12 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
         seed_demo_data=True,
     )
     with TestClient(app, base_url="http://localhost") as client:
-        response, portfolio_selects = _count_selects(app.state.engine, lambda: client.get("/api/v1/portfolio"))
+        response, portfolio_selects = count_selects(app.state.engine, lambda: client.get("/api/v1/portfolio"))
         assert response.status_code == 200, response.text
         assert response.json()["position_count"] == 460
         assert portfolio_selects == 9
 
-        lot_page, lot_selects = _count_selects(
+        lot_page, lot_selects = count_selects(
             app.state.engine,
             lambda: client.get("/api/v1/lots?limit=500"),
         )
@@ -212,10 +199,24 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
                     session, account, state, policy, DEMO_PROPOSED_TRADE_DATE
                 )
 
-        inputs, full_input_selects = _count_selects(app.state.engine, load_inputs)
+        inputs, full_input_selects = count_selects(app.state.engine, load_inputs)
         assert len(inputs.positions) == 460
         assert len(inputs.lots) == 2500
         assert full_input_selects == 11
+        resolved, resolver_selects = count_selects(
+            app.state.engine,
+            lambda: [
+                resolve_holding(inputs.policy.allocation, security.identity)
+                for security in inputs.securities
+            ],
+        )
+        assert len(resolved) == len(inputs.securities)
+        assert resolver_selects == 0
+        accounting, accounting_selects = count_selects(
+            app.state.engine, lambda: evaluate_portfolio(inputs)
+        )
+        assert accounting_selects == 0
+        assert accounting.current == accounting.proposed
         restored = financial_inputs_from_provenance(
             inputs.to_provenance(), proposed_trade_date=DEMO_PROPOSED_TRADE_DATE
         )

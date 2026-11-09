@@ -9,12 +9,14 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from query_test_support import count_selects
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
 
@@ -33,6 +35,7 @@ from app.db.models import (
 from app.db.session import create_database_engine
 from app.main import create_app
 from app.schemas import BrokerSnapshot
+from app.services import demo_optimizer
 from app.services.demo_optimizer import _fingerprint
 
 
@@ -646,6 +649,108 @@ def test_shared_replacement_buy_pools_proceeds_and_counts_consolidated_orders(
     assert set(unchanged_buy["dependencies"]) == {leg["leg_id"] for leg in sells}
 
 
+def test_recommendation_response_bulk_loads_once_and_reopens_with_constant_queries(
+    demo_app: tuple[FastAPI, TestClient, FakeBroker, Path],
+    shared_replacement_app: tuple[FastAPI, TestClient, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    single_app, single_client, _, database_path = demo_app
+    shared_app, shared_client, _ = shared_replacement_app
+    single_run = _create_run(single_client)
+    shared_run = _create_run(shared_client)
+
+    serializer = Mock(wraps=demo_optimizer._leg_dict)
+    monkeypatch.setattr(demo_optimizer, "_leg_dict", serializer)
+    single_response, single_selects = count_selects(
+        single_app.state.engine,
+        lambda: single_client.get(f"/api/v1/optimizer/runs/{single_run['run_id']}/recommendations"),
+    )
+    shared_response, shared_selects = count_selects(
+        shared_app.state.engine,
+        lambda: shared_client.get(f"/api/v1/optimizer/runs/{shared_run['run_id']}/recommendations"),
+    )
+    assert single_response.status_code == 200, single_response.text
+    assert shared_response.status_code == 200, shared_response.text
+    single_body = single_response.json()
+    shared_body = shared_response.json()
+    assert len(single_body["groups"]) == 1
+    assert len(single_body["consolidated_legs"]) == 2
+    assert len(shared_body["groups"]) == 2
+    assert len(shared_body["consolidated_legs"]) == 3
+    assert single_selects == shared_selects == 6
+    assert [leg["side"] for leg in shared_body["consolidated_legs"]] == ["SELL", "SELL", "BUY"]
+    shared_sells = [leg for leg in shared_body["consolidated_legs"] if leg["side"] == "SELL"]
+    shared_buy = next(leg for leg in shared_body["consolidated_legs"] if leg["side"] == "BUY")
+    assert set(shared_buy["dependencies"]) == {leg["leg_id"] for leg in shared_sells}
+    for response_body in (single_body, shared_body):
+        assert len({leg["leg_id"] for leg in response_body["consolidated_legs"]}) == len(
+            response_body["consolidated_legs"]
+        )
+    serialized_ids = [call.args[0].id for call in serializer.call_args_list]
+    expected_ids = [
+        leg["leg_id"]
+        for response_body in (single_body, shared_body)
+        for leg in response_body["consolidated_legs"]
+    ]
+    assert sorted(serialized_ids) == sorted(expected_ids)
+
+    reopened_app = create_app(
+        database_url=f"sqlite:///{database_path}", broker=FakeBroker(), seed_demo_data=False
+    )
+    serializer.reset_mock()
+    with TestClient(reopened_app, base_url="http://localhost") as reopened_client:
+        reopened_response, reopened_selects = count_selects(
+            reopened_app.state.engine,
+            lambda: reopened_client.get(
+                f"/api/v1/optimizer/runs/{single_run['run_id']}/recommendations"
+            ),
+        )
+        assert reopened_response.status_code == 200, reopened_response.text
+        assert reopened_response.json() == single_body
+        assert reopened_selects == single_selects
+        assert serializer.call_count == len(single_body["consolidated_legs"])
+    reopened_app.state.engine.dispose()
+
+    single_group = single_body["groups"][0]
+    single_sell = next(leg for leg in single_body["consolidated_legs"] if leg["side"] == "SELL")
+    single_lot_ids = [lot["broker_lot_id"] for lot in single_sell["selected_lots"]]
+    serializer.reset_mock()
+    one_lot_selection, one_lot_selects = count_selects(
+        single_app.state.engine,
+        lambda: single_client.post(
+            f"/api/v1/optimizer/runs/{single_run['run_id']}/selection",
+            json={
+                "selected_group_ids": [single_group["group_id"]],
+                "selected_sell_lots": {single_group["group_id"]: single_lot_ids[:1]},
+            },
+        ),
+    )
+    all_lots_selection, all_lots_selects = count_selects(
+        single_app.state.engine,
+        lambda: single_client.post(
+            f"/api/v1/optimizer/runs/{single_run['run_id']}/selection",
+            json={
+                "selected_group_ids": [single_group["group_id"]],
+                "selected_sell_lots": {single_group["group_id"]: single_lot_ids},
+            },
+        ),
+    )
+    shared_selection, shared_selection_selects = count_selects(
+        shared_app.state.engine,
+        lambda: shared_client.post(
+            f"/api/v1/optimizer/runs/{shared_run['run_id']}/selection",
+            json={"selected_group_ids": [group["group_id"] for group in shared_body["groups"]]},
+        ),
+    )
+    assert one_lot_selection.status_code == all_lots_selection.status_code == 200
+    assert shared_selection.status_code == 200, shared_selection.text
+    assert one_lot_selects == all_lots_selects == 31
+    assert shared_selection_selects == 42
+    assert serializer.call_count == 2 * len(single_body["consolidated_legs"]) + len(
+        shared_body["consolidated_legs"]
+    )
+
+
 def test_removing_one_sell_lot_resizes_shared_buy_and_keeps_only_funding_dependencies(
     shared_replacement_app: tuple[FastAPI, TestClient, Path],
 ) -> None:
@@ -853,6 +958,49 @@ def test_export_metadata_lot_attribution_notes_activity_and_disabled_future_rout
     csv_export = client.get(f"/api/v1/optimizer/runs/{run_id}/export?format=csv")
     assert csv_export.status_code == 200
     rows = list(csv.DictReader(io.StringIO(csv_export.text)))
+    exported_run = export_body["run"]
+    metadata_row = rows[0]
+    assert metadata_row["record_type"] == "metadata"
+    assert metadata_row["proposed_trade_date"] == exported_run["proposed_trade_date"] == "2026-11-05"
+    for field in (
+        "orders_count",
+        "lots_sold_count",
+        "positions_exited_count",
+        "estimated_realized_st_usd",
+        "estimated_realized_lt_usd",
+        "estimated_tax_benefit_status",
+        "cash_before_usd",
+        "cash_after_usd",
+    ):
+        assert metadata_row[field] == str(exported_run[field])
+    assert metadata_row["portfolio_effects_json"] == json.dumps(
+        exported_run["portfolio_effects"], sort_keys=True, separators=(",", ":")
+    )
+    assert exported_run["estimated_tax_benefit_usd"] is None
+    assert metadata_row["estimated_tax_benefit_usd"] == ""
+
+    json_legs = {leg["leg_id"]: leg for leg in exported_run["consolidated_legs"]}
+    csv_leg_ids = {row["leg_id"] for row in rows[1:] if row["leg_id"]}
+    assert csv_leg_ids == set(json_legs)
+    assert len(json_legs) == exported_run["orders_count"]
+    for leg_id, leg in json_legs.items():
+        leg_rows = [row for row in rows[1:] if row["leg_id"] == leg_id]
+        assert {row["shares"] for row in leg_rows} == {leg["shares"]}
+        assert {row["estimated_notional_usd"] for row in leg_rows} == {leg["estimated_notional_usd"]}
+        assert {tuple(json.loads(row["dependencies"])) for row in leg_rows} == {tuple(leg["dependencies"])}
+        assert {tuple(json.loads(row["group_ids"])) for row in leg_rows} == {tuple(leg["group_ids"])}
+        if leg["side"] == "SELL":
+            csv_lots = {row["broker_lot_id"]: row for row in leg_rows if row["broker_lot_id"]}
+            expected_lots = {lot["broker_lot_id"]: lot for lot in leg["selected_lots"]}
+            assert set(csv_lots) == set(expected_lots)
+            for lot_id, lot in expected_lots.items():
+                assert csv_lots[lot_id]["lot_shares"] == lot["shares"]
+                assert csv_lots[lot_id]["acquired_date"] == lot["acquired_date"]
+                assert csv_lots[lot_id]["adjusted_basis_usd"] == lot["adjusted_basis_usd"]
+                assert csv_lots[lot_id]["st_lt"] == lot["st_lt"]
+                assert csv_lots[lot_id]["realized_pl_usd"] == lot["realized_pl_usd"]
+                assert csv_lots[lot_id]["lot_selected"] == str(lot["selected"])
+
     assert {row["broker_lot_id"] for row in rows if row["broker_lot_id"]} == exported_lot_ids
     assert all(row["run_id"] == run_id and row["solver_version"] == "DEMO" for row in rows)
 

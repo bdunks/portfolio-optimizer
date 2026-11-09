@@ -135,6 +135,35 @@ function demoRun(runId: string, warnings: string[] = []): OptimizerRecommendatio
   };
 }
 
+function runWithSelectedSellLots(
+  run: OptimizerRecommendationsResponse,
+  brokerLotIds: string[],
+  rejected = false,
+): OptimizerRecommendationsResponse {
+  return {
+    ...run,
+    groups: [
+      {
+        group_id: 'group-1',
+        selected: brokerLotIds.length > 0,
+        rejected,
+      },
+    ],
+    consolidated_legs:
+      brokerLotIds.length === 0
+        ? []
+        : [
+            {
+              side: 'SELL',
+              selected_lots: brokerLotIds.map((broker_lot_id) => ({
+                broker_lot_id,
+                selected: true,
+              })),
+            },
+          ],
+  } as unknown as OptimizerRecommendationsResponse;
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => {
@@ -185,7 +214,7 @@ function installDefaultApi(): ReturnType<typeof vi.fn<typeof fetch>> {
       return responsePromise({ active: null, drafts: [], superseded: [] });
     }
     if (url.pathname === '/api/v1/lots') {
-      return responsePromise({ items: [], total: 0, offset: 0, limit: 100 });
+      return responsePromise({ items: [], total: 0, offset: 0, limit: 100, source_generation: 1 });
     }
     if (url.pathname === '/api/v1/wash-sales') {
       return responsePromise({
@@ -243,7 +272,7 @@ describe('workspace store', () => {
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
-  it('publishes a successful generation-2 portfolio and marks failed policy cache stale', async () => {
+  it('publishes generation-2 portfolio and stales failed policy cache', async () => {
     const fetcher = vi.fn<typeof fetch>((input) => {
       const url = requestAddress(input);
       if (url.pathname === '/api/v1/portfolio/sync')
@@ -275,7 +304,13 @@ describe('workspace store', () => {
           503,
         );
       if (url.pathname === '/api/v1/lots')
-        return responsePromise({ items: [], total: 0, offset: 0, limit: 100 });
+        return responsePromise({
+          items: [],
+          total: 0,
+          offset: 0,
+          limit: 100,
+          source_generation: 1,
+        });
       if (url.pathname === '/api/v1/wash-sales')
         return responsePromise({
           demo: true,
@@ -360,7 +395,13 @@ describe('workspace store', () => {
         return responsePromise({ active: null, drafts: [], superseded: [] });
       if (url.pathname === '/api/v1/lots') {
         if (url.searchParams.get('ticker') === 'NEW')
-          return responsePromise({ items: [], total: 1, offset: 0, limit: 100 });
+          return responsePromise({
+            items: [],
+            total: 1,
+            offset: 0,
+            limit: 100,
+            source_generation: 1,
+          });
         return staleLots.promise;
       }
       if (url.pathname === '/api/v1/wash-sales')
@@ -386,7 +427,15 @@ describe('workspace store', () => {
     await Promise.all([newerPortfolio, newerLots]);
 
     stalePortfolio.resolve(jsonResponse(portfolioResponse('0.00')));
-    staleLots.resolve(jsonResponse({ items: [], total: 0, offset: 0, limit: 100 }));
+    staleLots.resolve(
+      jsonResponse({
+        items: [],
+        total: 0,
+        offset: 0,
+        limit: 100,
+        source_generation: 1,
+      }),
+    );
     await oldRefresh;
 
     expect(store.portfolio?.status).toBe('not_synced');
@@ -460,7 +509,7 @@ describe('workspace store', () => {
     expect(store.actionState.recalculateSelection.error?.code).toBe('invalid_selection');
   });
 
-  it('replaces annotated runs and matching summaries atomically after validating run IDs', async () => {
+  it('replaces annotated runs and summaries atomically after run ID validation', async () => {
     const initial = {
       ...demoRun('annotated-run'),
       orders_count: 2,
@@ -526,7 +575,7 @@ describe('workspace store', () => {
     expect(store.currentRunSummary).toBe(successfulSummary);
   });
 
-  it('serializes annotations and selection so authoritative group updates are not overwritten', async () => {
+  it('serializes annotations, selection, and lot intent through the review queue', async () => {
     const group = (groupId: string) => ({
       group_id: groupId,
       selected: false,
@@ -540,6 +589,7 @@ describe('workspace store', () => {
     } as unknown as OptimizerRecommendationsResponse;
     const firstAnnotationResponse = deferred<Response>();
     const requestOrder: string[] = [];
+    let intentBody: unknown;
     let serverRun = initial;
     const patchGroup = (
       run: OptimizerRecommendationsResponse,
@@ -568,12 +618,18 @@ describe('workspace store', () => {
         requestOrder.push('POST selection');
         return responsePromise(serverRun);
       }
+      if (url.pathname.endsWith('/lot-review-intent') && init?.method === 'POST') {
+        requestOrder.push('POST lot-review-intent');
+        intentBody = bodyJson(init);
+        return responsePromise(serverRun);
+      }
       return Promise.reject(new Error(`Unhandled fake route: ${init?.method} ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
     const store = useWorkspaceStore();
     store.currentRun = initial;
     store.currentRunView = 'current';
+    store.observeSourceGeneration(1);
 
     const firstAnnotation = store.annotateGroup('ordered-run', 'group-1', {
       note: 'confirmed one',
@@ -582,19 +638,219 @@ describe('workspace store', () => {
       note: 'confirmed two',
     });
     const selection = store.recalculateSelection({ selected_group_ids: ['group-2'] });
+    store.setLotReviewIntent('LOT-1', 'VB', 1, true);
+    const lotIntent = store.applyLotReviewIntent();
     expect(store.reviewMutationPending).toBe(true);
     await Promise.resolve();
     expect(requestOrder).toEqual(['PATCH group-1']);
 
     firstAnnotationResponse.resolve(jsonResponse(serverRun));
     await firstAnnotation;
-    await Promise.all([secondAnnotation, selection]);
+    await Promise.all([secondAnnotation, selection, lotIntent]);
 
-    expect(requestOrder).toEqual(['PATCH group-1', 'PATCH group-2', 'POST selection']);
+    expect(requestOrder).toEqual([
+      'PATCH group-1',
+      'PATCH group-2',
+      'POST selection',
+      'POST lot-review-intent',
+    ]);
+    expect(intentBody).toEqual({ source_generation: 1, broker_lot_ids: ['LOT-1'] });
     expect(store.currentRun?.groups.map((item) => item.note)).toEqual([
       'confirmed one',
       'confirmed two',
     ]);
+    expect(store.reviewMutationPending).toBe(false);
+  });
+
+  it('reconciles lot intent after selection and annotation responses', async () => {
+    const runId = 'lot-intent-reconcile';
+    let serverRun = runWithSelectedSellLots(demoRun(runId), ['LOT-1']);
+    const appliedBodies: unknown[] = [];
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      const url = requestAddress(input);
+      if (url.pathname.endsWith('/lot-review-intent') && init?.method === 'POST') {
+        appliedBodies.push(bodyJson(init));
+        serverRun = runWithSelectedSellLots(demoRun(runId), ['LOT-1']);
+        return responsePromise(serverRun);
+      }
+      if (url.pathname.endsWith('/selection') && init?.method === 'POST') {
+        serverRun = runWithSelectedSellLots(demoRun(runId), ['LOT-2']);
+        return responsePromise(serverRun);
+      }
+      if (url.pathname.endsWith('/recommendations/group-1') && init?.method === 'PATCH') {
+        const annotation = bodyJson(init) as { rejected?: boolean };
+        serverRun = runWithSelectedSellLots(
+          demoRun(runId),
+          annotation.rejected ? [] : ['LOT-1'],
+          annotation.rejected,
+        );
+        return responsePromise(serverRun);
+      }
+      return Promise.reject(new Error(`Unhandled fake route: ${init?.method} ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const store = useWorkspaceStore();
+    store.currentRun = serverRun;
+    store.currentRunView = 'current';
+    store.observeSourceGeneration(1);
+    store.setLotReviewIntent('LOT-1', 'VB', 1, true);
+
+    await store.applyLotReviewIntent();
+    expect(store.lotReviewIntentConfirmedRunId).toBe(runId);
+    expect(store.lotReviewIntentDirty).toBe(false);
+
+    await store.annotateGroup(runId, 'group-1', { note: 'same selected lots' });
+    expect(store.lotReviewIntentConfirmedRunId).toBe(runId);
+    expect(store.lotReviewIntentDirty).toBe(false);
+
+    await store.recalculateSelection({ selected_group_ids: [] });
+    expect(store.lotReviewIntentConfirmedRunId).toBeNull();
+    expect(store.lotReviewIntentDirty).toBe(true);
+    expect(store.lotReviewIntentNotice).toContain('Apply the requested set again');
+
+    await store.applyLotReviewIntent();
+    expect(store.lotReviewIntentConfirmedRunId).toBe(runId);
+    expect(store.lotReviewIntentDirty).toBe(false);
+    expect(appliedBodies).toEqual([
+      { source_generation: 1, broker_lot_ids: ['LOT-1'] },
+      { source_generation: 1, broker_lot_ids: ['LOT-1'] },
+    ]);
+
+    await store.annotateGroup(runId, 'group-1', { rejected: true });
+    expect(store.lotReviewIntentConfirmedRunId).toBeNull();
+    expect(store.lotReviewIntentDirty).toBe(true);
+    expect(store.lotReviewIntentNotice).toContain('Apply the requested set again');
+  });
+
+  it('makes staged lots reapplicable when a new current run replaces the confirmed run', async () => {
+    const previousRun = runWithSelectedSellLots(demoRun('previous-run'), ['LOT-1']);
+    const newRun = runWithSelectedSellLots(demoRun('new-run'), ['LOT-2']);
+    const newRunAfterIntent = runWithSelectedSellLots(demoRun('new-run'), ['LOT-1']);
+    const lotIntentPaths: string[] = [];
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      const url = requestAddress(input);
+      if (url.pathname === '/api/v1/optimizer/runs' && init?.method === 'POST')
+        return responsePromise(newRun, 201);
+      if (url.pathname.endsWith('/lot-review-intent') && init?.method === 'POST') {
+        lotIntentPaths.push(url.pathname);
+        return responsePromise(
+          url.pathname.includes('/new-run/') ? newRunAfterIntent : previousRun,
+        );
+      }
+      return Promise.reject(new Error(`Unhandled fake route: ${init?.method} ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const store = useWorkspaceStore();
+    store.currentRun = previousRun;
+    store.currentRunView = 'current';
+    store.observeSourceGeneration(1);
+    store.setLotReviewIntent('LOT-1', 'VB', 1, true);
+
+    await store.applyLotReviewIntent();
+    expect(store.lotReviewIntentConfirmedRunId).toBe('previous-run');
+    expect(store.lotReviewIntentDirty).toBe(false);
+
+    await store.runOptimizer();
+    expect(store.currentRun?.run_id).toBe('new-run');
+    expect(store.lotReviewIntentConfirmedRunId).toBeNull();
+    expect(store.lotReviewIntentDirty).toBe(true);
+
+    await store.applyLotReviewIntent();
+    expect(store.lotReviewIntentConfirmedRunId).toBe('new-run');
+    expect(store.lotReviewIntentDirty).toBe(false);
+    expect(lotIntentPaths).toEqual([
+      '/api/v1/optimizer/runs/previous-run/lot-review-intent',
+      '/api/v1/optimizer/runs/new-run/lot-review-intent',
+    ]);
+  });
+
+  it('does not confirm a lot intent superseded by edits while its request is in flight', async () => {
+    const runId = 'in-flight-lot-intent';
+    const response = deferred<Response>();
+    let submittedBody: unknown;
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      const url = requestAddress(input);
+      if (url.pathname.endsWith('/lot-review-intent') && init?.method === 'POST') {
+        submittedBody = bodyJson(init);
+        return response.promise;
+      }
+      return Promise.reject(new Error(`Unhandled fake route: ${init?.method} ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const store = useWorkspaceStore();
+    store.currentRun = demoRun(runId);
+    store.currentRunView = 'current';
+    store.observeSourceGeneration(1);
+    store.setLotReviewIntent('LOT-1', 'VB', 1, true);
+
+    const applying = store.applyLotReviewIntent();
+    await Promise.resolve();
+    expect(submittedBody).toEqual({ source_generation: 1, broker_lot_ids: ['LOT-1'] });
+    expect(store.lotReviewIntentConfirmedRunId).toBeNull();
+
+    store.setLotReviewIntent('LOT-1', 'VB', 1, false);
+    store.setLotReviewIntent('LOT-2', 'VB', 1, true);
+    response.resolve(jsonResponse(runWithSelectedSellLots(demoRun(runId), ['LOT-1'])));
+    await applying;
+
+    expect(store.lotReviewIntent.map((entry) => entry.broker_lot_id)).toEqual(['LOT-2']);
+    expect(store.lotReviewIntentConfirmedRunId).toBeNull();
+    expect(store.lotReviewIntentDirty).toBe(true);
+    expect(store.lotReviewIntentNotice).toContain('different SELL lots than the requested set');
+  });
+
+  it('invalidates requested lots on generation changes and treats null as unvalidated', () => {
+    const store = useWorkspaceStore();
+    store.currentRun = { ...demoRun('source-3'), source_generation: 3 };
+    store.currentRunView = 'current';
+    store.observeSourceGeneration(3);
+    store.setLotReviewIntent('LOT-3', 'VB', 3, true);
+
+    store.observeSourceGeneration(4);
+    expect(store.lotReviewIntent).toEqual([]);
+    expect(store.lotReviewIntentGeneration).toBeNull();
+    expect(store.lotReviewIntentNotice).toContain('Source generation changed to 4');
+    expect(store.currentRunView).toBe('stale');
+
+    store.setLotReviewIntent('LOT-4', 'VB', 4, true);
+    store.observeSourceGeneration(3); // Late page responses cannot roll the generation back.
+    expect(store.observedSourceGeneration).toBe(4);
+    expect(store.lotReviewIntent).toHaveLength(1);
+
+    store.observeSourceGeneration(null);
+    expect(store.observedSourceGeneration).toBeNull();
+    expect(store.lotReviewIntent).toEqual([]);
+    expect(store.lotReviewIntentNotice).toContain('source generation is unavailable');
+  });
+
+  it('discards a late lot-intent response when a different run opens', async () => {
+    const pendingIntentResponse = deferred<Response>();
+    const fetcher = vi.fn<typeof fetch>((input) => {
+      const url = requestAddress(input);
+      if (url.pathname.endsWith('/lot-review-intent')) return pendingIntentResponse.promise;
+      if (url.pathname === '/api/v1/optimizer/runs/saved')
+        return responsePromise({ run_id: 'saved' });
+      if (url.pathname === '/api/v1/optimizer/runs/saved/recommendations')
+        return responsePromise(demoRun('saved'));
+      return Promise.reject(new Error(`Unhandled fake route: ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const store = useWorkspaceStore();
+    store.currentRun = demoRun('intent-run');
+    store.currentRunView = 'current';
+    store.observeSourceGeneration(1);
+    store.setLotReviewIntent('LOT-1', 'VB', 1, true);
+
+    const applying = store.applyLotReviewIntent();
+    await Promise.resolve();
+    await store.openSavedRun('saved');
+    pendingIntentResponse.resolve(jsonResponse(demoRun('intent-run', ['late intent'])));
+
+    await expect(applying).rejects.toMatchObject({ code: 'run_context_changed' });
+    expect(store.currentRun?.run_id).toBe('saved');
+    expect(store.currentRunView).toBe('saved');
+    expect(store.lotReviewIntentConfirmedRunId).toBeNull();
+    expect(store.lotReviewIntentDirty).toBe(true);
     expect(store.reviewMutationPending).toBe(false);
   });
 
@@ -664,7 +920,13 @@ describe('workspace store', () => {
           superseded: [],
         });
       if (url.pathname === '/api/v1/lots')
-        return responsePromise({ items: [], total: 0, offset: 0, limit: 100 });
+        return responsePromise({
+          items: [],
+          total: 0,
+          offset: 0,
+          limit: 100,
+          source_generation: 1,
+        });
       if (url.pathname === '/api/v1/wash-sales')
         return responsePromise({
           demo: true,
@@ -720,7 +982,13 @@ describe('workspace store', () => {
       if (url.pathname === '/api/v1/policy')
         return responsePromise({ active: { id: 'policy-demo' }, drafts: [], superseded: [] });
       if (url.pathname === '/api/v1/lots')
-        return responsePromise({ items: [], total: 0, offset: 0, limit: 100 });
+        return responsePromise({
+          items: [],
+          total: 0,
+          offset: 0,
+          limit: 100,
+          source_generation: 1,
+        });
       if (url.pathname === '/api/v1/wash-sales')
         return responsePromise({
           demo: true,
@@ -749,7 +1017,7 @@ describe('workspace store', () => {
     expect(store.currentRunView).toBe('stale');
   });
 
-  it('distinguishes an unknown active policy from a confirmed absence of an active revision', async () => {
+  it('distinguishes unknown policy from confirmed absence', async () => {
     const fetcher = vi.fn<typeof fetch>((input, init) => {
       const url = requestAddress(input);
       if (url.pathname === '/api/v1/optimizer/runs' && init?.method === 'POST')
@@ -766,7 +1034,7 @@ describe('workspace store', () => {
     expect(store.currentRunView).toBe('stale');
   });
 
-  it('keeps a run current when saving an inactive policy draft leaves the active revision unchanged', async () => {
+  it('keeps a run current when an inactive draft leaves active policy unchanged', async () => {
     const fetcher = installDefaultApi();
     const activePolicy = { id: 'policy-demo', status: 'ACTIVE' };
     fetcher.mockImplementation((input, init) => {

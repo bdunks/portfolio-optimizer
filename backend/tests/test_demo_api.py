@@ -846,6 +846,111 @@ def test_rejecting_group_preserves_other_groups_existing_sell_lot_subset(
     app.state.engine.dispose()
 
 
+
+
+def test_generation_bound_lot_review_intent_changes_the_confirmed_demo_basket(
+    demo_app: tuple[FastAPI, TestClient, FakeBroker, Path],
+) -> None:
+    _, client, _, _ = demo_app
+    run = _create_run(client)
+    lot_page = client.get("/api/v1/lots?search=DEMO-VB-LOT-1&limit=1").json()
+    assert lot_page["source_generation"] == run["source_generation"]
+    assert lot_page["total"] == 1
+
+    requested_lot_id = lot_page["items"][0]["broker_lot_id"]
+    response = client.post(
+        f"/api/v1/optimizer/runs/{run['run_id']}/lot-review-intent",
+        json={"source_generation": lot_page["source_generation"], "broker_lot_ids": [requested_lot_id]},
+    )
+    assert response.status_code == 200, response.text
+    confirmed = response.json()
+    assert confirmed["demo"] is True
+    assert confirmed["actionable"] is False
+    assert confirmed["lots_sold_count"] == 1
+    assert confirmed["orders_count"] == 2
+    assert "order_approved" not in confirmed
+    group = confirmed["groups"][0]
+    assert group["selected"] is True
+    legs = {leg["leg_id"]: leg for leg in confirmed["consolidated_legs"]}
+    sell = next(leg for leg in legs.values() if leg["side"] == "SELL")
+    buy = next(leg for leg in legs.values() if leg["side"] == "BUY")
+    assert sell["shares"] == "1"
+    assert {lot["broker_lot_id"] for lot in sell["selected_lots"] if lot["selected"]} == {
+        requested_lot_id
+    }
+    assert buy["shares"] == "1"
+    assert buy["dependencies"] == [sell["leg_id"]]
+
+
+def test_lot_review_intent_stale_missing_unsupported_and_outside_fail_atomically(
+    demo_app: tuple[FastAPI, TestClient, FakeBroker, Path],
+) -> None:
+    app, client, _, _ = demo_app
+    run = _create_run(client)
+    run_id = run["run_id"]
+    before = client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations").json()
+
+    stale = client.post(
+        f"/api/v1/optimizer/runs/{run_id}/lot-review-intent",
+        json={"source_generation": run["source_generation"] + 1, "broker_lot_ids": ["DEMO-VB-LOT-1"]},
+    )
+    assert stale.status_code == 409
+    assert stale.json()["code"] == "stale_lot_review_intent"
+    assert stale.json()["details"]["basket_unchanged"] is True
+    assert client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations").json() == before
+
+    rejected = client.post(
+        f"/api/v1/optimizer/runs/{run_id}/lot-review-intent",
+        json={
+            "source_generation": run["source_generation"],
+            "broker_lot_ids": ["DEMO-VB-LOT-1", "NOT-A-LOT", "DEMO-AAPL-LOT-1"],
+        },
+    )
+    assert rejected.status_code == 422
+    assert rejected.json()["code"] == "lot_review_intent_rejected"
+    assert rejected.json()["details"]["basket_unchanged"] is True
+    reasons = {item["broker_lot_id"]: item["reason"] for item in rejected.json()["details"]["rejected_lots"]}
+    assert reasons == {
+        "NOT-A-LOT": "missing_current_lot",
+        "DEMO-AAPL-LOT-1": "outside_saved_demo_candidates",
+    }
+    assert client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations").json() == before
+
+    with app.state.session_factory.begin() as session:
+        persisted = session.get(OptimizerRun, run_id)
+        assert persisted is not None
+        persisted.solver_version = "PHASE2"
+    unsupported = client.post(
+        f"/api/v1/optimizer/runs/{run_id}/lot-review-intent",
+        json={"source_generation": run["source_generation"], "broker_lot_ids": ["DEMO-VB-LOT-1"]},
+    )
+    assert unsupported.status_code == 503
+    assert unsupported.json()["code"] == "lot_review_intent_unsupported"
+    assert unsupported.json()["details"]["basket_unchanged"] is True
+    assert client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations").json() == before
+
+
+def test_infeasible_lot_review_intent_preserves_the_confirmed_basket(
+    shared_replacement_app: tuple[FastAPI, TestClient, Path],
+) -> None:
+    _, client, _ = shared_replacement_app
+    run = _create_run(client)
+    run_id = run["run_id"]
+    before = client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations").json()
+    aapl_sell = next(
+        leg for leg in before["consolidated_legs"] if leg["side"] == "SELL" and leg["ticker"] == "AAPL"
+    )
+    requested_lot_id = next(lot["broker_lot_id"] for lot in aapl_sell["selected_lots"])
+
+    infeasible = client.post(
+        f"/api/v1/optimizer/runs/{run_id}/lot-review-intent",
+        json={"source_generation": run["source_generation"], "broker_lot_ids": [requested_lot_id]},
+    )
+    assert infeasible.status_code == 422
+    assert infeasible.json()["code"] == "selected_basket_infeasible"
+    assert infeasible.json()["details"]["basket_unchanged"] is True
+    assert client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations").json() == before
+
 def test_selection_rejects_unknown_or_empty_lot_subsets_and_stale_runs(
     demo_app: tuple[FastAPI, TestClient, FakeBroker, Path]
 ) -> None:

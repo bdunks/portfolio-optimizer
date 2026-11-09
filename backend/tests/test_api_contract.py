@@ -18,7 +18,9 @@ from app.schemas import (
     EtradeAuthStatusResponse,
     HealthResponse,
     LotPageResponse,
+    LotResponse,
     OptimizerExportJSONResponse,
+    OptimizerLotReviewIntentInput,
     OptimizerRecommendationsResponse,
     OptimizerRunInput,
     OptimizerRunResponse,
@@ -88,6 +90,47 @@ def test_openapi_has_named_phase_one_success_and_error_models() -> None:
             if success_schema.get("type") == "object":
                 assert success_schema.get("properties")
 
+    lots_operation = specification["paths"]["/api/v1/lots"]["get"]
+    lot_parameters = {parameter["name"]: parameter for parameter in lots_operation["parameters"]}
+    assert any(
+        branch.get("type") == "string" and branch.get("maxLength") == 128
+        for branch in lot_parameters["search"]["schema"]["anyOf"]
+    )
+    assert lot_parameters["sort_by"]["schema"]["enum"] == [
+        "ticker",
+        "broker_lot_id",
+        "acquired_date",
+        "remaining_shares",
+        "available_shares",
+        "adjusted_unit_basis_usd",
+        "adjusted_total_basis_usd",
+        "current_price_usd",
+        "unrealized_pl_usd",
+        "unrealized_pl_pct",
+        "term",
+        "sleeve_key",
+        "sub_sleeve_key",
+    ]
+    assert lot_parameters["sort_direction"]["schema"]["enum"] == ["asc", "desc"]
+    lot_intent = specification["paths"]["/api/v1/optimizer/runs/{run_id}/lot-review-intent"]["post"]
+    intent_schema = lot_intent["requestBody"]["content"]["application/json"]["schema"]
+    assert intent_schema["$ref"].endswith("/OptimizerLotReviewIntentInput")
+    assert "does not approve or place orders" in lot_intent["description"]
+    parsed_intent = OptimizerLotReviewIntentInput.model_validate(
+        {"source_generation": 1, "broker_lot_ids": ["LOT-1"]}
+    )
+    assert parsed_intent.source_generation == 1
+    exact_identity = OptimizerLotReviewIntentInput.model_validate(
+        {"source_generation": 1, "broker_lot_ids": [" LOT-1 "]}
+    )
+    assert exact_identity.broker_lot_ids == [" LOT-1 "]
+    with pytest.raises(ValidationError):
+        OptimizerLotReviewIntentInput.model_validate(
+            {"source_generation": 1, "broker_lot_ids": ["LOT-1", "LOT-1"]}
+        )
+    with pytest.raises(ValidationError):
+        OptimizerLotReviewIntentInput.model_validate({"source_generation": True, "broker_lot_ids": []})
+
     disabled = specification["paths"]["/api/v1/orders/{leg_id}/preview"]["post"]["responses"]
     assert "503" in disabled
     assert "200" not in disabled
@@ -96,6 +139,37 @@ def test_openapi_has_named_phase_one_success_and_error_models() -> None:
     exact_decimal = schemas["PolicySettingsInput"]["properties"]["target_retained_net_loss_usd"]
     assert exact_decimal["type"] == "string"
 
+
+
+
+def test_lot_response_preserves_the_exact_broker_lot_id() -> None:
+    lot = LotResponse.model_validate(
+        {
+            "ticker": "ABC",
+            "asset_type": "EQUITY",
+            "broker_lot_id": " LOT-1 ",
+            "acquired_date": "2025-01-01",
+            "remaining_shares": "1",
+            "available_shares": "1",
+            "adjusted_unit_basis_usd": "10.00",
+            "adjusted_total_basis_usd": "10.00",
+            "current_price_usd": None,
+            "unrealized_pl_usd": None,
+            "unrealized_pl_pct": None,
+            "source": "DEMO",
+            "as_of": "2026-11-05T00:00:00Z",
+            "term": "ST",
+            "sleeve_key": None,
+            "sub_sleeve_key": None,
+            "quality_flags": [],
+            "small_lot_cleanup_candidate": False,
+            "position_cleanup_candidate": True,
+            "whole_shares_available": "1",
+            "fractional_shares": "0",
+            "fractional_cleanup_unsupported": False,
+        }
+    )
+    assert lot.broker_lot_id == " LOT-1 "
 
 def test_unseeded_and_seeded_response_dtos_validate(
     tmp_path: Path, seeded_contract_client: tuple[FastAPI, TestClient]

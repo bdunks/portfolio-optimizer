@@ -20,6 +20,7 @@ export type WorkspaceAction =
   | 'openSavedRun'
   | 'recalculateSelection'
   | 'annotateGroup'
+  | 'applyLotReviewIntent'
   | 'savePolicyDraft'
   | 'activatePolicy'
   | 'exportRun';
@@ -39,6 +40,7 @@ const actionNames: WorkspaceAction[] = [
   'openSavedRun',
   'recalculateSelection',
   'annotateGroup',
+  'applyLotReviewIntent',
   'savePolicyDraft',
   'activatePolicy',
   'exportRun',

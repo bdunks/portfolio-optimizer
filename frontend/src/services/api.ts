@@ -8,6 +8,7 @@ import type {
   HealthResponse,
   LotPageResponse,
   OptimizerExportJSONResponse,
+  OptimizerLotReviewIntentInput,
   OptimizerRecommendationsResponse,
   OptimizerRunInput,
   OptimizerRunResponse,
@@ -296,6 +297,17 @@ export function createApiClient(fetchOverride?: typeof fetch) {
       body: selection,
     });
   }
+  async function applyLotReviewIntent(
+    runId: string,
+    intent: OptimizerLotReviewIntentInput,
+  ): Promise<OptimizerRecommendationsResponse> {
+    return jsonRequest({
+      operation: 'POST /api/v1/optimizer/runs/{run_id}/lot-review-intent',
+      path: `/api/v1/optimizer/runs/${encodeURIComponent(runId)}/lot-review-intent`,
+      method: 'POST',
+      body: intent,
+    });
+  }
 
   async function annotateGroup(
     runId: string,
@@ -304,7 +316,9 @@ export function createApiClient(fetchOverride?: typeof fetch) {
   ): Promise<OptimizerRecommendationsResponse> {
     return jsonRequest({
       operation: 'PATCH /api/v1/optimizer/runs/{run_id}/recommendations/{group_id}',
-      path: `/api/v1/optimizer/runs/${encodeURIComponent(runId)}/recommendations/${encodeURIComponent(groupId)}`,
+      path: `/api/v1/optimizer/runs/${encodeURIComponent(
+        runId,
+      )}/recommendations/${encodeURIComponent(groupId)}`,
       method: 'PATCH',
       body: annotation,
     });
@@ -384,6 +398,7 @@ export function createApiClient(fetchOverride?: typeof fetch) {
     getRun,
     getRecommendations,
     recalculateSelection,
+    applyLotReviewIntent,
     annotateGroup,
     exportRun,
     getWashSales,

@@ -10,7 +10,7 @@ from query_test_support import count_selects
 from sqlalchemy import select
 
 from app.broker.fake import FakeBroker
-from app.db.models import Account, PolicyRevision, SyncState
+from app.db.models import Account, CurrentTaxLot, PolicyRevision, SyncState
 from app.domain.allocation import (
     AllocationPolicy,
     AllocationSleeve,
@@ -186,7 +186,61 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
         assert lot_page.status_code == 200, lot_page.text
         assert lot_page.json()["total"] == 2500
         assert len(lot_page.json()["items"]) == 500
-        assert lot_selects == 8
+        assert lot_selects == 9
+
+        assert lot_page.json()["source_generation"] == 1
+
+        outside_loaded_page = client.get("/api/v1/lots?search=stk459-lot-04&limit=1")
+        assert outside_loaded_page.status_code == 200, outside_loaded_page.text
+        assert outside_loaded_page.json()["total"] == 1
+        assert outside_loaded_page.json()["items"][0]["broker_lot_id"] == "STK459-LOT-04"
+        assert outside_loaded_page.json()["source_generation"] == 1
+
+        tied_first = client.get(
+            "/api/v1/lots?search=LOT-05&sort_by=remaining_shares&sort_direction=desc&limit=2"
+        ).json()
+        tied_second = client.get(
+            "/api/v1/lots?search=LOT-05&sort_by=remaining_shares&sort_direction=desc&offset=2&limit=2"
+        ).json()
+        assert tied_first["total"] == tied_second["total"] == 200
+        assert [row["broker_lot_id"] for row in tied_first["items"]] == [
+            "STK000-LOT-05",
+            "STK001-LOT-05",
+        ]
+        assert [row["broker_lot_id"] for row in tied_second["items"]] == [
+            "STK002-LOT-05",
+            "STK003-LOT-05",
+        ]
+        empty_page = client.get("/api/v1/lots?search=no-such-lot&offset=4&limit=2").json()
+        assert empty_page["items"] == []
+        assert empty_page["total"] == 0
+        assert empty_page["offset"] == 4
+        assert empty_page["limit"] == 2
+
+        with app.state.session_factory.begin() as session:
+            close_lots = [
+                session.scalar(select(CurrentTaxLot).where(CurrentTaxLot.broker_lot_id == broker_lot_id))
+                for broker_lot_id in ("STK000-LOT-00", "STK000-LOT-01")
+            ]
+            assert all(lot is not None for lot in close_lots)
+            first_lot, second_lot = close_lots
+            assert first_lot is not None
+            assert second_lot is not None
+            first_lot.available_shares = Decimal("0.9999999999999999999999999999")
+            second_lot.available_shares = Decimal(1)
+            for broker_lot_id in ("STK000-LOT-02", "STK000-LOT-03", "STK000-LOT-04", "STK000-LOT-05"):
+                lot = session.scalar(select(CurrentTaxLot).where(CurrentTaxLot.broker_lot_id == broker_lot_id))
+                assert lot is not None
+                lot.available_shares = Decimal(0)
+        exact_numeric_page = client.get(
+            "/api/v1/lots?search=STK000-LOT-0&sort_by=available_shares&sort_direction=desc&limit=2"
+        ).json()
+        assert [row["broker_lot_id"] for row in exact_numeric_page["items"]] == [
+            "STK000-LOT-01",
+            "STK000-LOT-00",
+        ]
+        assert exact_numeric_page["items"][0]["available_shares"] == "1"
+        assert exact_numeric_page["items"][1]["available_shares"] == "0.9999999999999999999999999999"
         def load_inputs() -> FinancialInputs:
             with app.state.session_factory() as session:
                 account = session.get(Account, 1)

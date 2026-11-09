@@ -22,7 +22,7 @@ export type WorkspaceResourceFreshness = Record<WorkspaceResourceKey, ResourceFr
 type Perform = <T>(action: WorkspaceAction, operation: () => Promise<T>) => Promise<T>;
 
 type WorkspaceResourceCallbacks = {
-  observeSourceGeneration: (generation: number) => void;
+  observeSourceGeneration: (generation: number | null) => void;
   observeActivePolicyRevision: (revisionId: string | null) => void;
 };
 
@@ -112,9 +112,9 @@ export function createWorkspaceResources(
       () => portfolio.value !== null,
       (value) => {
         portfolio.value = value;
-        if (value.status === 'ready' && value.sync.complete) {
-          callbacks.observeSourceGeneration(value.sync.generation);
-        }
+        callbacks.observeSourceGeneration(
+          value.status === 'ready' && value.sync.complete ? value.sync.generation : null,
+        );
       },
     );
   }
@@ -142,6 +142,7 @@ export function createWorkspaceResources(
       () => lots.value !== null,
       (value) => {
         lots.value = value;
+        callbacks.observeSourceGeneration(value.source_generation);
       },
     );
   }

@@ -4,7 +4,16 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StrictInt,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
 
 
 def parse_exact_decimal(value: object) -> Decimal:
@@ -240,6 +249,29 @@ class OptimizerSelectionInput(StrictModel):
         return value
 
 
+class OptimizerLotReviewIntentInput(StrictModel):
+    """Generation-bound desired sell-lot basket; this is not order approval."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
+
+    source_generation: StrictInt = Field(
+        ge=0,
+        description="Source sync generation the requested lots were reviewed against.",
+    )
+    broker_lot_ids: list[StrictStr] = Field(
+        max_length=500,
+        description="Complete desired SELL-lot set for the confirmed DEMO basket; an empty list clears it.",
+    )
+
+    @field_validator("broker_lot_ids")
+    @classmethod
+    def valid_unique_broker_lot_ids(cls, value: list[str]) -> list[str]:
+        if any(not broker_lot_id or len(broker_lot_id) > 128 for broker_lot_id in value):
+            raise ValueError("broker lot IDs must contain 1 to 128 characters")
+        if len(set(value)) != len(value):
+            raise ValueError("broker_lot_ids must not contain duplicates")
+        return value
+
+
 class RecommendationAnnotationInput(StrictModel):
     note: str | None = Field(
         default=None,
@@ -417,6 +449,7 @@ PortfolioResponse = PortfolioNotSyncedResponse | PortfolioReadyResponse
 
 
 class LotResponse(StrictModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
     ticker: str
     asset_type: Literal["EQUITY", "ETF"]
     broker_lot_id: str
@@ -446,7 +479,9 @@ class LotPageResponse(StrictModel):
     total: int
     offset: int
     limit: int
-
+    source_generation: int | None = Field(
+        description="Complete current sync generation for the lots in this query, or null when unavailable."
+    )
 
 class PolicySettingsResponse(StrictModel):
     short_term_tax_rate: str | None

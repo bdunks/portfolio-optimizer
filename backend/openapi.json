@@ -680,6 +680,18 @@
             "title": "Offset",
             "type": "integer"
           },
+          "source_generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Complete current sync generation for the lots in this query, or null when unavailable.",
+            "title": "Source Generation"
+          },
           "total": {
             "title": "Total",
             "type": "integer"
@@ -689,7 +701,8 @@
           "items",
           "total",
           "offset",
-          "limit"
+          "limit",
+          "source_generation"
         ],
         "title": "LotPageResponse",
         "type": "object"
@@ -973,6 +986,33 @@
           "frozen_display_context"
         ],
         "title": "OptimizerExportMetadataResponse",
+        "type": "object"
+      },
+      "OptimizerLotReviewIntentInput": {
+        "additionalProperties": false,
+        "description": "Generation-bound desired sell-lot basket; this is not order approval.",
+        "properties": {
+          "broker_lot_ids": {
+            "description": "Complete desired SELL-lot set for the confirmed DEMO basket; an empty list clears it.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "title": "Broker Lot Ids",
+            "type": "array"
+          },
+          "source_generation": {
+            "description": "Source sync generation the requested lots were reviewed against.",
+            "minimum": 0.0,
+            "title": "Source Generation",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source_generation",
+          "broker_lot_ids"
+        ],
+        "title": "OptimizerLotReviewIntentInput",
         "type": "object"
       },
       "OptimizerRecommendationsResponse": {
@@ -4103,6 +4143,66 @@
             }
           },
           {
+            "description": "Case-insensitive substring search across ticker and broker lot ID before pagination; combines with other filters.",
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Case-insensitive substring search across ticker and broker lot ID before pagination; combines with other filters.",
+              "title": "Search"
+            }
+          },
+          {
+            "description": "Account-wide sort field; ties use ticker and broker lot ID ascending, with null values last.",
+            "in": "query",
+            "name": "sort_by",
+            "required": false,
+            "schema": {
+              "default": "acquired_date",
+              "description": "Account-wide sort field; ties use ticker and broker lot ID ascending, with null values last.",
+              "enum": [
+                "ticker",
+                "broker_lot_id",
+                "acquired_date",
+                "remaining_shares",
+                "available_shares",
+                "adjusted_unit_basis_usd",
+                "adjusted_total_basis_usd",
+                "current_price_usd",
+                "unrealized_pl_usd",
+                "unrealized_pl_pct",
+                "term",
+                "sleeve_key",
+                "sub_sleeve_key"
+              ],
+              "title": "Sort By",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort_direction",
+            "required": false,
+            "schema": {
+              "default": "asc",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "title": "Sort Direction",
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "offset",
             "required": false,
@@ -4521,6 +4621,116 @@
           }
         },
         "summary": "Export Optimizer Run"
+      }
+    },
+    "/api/v1/optimizer/runs/{run_id}/lot-review-intent": {
+      "post": {
+        "description": "Atomically replace the confirmed DEMO basket with the requested broker lots. The source generation must match; requests are rejected without mutation when unsupported or infeasible. This request does not approve or place orders.",
+        "operationId": "optimizer_run_lot_review_intent_api_v1_optimizer_runs__run_id__lot_review_intent_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OptimizerLotReviewIntentInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptimizerRecommendationsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Optimizer Run Lot Review Intent"
       }
     },
     "/api/v1/optimizer/runs/{run_id}/recommendations": {

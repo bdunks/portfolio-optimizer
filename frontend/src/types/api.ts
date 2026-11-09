@@ -118,6 +118,7 @@ export type LotPageResponse = {
   "total": number;
   "offset": number;
   "limit": number;
+  "source_generation": number | null;
 };
 
 export type LotResponse = {
@@ -163,6 +164,11 @@ export type OptimizerExportMetadataResponse = {
   "source_checksum": string | null;
   "warnings": Array<string>;
   "frozen_display_context": FrozenRunDisplayContextResponse;
+};
+
+export type OptimizerLotReviewIntentInput = {
+  "source_generation": number;
+  "broker_lot_ids": Array<string>;
 };
 
 export type OptimizerRecommendationsResponse = {
@@ -655,6 +661,9 @@ export interface ApiOperations {
   "ticker"?: string | null;
   "term"?: string | null;
   "fractional"?: boolean | null;
+  "search"?: string | null;
+  "sort_by"?: "ticker" | "broker_lot_id" | "acquired_date" | "remaining_shares" | "available_shares" | "adjusted_unit_basis_usd" | "adjusted_total_basis_usd" | "current_price_usd" | "unrealized_pl_usd" | "unrealized_pl_pct" | "term" | "sleeve_key" | "sub_sleeve_key";
+  "sort_direction"?: "asc" | "desc";
   "offset"?: number;
   "limit"?: number;
 };
@@ -795,6 +804,23 @@ export interface ApiOperations {
 };
     query: Record<never, never>;
     request: OptimizerSelectionInput;
+    responses: {
+      "200": OptimizerRecommendationsResponse;
+      "403": ErrorEnvelope;
+      "404": ErrorEnvelope;
+      "409": ErrorEnvelope;
+      "422": ErrorEnvelope;
+      "500": ErrorEnvelope;
+      "502": ErrorEnvelope;
+      "503": ErrorEnvelope;
+    };
+  };
+  "POST /api/v1/optimizer/runs/{run_id}/lot-review-intent": {
+    path: {
+  "run_id": string;
+};
+    query: Record<never, never>;
+    request: OptimizerLotReviewIntentInput;
     responses: {
       "200": OptimizerRecommendationsResponse;
       "403": ErrorEnvelope;

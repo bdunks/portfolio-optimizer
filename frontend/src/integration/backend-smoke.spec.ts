@@ -219,7 +219,7 @@ afterEach(() => {
 });
 
 describe('isolated local backend smoke', () => {
-  it('mounts all six API pages and exercises persisted DEMO policy, runs, selection, exports, and saved-run reopening', async () => {
+  it('uses isolated DEMO lot intent and review workflows', async () => {
     const tempDirectory = mkdtempSync(join(tmpdir(), 'portfolio-optimizer-stage-e-'));
     const databasePath = join(tempDirectory, 'isolated-demo.sqlite3');
     const port = await availableLoopbackPort();
@@ -232,6 +232,7 @@ describe('isolated local backend smoke', () => {
     const downloads: Blob[] = [];
     const requests: string[] = [];
     const annotationBodies: string[] = [];
+    const lotIntentBodies: string[] = [];
     let holdNextDraftWrite = false;
     const releaseWrite = {
       draft: null as (() => void) | null,
@@ -258,6 +259,12 @@ describe('isolated local backend smoke', () => {
           typeof init?.body === 'string'
         )
           annotationBodies.push(init.body);
+        if (
+          method === 'POST' &&
+          address.pathname.endsWith('/lot-review-intent') &&
+          typeof init?.body === 'string'
+        )
+          lotIntentBodies.push(init.body);
         if (
           method === 'POST' &&
           address.pathname === '/api/v1/policy/drafts' &&
@@ -792,6 +799,67 @@ describe('isolated local backend smoke', () => {
       ]);
       assertCanonicalLegGraph(store.currentRun!);
 
+      await visit(workspace, '/lots');
+      const vbLotInput = 'input[aria-label="Request VB lot DEMO-VB-LOT-1"]';
+      await waitFor(() => workspace!.wrapper.find(vbLotInput).exists(), 'current VB lot page');
+      await workspace.wrapper.get(vbLotInput).setValue(true);
+      const applyLotIntent = () =>
+        workspace!.wrapper
+          .findAll('button')
+          .find((button) => button.text().includes('Apply complete set to current DEMO run'));
+      expect(applyLotIntent()).toBeDefined();
+      await applyLotIntent()!.trigger('click');
+      await flushPromises();
+      await waitFor(
+        () =>
+          Boolean(
+            useWorkspaceStore(workspace!.pinia)
+              .currentRun?.consolidated_legs.find((leg) => leg.side === 'SELL')
+              ?.selected_lots.some((lot) => lot.broker_lot_id === 'DEMO-VB-LOT-1' && lot.selected),
+          ),
+        'successful full lot-intent DEMO re-solve',
+      );
+      expect(JSON.parse(lotIntentBodies[0]!)).toEqual({
+        source_generation: run!.source_generation,
+        broker_lot_ids: ['DEMO-VB-LOT-1'],
+      });
+      const confirmedAfterValidIntent = store.currentRun;
+      await waitFor(() => !store.reviewMutationPending, 'lot intent mutation queue release');
+
+      const aaplLotInput = 'input[aria-label="Request AAPL lot DEMO-AAPL-LOT-1"]';
+      await waitFor(() => workspace!.wrapper.find(aaplLotInput).exists(), 'AAPL current lot row');
+      await workspace.wrapper.get(aaplLotInput).setValue(true);
+      await waitFor(
+        () => store.lotReviewIntent.length === 2 && !store.reviewMutationPending,
+        'complete desired set after adding unsupported AAPL lot',
+      );
+      const rejectedApplyButton = applyLotIntent();
+      expect(rejectedApplyButton).toBeDefined();
+      await rejectedApplyButton!.trigger('click');
+      await flushPromises();
+      await waitFor(
+        () => Boolean(store.actionState.applyLotReviewIntent.error),
+        'atomic unsupported lot-intent rejection',
+      );
+      expect(JSON.parse(lotIntentBodies[1]!)).toEqual({
+        source_generation: run!.source_generation,
+        broker_lot_ids: ['DEMO-VB-LOT-1', 'DEMO-AAPL-LOT-1'],
+      });
+      expect(store.currentRun).toEqual(confirmedAfterValidIntent);
+      expect(workspace.wrapper.text()).toContain('lot_review_intent_rejected');
+      expect(workspace.wrapper.text()).toContain('outside_saved_demo_candidates');
+      expect(workspace.wrapper.text()).toContain('rejected the complete request atomically');
+      const persistedRecommendations = (await (
+        await fetch(`${backendBase}/api/v1/optimizer/runs/${run!.run_id}/recommendations`)
+      ).json()) as OptimizerRecommendationsResponse;
+      expect(
+        persistedRecommendations.consolidated_legs
+          .filter((leg) => leg.side === 'SELL')
+          .flatMap((leg) =>
+            leg.selected_lots.filter((lot) => lot.selected).map((lot) => lot.broker_lot_id),
+          ),
+      ).toEqual(['DEMO-VB-LOT-1']);
+      await visit(workspace, '/recommendations');
       Object.defineProperty(URL, 'createObjectURL', {
         configurable: true,
         value: (blob: Blob) => {

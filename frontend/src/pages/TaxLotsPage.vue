@@ -4,7 +4,7 @@
       eyebrow="Portfolio inventory"
       title="Tax Lots"
       title-id="lots-title"
-      subtitle="API-reported lot details grouped by security. Review marking is local to this page and does not create or approve a trade."
+      subtitle="Account-wide lot search; complete-set intent for a current DEMO run only."
     >
       <template #actions>
         <button type="button" class="primary-button" :disabled="isLoading" @click="refreshLots">
@@ -26,7 +26,7 @@
 
     <WorkspaceFilterPanel label="Tax lot filters" class="filter-panel" @submit="applyFilters">
       <label>
-        <span>Search this loaded page</span>
+        <span>Search all account lots</span>
         <input v-model="search" type="search" placeholder="Ticker or broker lot ID" />
       </label>
       <label>
@@ -54,6 +54,33 @@
           <option :value="500">500</option>
         </select>
       </label>
+      <label>
+        <span>Sort API results by</span>
+        <select v-model="sortKey" :disabled="isLoading" @change="applyFilters">
+          <option value="ticker">Security</option>
+          <option value="broker_lot_id">Broker lot ID</option>
+          <option value="acquired_date">Acquired date</option>
+          <option value="remaining_shares">Remaining shares</option>
+          <option value="available_shares">Available shares</option>
+          <option value="adjusted_unit_basis_usd">Unit basis</option>
+          <option value="adjusted_total_basis_usd">Total basis</option>
+          <option value="current_price_usd">Current price</option>
+          <option value="unrealized_pl_usd">Unrealized P/L (USD)</option>
+          <option value="unrealized_pl_pct">Unrealized P/L (%)</option>
+          <option value="term">Holding term</option>
+          <option value="sleeve_key">Sleeve</option>
+          <option value="sub_sleeve_key">Sub-sleeve</option>
+        </select>
+      </label>
+      <button
+        type="button"
+        class="icon-button"
+        :disabled="isLoading"
+        :aria-label="sortDirection === 'asc' ? 'Sort ascending' : 'Sort descending'"
+        @click="toggleSortDirection"
+      >
+        {{ sortDirection === 'asc' ? 'Ascending' : 'Descending' }}
+      </button>
       <button type="submit" class="secondary-button" :disabled="isLoading">
         Apply API filters
       </button>
@@ -77,29 +104,12 @@
       <div class="results-heading">
         <p>
           API page {{ pageNumber }} · {{ store.lots.items.length }} rows returned ·
-          {{ store.lots.total }} rows match the API filters. Search applies to this loaded page
-          only.
+          {{ store.lots.total }} rows match the account-wide filters before pagination.
         </p>
-        <label class="sort-control">
-          <span>Sort loaded rows by</span>
-          <select v-model="sortKey">
-            <option value="ticker">Security</option>
-            <option value="acquired_date">Acquired date</option>
-            <option value="broker_lot_id">Broker lot ID</option>
-          </select>
-          <button
-            type="button"
-            class="icon-button"
-            :aria-label="sortDirection === 'asc' ? 'Sort ascending' : 'Sort descending'"
-            @click="toggleSortDirection"
-          >
-            {{ sortDirection === 'asc' ? 'Ascending' : 'Descending' }}
-          </button>
-        </label>
       </div>
 
       <WorkspaceEmptyState v-if="filteredLots.length === 0" title="No matching lots">
-        No lots on this API page match the search text.
+        No lots on this API page match the account-wide filters.
       </WorkspaceEmptyState>
       <div v-else class="security-groups">
         <section
@@ -122,7 +132,7 @@
               </caption>
               <thead>
                 <tr>
-                  <th scope="col">Review</th>
+                  <th scope="col">Intent</th>
                   <th scope="col">Broker lot ID</th>
                   <th scope="col">Acquired</th>
                   <th scope="col">Remaining / available shares</th>
@@ -135,17 +145,23 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="lot in group.lots" :key="lotReviewKey(lot)">
+                <tr v-for="lot in group.lots" :key="lot.broker_lot_id">
                   <td>
                     <label class="review-toggle">
                       <input
                         type="checkbox"
-                        :checked="reviewSelection.has(lotReviewKey(lot))"
-                        :aria-label="`Mark ${lot.ticker} lot ${lot.broker_lot_id} for review`"
-                        @change="changeReviewSelection(lot, $event)"
+                        :checked="requestedLotIds.has(lot.broker_lot_id)"
+                        :disabled="!canChangeLotIntent"
+                        :aria-label="`Request ${lot.ticker} lot ${lot.broker_lot_id}`"
+                        @change="changeLotIntent(lot, $event)"
                       />
-                      <span>Mark</span>
+                      <span>
+                        {{ requestedLotIds.has(lot.broker_lot_id) ? 'Requested' : 'Request' }}
+                      </span>
                     </label>
+                    <small v-if="confirmedLotIds.has(lot.broker_lot_id)" class="sub-value">
+                      Backend-confirmed in loaded DEMO run
+                    </small>
                   </td>
                   <th scope="row" class="lot-id">
                     <BrokerLotIdentity :broker-lot-id="lot.broker_lot_id" />
@@ -201,25 +217,112 @@
       :offset="store.lots.offset"
       :limit="store.lots.limit"
       :total="store.lots.total"
-      :pending="isLoading"
+      :pending="isLoading || filterDraftChanged"
       label="Tax lot API pages"
       @page="loadLots"
     />
 
     <section class="review-summary" aria-labelledby="review-title">
-      <h2 id="review-title">Marked for review · {{ reviewSelection.size }}</h2>
+      <h2 id="review-title">Requested lot intent · {{ store.lotReviewIntent.length }}</h2>
       <p>
-        These local marks are a review aid only; they do not select, recommend, or execute a trade.
+        This is a complete replacement set, not an additive change: apply submits every requested
+        broker lot ID, and an explicitly empty set clears the DEMO recommendation basket. Requested
+        intent is not backend-confirmed selection and neither one approves an order. Only a
+        successful response updates the confirmed run; the endpoint re-solves saved DEMO candidates
+        only and does not create candidates or a run.
       </p>
-      <ul v-if="reviewSelection.size > 0">
-        <li v-for="[key, ticker, lotId] in reviewEntries" :key="key">
-          {{ ticker }} · {{ lotId }}
-          <button type="button" class="text-button" @click="removeReviewMark(key)">
-            Remove mark
+      <ApiActionError
+        :error="store.actionState.applyLotReviewIntent.error"
+        title="Requested lot set was not applied"
+      />
+      <p
+        v-if="
+          store.lotReviewIntentGeneration !== null &&
+          store.lotReviewIntentConfirmedRunId === store.currentRun?.run_id &&
+          !store.lotReviewIntentDirty &&
+          !store.actionState.applyLotReviewIntent.error
+        "
+        class="state-message"
+        role="status"
+      >
+        The loaded DEMO run currently selects exactly this requested set. This is recommendation
+        state only, not order approval.
+      </p>
+      <p v-if="store.lotReviewIntentNotice" class="state-message" role="status">
+        {{ store.lotReviewIntentNotice }}
+      </p>
+      <p v-if="store.lots?.source_generation === null" class="state-message" role="status">
+        This lot page has no source generation. It is unvalidated; lot intent cannot be submitted.
+      </p>
+      <p v-else-if="store.lots && !lotPageGenerationMatches" class="state-message" role="status">
+        This page is from source generation {{ store.lots.source_generation }}, but the workspace
+        currently observes generation {{ store.observedSourceGeneration ?? 'unavailable' }}. Refresh
+        lots before marking or submitting any set.
+      </p>
+      <p v-if="basketUnchanged" class="state-message" role="status">
+        The API rejected the complete request atomically. Backend-confirmed selection is unchanged.
+      </p>
+      <ul v-if="rejectedLotReasons.length" aria-label="Requested lot rejection reasons">
+        <li v-for="entry in rejectedLotReasons" :key="entry.broker_lot_id">
+          {{ entry.broker_lot_id }}: {{ rejectionReasonLabel(entry.reason) }} ({{ entry.reason }})
+        </li>
+      </ul>
+      <p v-if="store.currentRunView === 'stale'" class="state-message" role="status">
+        The loaded DEMO run is stale. Create a current DEMO run before applying intent; this page
+        will not silently create or merge one.
+      </p>
+      <p v-else-if="!currentRunIsUsable" class="state-message" role="status">
+        No current DEMO run is available. Create a run in Overview or Recommendations, then return
+        here. Saved runs remain read-only.
+      </p>
+      <p v-else class="sub-value">
+        Target run {{ store.currentRun?.run_id }} · source generation
+        {{ store.currentRun?.source_generation }}
+      </p>
+      <ul v-if="store.lotReviewIntent.length > 0">
+        <li v-for="entry in store.lotReviewIntent" :key="entry.broker_lot_id">
+          {{ entry.ticker }} · {{ entry.broker_lot_id }} · generation {{ entry.source_generation }}
+          <button
+            type="button"
+            class="text-button"
+            :disabled="store.reviewMutationPending"
+            @click="removeRequestedLot(entry)"
+          >
+            Remove from requested set
           </button>
         </li>
       </ul>
-      <p v-else class="sub-value">No lots marked for review.</p>
+      <p v-else class="sub-value">
+        Requested set is empty; clearing is explicit and must be applied.
+      </p>
+      <p class="sub-value">
+        Backend-confirmed selected SELL lot IDs in the loaded run:
+        {{ confirmedBrokerLotIds.join(', ') || 'none' }}
+      </p>
+      <div class="intent-actions">
+        <button
+          type="button"
+          class="secondary-button"
+          :disabled="!canChangeLotIntent"
+          @click="clearRequestedLots"
+        >
+          Explicitly request an empty set
+        </button>
+        <button
+          type="button"
+          class="primary-button"
+          :disabled="!canApplyLotIntent"
+          @click="applyRequestedLots"
+        >
+          {{
+            store.actionState.applyLotReviewIntent.pending
+              ? 'Applying complete set…'
+              : store.lotReviewIntent.length === 0
+                ? 'Apply empty set and clear confirmed basket'
+                : 'Apply complete set to current DEMO run'
+          }}
+        </button>
+      </div>
     </section>
   </section>
 </template>
@@ -235,15 +338,14 @@ import WorkspaceFilterPanel from '@/components/WorkspaceFilterPanel.vue';
 import WorkspacePagination from '@/components/WorkspacePagination.vue';
 import WorkspaceTableFrame from '@/components/WorkspaceTableFrame.vue';
 import { getPaginationMetadata } from '@/components/workspace-pagination-state';
-import { formatPercent, formatUsd } from '@/utils/display-values';
-
 import ResourceFreshnessNotice from '@/components/ResourceFreshnessNotice.vue';
 import { useWorkspaceStore } from '@/stores/workspace-store';
 import type { LotQuery } from '@/services/api';
 import type { LotResponse } from '@/types/api';
+import { formatPercent, formatUsd } from '@/utils/display-values';
 
 const store = useWorkspaceStore();
-const search = ref('');
+const search = ref(store.lotFilters.search ?? '');
 const termFilter = ref(store.lotFilters.term ?? '');
 const fractionalFilter = ref(
   store.lotFilters.fractional === undefined || store.lotFilters.fractional === null
@@ -251,31 +353,53 @@ const fractionalFilter = ref(
     : String(store.lotFilters.fractional),
 );
 const pageLimit = ref(store.lotFilters.limit ?? 100);
-const sortKey = ref<'ticker' | 'acquired_date' | 'broker_lot_id'>('ticker');
-const sortDirection = ref<'asc' | 'desc'>('asc');
-const reviewSelection = ref(new Map<string, { ticker: string; lotId: string }>());
+const sortKey = ref<NonNullable<LotQuery['sort_by']>>(store.lotFilters.sort_by ?? 'ticker');
+const sortDirection = ref<NonNullable<LotQuery['sort_direction']>>(
+  store.lotFilters.sort_direction ?? 'asc',
+);
 const isLoading = computed(() => store.actionState.loadLots.pending);
 const pagination = computed(() => {
   const page = store.lots;
   return getPaginationMetadata(page?.offset ?? 0, page?.limit ?? 1, page?.total ?? 0);
 });
 const pageNumber = computed(() => pagination.value.pageNumber);
-
-const filteredLots = computed(() => {
-  const needle = search.value.trim().toLocaleLowerCase();
-  const rows = store.lots?.items ?? [];
-  const filtered = needle
-    ? rows.filter((lot) =>
-        `${lot.ticker} ${lot.broker_lot_id}`.toLocaleLowerCase().includes(needle),
-      )
-    : rows;
-  const direction = sortDirection.value === 'asc' ? 1 : -1;
-  return [...filtered].sort((left, right) => {
-    const a = left[sortKey.value];
-    const b = right[sortKey.value];
-    return direction * a.localeCompare(b);
-  });
+const filteredLots = computed(() => store.lots?.items ?? []);
+const requestedLotIds = computed(
+  () => new Set(store.lotReviewIntent.map((entry) => entry.broker_lot_id)),
+);
+const confirmedLotIds = computed(() => {
+  const ids = new Set<string>();
+  for (const leg of store.currentRun?.consolidated_legs ?? []) {
+    if (leg.side !== 'SELL') continue;
+    for (const lot of leg.selected_lots) {
+      if (lot.selected) ids.add(lot.broker_lot_id);
+    }
+  }
+  return ids;
 });
+const lotPageGenerationMatches = computed(
+  () =>
+    store.lots !== null &&
+    store.lots.source_generation !== null &&
+    store.lots.source_generation === store.observedSourceGeneration,
+);
+const currentRunIsUsable = computed(
+  () =>
+    store.currentRun !== null &&
+    store.currentRunView === 'current' &&
+    store.currentRun.source_generation === store.observedSourceGeneration &&
+    store.currentRun.source_generation === store.lots?.source_generation,
+);
+const canChangeLotIntent = computed(
+  () => lotPageGenerationMatches.value && !isLoading.value && !store.reviewMutationPending,
+);
+const canApplyLotIntent = computed(
+  () =>
+    canChangeLotIntent.value &&
+    currentRunIsUsable.value &&
+    store.lotReviewIntentDirty &&
+    !store.reviewMutationPending,
+);
 const groupedLots = computed(() => {
   const groups = new Map<string, LotResponse[]>();
   for (const lot of filteredLots.value) {
@@ -285,11 +409,55 @@ const groupedLots = computed(() => {
   }
   return [...groups.entries()].map(([ticker, lots]) => ({ ticker, lots }));
 });
-const reviewEntries = computed(() =>
-  [...reviewSelection.value.entries()].map(
-    ([key, value]) => [key, value.ticker, value.lotId] as const,
-  ),
-);
+const confirmedBrokerLotIds = computed(() => [...confirmedLotIds.value].sort());
+const rejectedLotReasons = computed(() => {
+  const details = store.actionState.applyLotReviewIntent.error?.details;
+  if (details === null || typeof details !== 'object' || Array.isArray(details)) return [];
+  const rejected = details['rejected_lots'];
+  if (!Array.isArray(rejected)) return [];
+  return rejected.flatMap((entry) => {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return [];
+    const brokerLotId = entry['broker_lot_id'];
+    const reason = entry['reason'];
+    return typeof brokerLotId === 'string' && typeof reason === 'string'
+      ? [{ broker_lot_id: brokerLotId, reason }]
+      : [];
+  });
+});
+const basketUnchanged = computed(() => {
+  const details = store.actionState.applyLotReviewIntent.error?.details;
+  return (
+    details !== null &&
+    typeof details === 'object' &&
+    !Array.isArray(details) &&
+    details['basket_unchanged'] === true
+  );
+});
+
+function currentFilters(offset: number): LotQuery {
+  return {
+    ...(search.value.trim() ? { search: search.value.trim() } : {}),
+    ...(termFilter.value ? { term: termFilter.value } : {}),
+    ...(fractionalFilter.value === '' ? {} : { fractional: fractionalFilter.value === 'true' }),
+    sort_by: sortKey.value,
+    sort_direction: sortDirection.value,
+    offset,
+    limit: pageLimit.value,
+  };
+}
+
+const filterDraftChanged = computed(() => {
+  const draft = currentFilters(0);
+  const applied = store.lotFilters;
+  return (
+    (draft.search ?? undefined) !== (applied.search ?? undefined) ||
+    (draft.term ?? undefined) !== (applied.term ?? undefined) ||
+    (draft.fractional ?? undefined) !== (applied.fractional ?? undefined) ||
+    draft.sort_by !== applied.sort_by ||
+    draft.sort_direction !== applied.sort_direction ||
+    draft.limit !== applied.limit
+  );
+});
 
 function hasCleanupFlag(lot: LotResponse): boolean {
   return (
@@ -299,35 +467,19 @@ function hasCleanupFlag(lot: LotResponse): boolean {
   );
 }
 
-function lotReviewKey(lot: LotResponse): string {
-  return `${lot.ticker}:${lot.broker_lot_id}`;
-}
-
-function changeReviewSelection(lot: LotResponse, event: Event): void {
-  if (!(event.target instanceof HTMLInputElement)) return;
-  const next = new Map(reviewSelection.value);
-  const key = lotReviewKey(lot);
-  if (event.target.checked) next.set(key, { ticker: lot.ticker, lotId: lot.broker_lot_id });
-  else next.delete(key);
-  reviewSelection.value = next;
-}
-
-function removeReviewMark(key: string): void {
-  const next = new Map(reviewSelection.value);
-  next.delete(key);
-  reviewSelection.value = next;
-}
-
-function currentFilters(offset: number): LotQuery {
-  return {
-    ...(termFilter.value ? { term: termFilter.value } : {}),
-    ...(fractionalFilter.value === '' ? {} : { fractional: fractionalFilter.value === 'true' }),
-    offset,
-    limit: pageLimit.value,
-  };
-}
-
 async function loadLots(offset: number): Promise<void> {
+  try {
+    await store.loadLots({ ...store.lotFilters, offset });
+  } catch {
+    // The shared store retains the structured API error for the page.
+  }
+}
+
+function applyFilters(): void {
+  void loadWithFilters(0);
+}
+
+async function loadWithFilters(offset: number): Promise<void> {
   try {
     await store.loadLots(currentFilters(offset));
   } catch {
@@ -335,20 +487,60 @@ async function loadLots(offset: number): Promise<void> {
   }
 }
 
-function applyFilters(): void {
-  void loadLots(0);
-}
-
 function refreshLots(): void {
-  void loadLots(store.lots?.offset ?? 0);
+  void loadLots(store.lots?.offset ?? store.lotFilters.offset ?? 0);
 }
 
 function toggleSortDirection(): void {
   sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc';
+  applyFilters();
+}
+
+function changeLotIntent(lot: LotResponse, event: Event): void {
+  if (!(event.target instanceof HTMLInputElement)) return;
+  store.setLotReviewIntent(
+    lot.broker_lot_id,
+    lot.ticker,
+    store.lots?.source_generation ?? null,
+    event.target.checked,
+  );
+}
+
+function removeRequestedLot(entry: {
+  broker_lot_id: string;
+  ticker: string;
+  source_generation: number;
+}): void {
+  store.setLotReviewIntent(entry.broker_lot_id, entry.ticker, entry.source_generation, false);
+}
+
+function clearRequestedLots(): void {
+  store.clearLotReviewIntent();
+}
+
+async function applyRequestedLots(): Promise<void> {
+  try {
+    await store.applyLotReviewIntent();
+  } catch {
+    // The shared store retains the structured API error and confirmed run on failure.
+  }
+}
+
+function rejectionReasonLabel(reason: string): string {
+  switch (reason) {
+    case 'missing_current_lot':
+      return 'This broker lot is not present in current inventory.';
+    case 'outside_saved_demo_candidates':
+      return 'This lot is not represented by a saved DEMO candidate; no candidate was generated.';
+    case 'ambiguous_saved_demo_candidate':
+      return 'This lot maps to multiple saved DEMO candidates and cannot be applied.';
+    default:
+      return reason;
+  }
 }
 
 onMounted(() => {
-  void loadLots(store.lotFilters.offset ?? 0);
+  void loadWithFilters(store.lotFilters.offset ?? 0);
 });
 </script>
 

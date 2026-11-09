@@ -59,6 +59,25 @@ describe('typed local API transport', () => {
     });
   });
 
+  it('submits the complete generation-bound lot intent to the saved DEMO run', async () => {
+    const fullRun = { run_id: 'run-2', groups: [], consolidated_legs: [], orders_count: 0 };
+    const fetcher = vi.fn<typeof fetch>(() => Promise.resolve(jsonResponse(fullRun)));
+    const client = createApiClient(fetcher);
+
+    const response = await client.applyLotReviewIntent('run/2', {
+      source_generation: 19,
+      broker_lot_ids: ['LOT-2', 'LOT-1'],
+    });
+
+    expect(fetcher.mock.calls[0]?.[0]).toBe('/api/v1/optimizer/runs/run%2F2/lot-review-intent');
+    expect(fetcher.mock.calls[0]?.[1]?.method).toBe('POST');
+    expect(bodyJson(fetcher.mock.calls[0]?.[1])).toEqual({
+      source_generation: 19,
+      broker_lot_ids: ['LOT-2', 'LOT-1'],
+    });
+    expect(response).toEqual(fullRun);
+  });
+
   it('sends annotation patches and receives the complete recommendation snapshot', async () => {
     const fullRun = {
       run_id: 'run-1',

@@ -50,7 +50,12 @@ from app.domain.portfolio_accounting import (
     evaluate_portfolio,
 )
 from app.domain.trade_dates import resolve_proposed_trade_date
-from app.schemas import FrozenRunDisplayContextResponse, OptimizerRunInput, OptimizerSelectionInput
+from app.schemas import (
+    FrozenRunDisplayContextResponse,
+    OptimizerLotReviewIntentInput,
+    OptimizerRunInput,
+    OptimizerSelectionInput,
+)
 from app.services.demo_candidates import _candidate_groups, _datetime_iso, _decimal
 from app.services.errors import AppError
 from app.services.financial_input_loader import load_financial_inputs
@@ -897,6 +902,111 @@ def apply_selection(
     )
     return run
 
+
+
+def _lot_intent_error(exc: AppError) -> AppError:
+    details = dict(exc.details) if isinstance(exc.details, dict) else {"reason": exc.details}
+    details["basket_unchanged"] = True
+    return AppError(exc.code, exc.message, status_code=exc.status_code, details=details)
+
+
+def apply_lot_review_intent(
+    session: Session,
+    run_id: str,
+    request: OptimizerLotReviewIntentInput,
+    *,
+    correlation_id: str,
+) -> OptimizerRun:
+    """Replace the confirmed DEMO basket from exact, generation-bound broker-lot intent."""
+    run = session.get(OptimizerRun, run_id)
+    if run is None:
+        raise AppError("run_not_found", "Optimizer run was not found", status_code=404)
+    if request.source_generation != run.source_generation:
+        raise AppError(
+            "stale_lot_review_intent",
+            "The requested lots belong to a different source generation; refresh the lot query and review again",
+            status_code=409,
+            details={
+                "requested_source_generation": request.source_generation,
+                "run_source_generation": run.source_generation,
+                "basket_unchanged": True,
+            },
+        )
+    if run.solver_version != "DEMO":
+        raise AppError(
+            "lot_review_intent_unsupported",
+            "Lot-review intent is supported only for saved deterministic DEMO recommendations",
+            status_code=503,
+            details={"solver_version": run.solver_version, "basket_unchanged": True},
+        )
+    try:
+        _check_run_current(session, run)
+    except AppError as exc:
+        raise _lot_intent_error(exc) from exc
+
+    requested_ids = request.broker_lot_ids
+    current_lots = {}
+    if requested_ids:
+        current_lots = {
+            lot.broker_lot_id: lot
+            for lot in session.scalars(
+                select(CurrentTaxLot).where(
+                    CurrentTaxLot.account_id == 1,
+                    CurrentTaxLot.broker_lot_id.in_(requested_ids),
+                )
+            ).all()
+        }
+    candidate_groups_by_lot: dict[str, set[str]] = {}
+    candidate_rows = session.execute(
+        select(RecommendationSelectedLot.broker_lot_id, RecommendationGroup.id)
+        .join(RecommendationLeg, RecommendationLeg.id == RecommendationSelectedLot.leg_id)
+        .join(RecommendationGroupLeg, RecommendationGroupLeg.leg_id == RecommendationLeg.id)
+        .join(RecommendationGroup, RecommendationGroup.id == RecommendationGroupLeg.group_id)
+        .where(RecommendationGroup.run_id == run.id, RecommendationLeg.side == "SELL")
+    ).all()
+    for broker_lot_id, group_id in candidate_rows:
+        candidate_groups_by_lot.setdefault(broker_lot_id, set()).add(group_id)
+
+    rejected_lots: list[dict[str, str]] = []
+    selected_lots_by_group: dict[str, list[str]] = {}
+    for broker_lot_id in requested_ids:
+        if broker_lot_id not in current_lots:
+            rejected_lots.append({"broker_lot_id": broker_lot_id, "reason": "missing_current_lot"})
+            continue
+        group_ids = candidate_groups_by_lot.get(broker_lot_id, set())
+        if not group_ids:
+            rejected_lots.append({"broker_lot_id": broker_lot_id, "reason": "outside_saved_demo_candidates"})
+            continue
+        if len(group_ids) != 1:
+            rejected_lots.append({"broker_lot_id": broker_lot_id, "reason": "ambiguous_saved_demo_candidate"})
+            continue
+        group_id = next(iter(group_ids))
+        selected_lots_by_group.setdefault(group_id, []).append(broker_lot_id)
+    if rejected_lots:
+        raise AppError(
+            "lot_review_intent_rejected",
+            "Every requested lot must exist and belong to exactly one saved DEMO candidate; no basket changes were applied",
+            status_code=422,
+            details={"rejected_lots": rejected_lots, "basket_unchanged": True},
+        )
+
+    selected_group_ids = set(selected_lots_by_group)
+    try:
+        _recalculate_selection(session, run, selected_group_ids, selected_lots_by_group)
+    except AppError as exc:
+        raise _lot_intent_error(exc) from exc
+    _add_activity(
+        session,
+        correlation_id,
+        "recommendation_lot_review_intent",
+        {
+            "run_id": run.id,
+            "source_generation": request.source_generation,
+            "broker_lot_ids": requested_ids,
+            "selected_group_ids": sorted(selected_group_ids),
+        },
+    )
+    return run
 
 def annotate_group(
     session: Session,

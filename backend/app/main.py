@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
@@ -53,6 +53,7 @@ from app.schemas import (
     HealthResponse,
     LotPageResponse,
     OptimizerExportJSONResponse,
+    OptimizerLotReviewIntentInput,
     OptimizerRecommendationsResponse,
     OptimizerRunInput,
     OptimizerRunResponse,
@@ -67,6 +68,7 @@ from app.schemas import (
 )
 from app.services.demo_optimizer import (
     annotate_group,
+    apply_lot_review_intent,
     apply_selection,
     create_demo_run,
     export_run,
@@ -432,16 +434,51 @@ def create_app(
         ticker: str | None = None,
         term: str | None = Query(default=None, pattern="^(ST|LT)$"),
         fractional: bool | None = None,
+        search: str | None = Query(
+            default=None,
+            max_length=128,
+            description="Case-insensitive substring search across ticker and broker lot ID before pagination; combines with other filters.",
+        ),
+        sort_by: Literal[
+            "ticker",
+            "broker_lot_id",
+            "acquired_date",
+            "remaining_shares",
+            "available_shares",
+            "adjusted_unit_basis_usd",
+            "adjusted_total_basis_usd",
+            "current_price_usd",
+            "unrealized_pl_usd",
+            "unrealized_pl_pct",
+            "term",
+            "sleeve_key",
+            "sub_sleeve_key",
+        ] = Query(
+            default="acquired_date",
+            description="Account-wide sort field; ties use ticker and broker lot ID ascending, with null values last.",
+        ),
+        sort_direction: Literal["asc", "desc"] = Query(default="asc"),
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=500),
     ) -> dict[str, Any]:
+        sync_state = session.get(SyncState, 1)
+        source_generation = (
+            sync_state.current_generation if sync_state is not None and sync_state.complete else None
+        )
+        search_text = search.strip().casefold() if search else ""
         query = select(CurrentTaxLot).where(CurrentTaxLot.account_id == 1)
         if ticker:
             security = session.scalar(select(Security).where(Security.ticker == ticker.upper()))
             if security is None:
-                return {"items": [], "total": 0, "offset": offset, "limit": limit}
+                return {
+                    "items": [],
+                    "total": 0,
+                    "offset": offset,
+                    "limit": limit,
+                    "source_generation": source_generation,
+                }
             query = query.where(CurrentTaxLot.security_id == security.id)
-        rows = session.scalars(query.order_by(CurrentTaxLot.acquired_date, CurrentTaxLot.broker_lot_id)).all()
+        rows = session.scalars(query).all()
         active = session.scalar(select(PolicyRevision).where(PolicyRevision.status == "ACTIVE"))
         securities = {s.id: s for s in session.scalars(select(Security)).all()}
         quotes = {q.security_id: q for q in session.scalars(select(CurrentQuote)).all()}
@@ -504,9 +541,41 @@ def create_app(
                 continue
             if fractional is not None and lot_dict["fractional_cleanup_unsupported"] is not fractional:
                 continue
+            if (
+                search_text
+                and search_text not in security.ticker.casefold()
+                and search_text not in lot.broker_lot_id.casefold()
+            ):
+                continue
             filtered.append(lot_dict)
+        filtered.sort(key=lambda row: (row["ticker"], row["broker_lot_id"]))
+        null_rows = [row for row in filtered if row[sort_by] is None]
+        sortable_rows = [row for row in filtered if row[sort_by] is not None]
+        numeric_sort_fields = {
+            "remaining_shares",
+            "available_shares",
+            "adjusted_unit_basis_usd",
+            "adjusted_total_basis_usd",
+            "current_price_usd",
+            "unrealized_pl_usd",
+            "unrealized_pl_pct",
+        }
+        if sort_by in numeric_sort_fields:
+            sortable_rows.sort(
+                key=lambda row: Decimal(str(row[sort_by])),
+                reverse=sort_direction == "desc",
+            )
+        else:
+            sortable_rows.sort(key=lambda row: row[sort_by], reverse=sort_direction == "desc")
+        filtered = sortable_rows + null_rows
         total = len(filtered)
-        return {"items": filtered[offset : offset + limit], "total": total, "offset": offset, "limit": limit}
+        return {
+            "items": filtered[offset : offset + limit],
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "source_generation": source_generation,
+        }
 
     @application.get("/api/v1/policy", response_model=PolicyResponse, response_model_exclude_unset=True, responses=API_ERROR_RESPONSES)
     def policy(session: Session = session_dependency) -> dict[str, Any]:
@@ -640,6 +709,31 @@ def create_app(
             )
             return run_recommendations(session, run)
 
+
+    @application.post(
+        "/api/v1/optimizer/runs/{run_id}/lot-review-intent",
+        response_model=OptimizerRecommendationsResponse,
+        responses=API_ERROR_RESPONSES,
+        description=(
+            "Atomically replace the confirmed DEMO basket with the requested broker lots. "
+            "The source generation must match; requests are rejected without mutation when unsupported "
+            "or infeasible. This request does not approve or place orders."
+        ),
+    )
+    def optimizer_run_lot_review_intent(
+        run_id: str,
+        payload: OptimizerLotReviewIntentInput,
+        request: Request,
+        session: Session = session_dependency,
+    ) -> dict[str, Any]:
+        with session.begin():
+            run = apply_lot_review_intent(
+                session,
+                run_id,
+                payload,
+                correlation_id=request.state.correlation_id,
+            )
+            return run_recommendations(session, run)
     @application.patch("/api/v1/optimizer/runs/{run_id}/recommendations/{group_id}", response_model=OptimizerRecommendationsResponse, responses=API_ERROR_RESPONSES)
     def annotate_recommendation_group(
         run_id: str,

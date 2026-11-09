@@ -1,30 +1,30 @@
 <template>
   <section class="workspace-page" aria-labelledby="lots-title">
-    <header class="page-header">
-      <div>
-        <p class="eyebrow">Portfolio inventory</p>
-        <h1 id="lots-title">Tax Lots</h1>
-        <p class="page-subtitle">
-          API-reported lot details grouped by security. Review marking is local to this page and
-          does not create or approve a trade.
-        </p>
-      </div>
-      <button type="button" class="primary-button" :disabled="isLoading" @click="refreshLots">
-        {{ isLoading ? 'Loading…' : 'Refresh lots' }}
-      </button>
-    </header>
+    <WorkspacePageHeader
+      eyebrow="Portfolio inventory"
+      title="Tax Lots"
+      title-id="lots-title"
+      subtitle="API-reported lot details grouped by security. Review marking is local to this page and does not create or approve a trade."
+    >
+      <template #actions>
+        <button type="button" class="primary-button" :disabled="isLoading" @click="refreshLots">
+          {{ isLoading ? 'Loading…' : 'Refresh lots' }}
+        </button>
+      </template>
+    </WorkspacePageHeader>
 
-    <p class="demo-notice" role="status">
-      <strong>DEMO ONLY.</strong> No broker connection, OAuth, order preview, or trade submission is
-      available.
-    </p>
+    <WorkspaceCapabilityNotice label="DEMO ONLY.">
+      No broker connection, OAuth, order preview, or trade submission is available.
+    </WorkspaceCapabilityNotice>
 
     <ApiActionError
       :error="store.actionState.loadLots.error"
       title="Tax lots could not be loaded"
     />
 
-    <form class="filter-panel" @submit.prevent="applyFilters">
+    <ResourceFreshnessNotice :resources="['lots']" />
+
+    <WorkspaceFilterPanel label="Tax lot filters" class="filter-panel" @submit="applyFilters">
       <label>
         <span>Search this loaded page</span>
         <input v-model="search" type="search" placeholder="Ticker or broker lot ID" />
@@ -57,22 +57,22 @@
       <button type="submit" class="secondary-button" :disabled="isLoading">
         Apply API filters
       </button>
-    </form>
+    </WorkspaceFilterPanel>
 
     <p v-if="store.actionState.loadLots.pending && !store.lots" class="state-message" role="status">
       Loading tax lots from the local API…
     </p>
-    <section v-else-if="!store.lots" class="empty-state" aria-live="polite">
-      <h2>No lot page loaded</h2>
-      <p>Load the current API page to see broker-reported lots.</p>
-      <button type="button" class="secondary-button" :disabled="isLoading" @click="refreshLots">
-        Retry loading lots
-      </button>
-    </section>
-    <section v-else-if="store.lots.items.length === 0" class="empty-state" aria-live="polite">
-      <h2>No lots returned</h2>
-      <p>The API returned an empty page for these filters.</p>
-    </section>
+    <WorkspaceEmptyState v-else-if="!store.lots" title="No lot page loaded">
+      Load the current API page to see broker-reported lots.
+      <template #action>
+        <button type="button" class="secondary-button" :disabled="isLoading" @click="refreshLots">
+          Retry loading lots
+        </button>
+      </template>
+    </WorkspaceEmptyState>
+    <WorkspaceEmptyState v-else-if="store.lots.items.length === 0" title="No lots returned">
+      The API returned an empty page for these filters.
+    </WorkspaceEmptyState>
     <template v-else>
       <div class="results-heading">
         <p>
@@ -98,9 +98,9 @@
         </label>
       </div>
 
-      <p v-if="filteredLots.length === 0" class="empty-state" role="status">
+      <WorkspaceEmptyState v-if="filteredLots.length === 0" title="No matching lots">
         No lots on this API page match the search text.
-      </p>
+      </WorkspaceEmptyState>
       <div v-else class="security-groups">
         <section
           v-for="group in groupedLots"
@@ -112,7 +112,7 @@
             <h2 :id="`security-${group.ticker}`">{{ group.ticker }}</h2>
             <span>{{ group.lots.length }} {{ group.lots.length === 1 ? 'lot' : 'lots' }}</span>
           </header>
-          <div class="table-scroll">
+          <WorkspaceTableFrame :label="`Tax lots for ${group.ticker}`" class="table-scroll">
             <table>
               <caption class="sr-only">
                 Tax lots for
@@ -147,7 +147,9 @@
                       <span>Mark</span>
                     </label>
                   </td>
-                  <th scope="row" class="lot-id">{{ lot.broker_lot_id }}</th>
+                  <th scope="row" class="lot-id">
+                    <BrokerLotIdentity :broker-lot-id="lot.broker_lot_id" />
+                  </th>
                   <td>{{ lot.acquired_date }}</td>
                   <td>
                     {{ lot.remaining_shares }} / {{ lot.available_shares }}
@@ -158,13 +160,13 @@
                     </small>
                   </td>
                   <td>
-                    {{ displayUsd(lot.adjusted_unit_basis_usd) }} /
-                    {{ displayUsd(lot.adjusted_total_basis_usd) }}
+                    {{ formatUsd(lot.adjusted_unit_basis_usd) }} /
+                    {{ formatUsd(lot.adjusted_total_basis_usd) }}
                   </td>
-                  <td>{{ displayUsd(lot.current_price_usd) }}</td>
+                  <td>{{ formatUsd(lot.current_price_usd) }}</td>
                   <td>
-                    {{ displayUsd(lot.unrealized_pl_usd) }} /
-                    {{ displayPercent(lot.unrealized_pl_pct) }}
+                    {{ formatUsd(lot.unrealized_pl_usd) }} /
+                    {{ formatPercent(lot.unrealized_pl_pct) }}
                   </td>
                   <td>{{ lot.term }}</td>
                   <td>
@@ -190,29 +192,19 @@
                 </tr>
               </tbody>
             </table>
-          </div>
+          </WorkspaceTableFrame>
         </section>
       </div>
     </template>
-    <nav v-if="store.lots" class="pagination" aria-label="Tax lot API pages">
-      <button
-        type="button"
-        class="secondary-button"
-        :disabled="isLoading || store.lots.offset === 0"
-        @click="changePage(-1)"
-      >
-        Previous page
-      </button>
-      <span>Page {{ pageNumber }} of {{ pageCount }}</span>
-      <button
-        type="button"
-        class="secondary-button"
-        :disabled="isLoading || store.lots.offset + store.lots.limit >= store.lots.total"
-        @click="changePage(1)"
-      >
-        Next page
-      </button>
-    </nav>
+    <WorkspacePagination
+      v-if="store.lots"
+      :offset="store.lots.offset"
+      :limit="store.lots.limit"
+      :total="store.lots.total"
+      :pending="isLoading"
+      label="Tax lot API pages"
+      @page="loadLots"
+    />
 
     <section class="review-summary" aria-labelledby="review-title">
       <h2 id="review-title">Marked for review · {{ reviewSelection.size }}</h2>
@@ -235,6 +227,17 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import ApiActionError from '@/components/ApiActionError.vue';
+import BrokerLotIdentity from '@/components/BrokerLotIdentity.vue';
+import WorkspacePageHeader from '@/components/WorkspacePageHeader.vue';
+import WorkspaceCapabilityNotice from '@/components/WorkspaceCapabilityNotice.vue';
+import WorkspaceEmptyState from '@/components/WorkspaceEmptyState.vue';
+import WorkspaceFilterPanel from '@/components/WorkspaceFilterPanel.vue';
+import WorkspacePagination from '@/components/WorkspacePagination.vue';
+import WorkspaceTableFrame from '@/components/WorkspaceTableFrame.vue';
+import { getPaginationMetadata } from '@/components/workspace-pagination-state';
+import { formatPercent, formatUsd } from '@/utils/display-values';
+
+import ResourceFreshnessNotice from '@/components/ResourceFreshnessNotice.vue';
 import { useWorkspaceStore } from '@/stores/workspace-store';
 import type { LotQuery } from '@/services/api';
 import type { LotResponse } from '@/types/api';
@@ -252,14 +255,12 @@ const sortKey = ref<'ticker' | 'acquired_date' | 'broker_lot_id'>('ticker');
 const sortDirection = ref<'asc' | 'desc'>('asc');
 const reviewSelection = ref(new Map<string, { ticker: string; lotId: string }>());
 const isLoading = computed(() => store.actionState.loadLots.pending);
-const pageNumber = computed(() => {
+const pagination = computed(() => {
   const page = store.lots;
-  return page ? Math.floor(page.offset / page.limit) + 1 : 1;
+  return getPaginationMetadata(page?.offset ?? 0, page?.limit ?? 1, page?.total ?? 0);
 });
-const pageCount = computed(() => {
-  const page = store.lots;
-  return page ? Math.max(1, Math.ceil(page.total / page.limit)) : 1;
-});
+const pageNumber = computed(() => pagination.value.pageNumber);
+
 const filteredLots = computed(() => {
   const needle = search.value.trim().toLocaleLowerCase();
   const rows = store.lots?.items ?? [];
@@ -289,14 +290,6 @@ const reviewEntries = computed(() =>
     ([key, value]) => [key, value.ticker, value.lotId] as const,
   ),
 );
-
-function displayUsd(value: string | null): string {
-  return value === null ? 'Unavailable' : `${value} USD`;
-}
-
-function displayPercent(value: string | null): string {
-  return value === null ? 'Unavailable' : `${value}%`;
-}
 
 function hasCleanupFlag(lot: LotResponse): boolean {
   return (
@@ -350,13 +343,6 @@ function refreshLots(): void {
   void loadLots(store.lots?.offset ?? 0);
 }
 
-function changePage(direction: -1 | 1): void {
-  const page = store.lots;
-  if (!page) return;
-  const nextOffset = Math.max(0, page.offset + direction * page.limit);
-  void loadLots(nextOffset);
-}
-
 function toggleSortDirection(): void {
   sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc';
 }
@@ -369,8 +355,7 @@ onMounted(() => {
 <style scoped>
 .security-heading,
 .results-heading,
-.sort-control,
-.pagination {
+.sort-control {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -381,16 +366,6 @@ h1,
 h2,
 p {
   margin-top: 0;
-}
-.demo-notice {
-  margin: 0;
-  padding: 0.8rem 1rem;
-  border: 1px solid #f2dcad;
-  border-radius: 0.65rem;
-  background: #fff7e8;
-  color: #765016;
-  font-size: 0.82rem;
-  line-height: 1.5;
 }
 .filter-panel,
 .review-summary,
@@ -563,11 +538,6 @@ tbody th {
 .review-summary p {
   margin-bottom: 0.7rem;
 }
-.pagination {
-  justify-content: center;
-  color: #526c7c;
-  font-size: 0.78rem;
-}
 .review-summary ul {
   margin: 0;
   padding-left: 1.2rem;
@@ -587,9 +557,7 @@ tbody th {
   clip-path: inset(50%);
 }
 @media (max-width: 760px) {
-  .page-header,
-  .results-heading,
-  .pagination {
+  .results-heading {
     align-items: stretch;
     flex-direction: column;
   }
@@ -599,9 +567,6 @@ tbody th {
   }
   .sort-control {
     flex-wrap: wrap;
-  }
-  .pagination {
-    text-align: center;
   }
 }
 </style>

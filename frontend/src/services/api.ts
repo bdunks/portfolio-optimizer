@@ -18,7 +18,6 @@ import type {
   PortfolioNotSyncedResponse,
   PortfolioReadyResponse,
   RecommendationAnnotationInput,
-  RecommendationGroupResponse,
   SyncResponseDTO,
   WashSalesResponse,
   JSONValue,
@@ -302,7 +301,7 @@ export function createApiClient(fetchOverride?: typeof fetch) {
     runId: string,
     groupId: string,
     annotation: RecommendationAnnotationInput,
-  ): Promise<RecommendationGroupResponse> {
+  ): Promise<OptimizerRecommendationsResponse> {
     return jsonRequest({
       operation: 'PATCH /api/v1/optimizer/runs/{run_id}/recommendations/{group_id}',
       path: `/api/v1/optimizer/runs/${encodeURIComponent(runId)}/recommendations/${encodeURIComponent(groupId)}`,

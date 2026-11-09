@@ -2,15 +2,121 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
-import type { OptimizerRecommendationsResponse } from '@/types/api';
+import type { OptimizerRecommendationsResponse, USTransitionResponse } from '@/types/api';
+
 import RecommendationsPage from './RecommendationsPage.vue';
 import { useWorkspaceStore } from '@/stores/workspace-store';
 
+function frozenContext(displayName = 'Frozen US equity') {
+  return {
+    available: true,
+    source: 'policy_revision' as const,
+    policy_revision_id: 'policy-r1',
+    revision_number: 1,
+    created_at: '2025-01-01T00:00:00Z',
+    activated_at: '2025-01-01T00:00:00Z',
+    sleeves: [
+      {
+        sleeve_key: 'us',
+        display_name: displayName,
+        sort_order: 1,
+        parent_sleeve_key: null,
+        target_pct: '100.0000',
+        drift_band_pp: '5.0000',
+        enabled: true,
+        is_direct_index_container: true,
+        is_direct_index_sleeve: false,
+        is_transition_destination: false,
+        is_cash_sleeve: false,
+      },
+    ],
+    settings: { target_retained_net_loss_usd: '3210.00' },
+    allowed_securities: [],
+    overrides: [],
+    unavailable_reason: null,
+  };
+}
+
+function transitionResponse(childKeys: string[], label: string): USTransitionResponse {
+  const snapshot = {
+    us_sleeve_value_usd: '100.00',
+    us_sleeve_whole_portfolio_pct: '100.0000',
+    etf_progress_pct: '0.0000',
+    children: Object.fromEntries(
+      childKeys.map((key) => [
+        key,
+        {
+          value_usd: '100.00',
+          within_us_sleeve_pct: `${100 / childKeys.length}.0000`,
+          whole_portfolio_pct: `${100 / childKeys.length}.0000`,
+        },
+      ]),
+    ),
+  };
+  return {
+    sleeve_key: 'us',
+    transition_destination_sleeve_key: childKeys[0] ?? null,
+    label,
+    current: snapshot,
+    proposed_basket: snapshot,
+    target: {
+      us_sleeve_whole_portfolio_pct: '100.0000',
+      children: Object.fromEntries(
+        childKeys.map((key) => [
+          key,
+          {
+            within_us_sleeve_pct: `${100 / childKeys.length}.0000`,
+            whole_portfolio_pct: `${100 / childKeys.length}.0000`,
+          },
+        ]),
+      ),
+    },
+  };
+}
+
+function frozenContextWithTransitionLabels() {
+  const context = frozenContext();
+  const usSleeve = context.sleeves[0]!;
+  return {
+    ...context,
+    sleeves: [
+      usSleeve,
+      {
+        ...usSleeve,
+        sleeve_key: 'historical-us-direct',
+        display_name: 'Historical direct-index sleeve',
+        sort_order: 2,
+        parent_sleeve_key: 'us',
+        target_pct: '60.0000',
+        is_direct_index_container: false,
+        is_direct_index_sleeve: true,
+      },
+      {
+        ...usSleeve,
+        sleeve_key: 'historical-us-etf',
+        display_name: 'Historical replacement ETF sleeve',
+        sort_order: 3,
+        parent_sleeve_key: 'us',
+        target_pct: '40.0000',
+        is_direct_index_container: false,
+        is_direct_index_sleeve: false,
+      },
+    ],
+  };
+}
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 function urlOf(input: RequestInfo | URL): URL {
@@ -184,6 +290,7 @@ function makeRun(
     no_trade_reason: null,
     warnings: [],
     tax_profile_configured: false,
+    frozen_display_context: frozenContext(),
     groups,
     consolidated_legs: legs,
   } as unknown as OptimizerRecommendationsResponse;
@@ -286,6 +393,42 @@ function readyPortfolio() {
   };
 }
 
+function portfolioWithTransition(revisionId: string) {
+  const child = {
+    value_usd: '100.00',
+    within_us_sleeve_pct: '100.0000',
+    whole_portfolio_pct: '100.0000',
+  };
+  const snapshot = {
+    us_sleeve_value_usd: '100.00',
+    us_sleeve_whole_portfolio_pct: '100.0000',
+    etf_progress_pct: '0.0000',
+    children: { transition_nested: child },
+  };
+  return {
+    ...readyPortfolio(),
+    active_policy_revision_id: revisionId,
+    allocation: {
+      current: { sleeve_weights_pct: { us: '65.0000' } },
+      proposed: null,
+      target: null,
+    },
+    us_transition: {
+      sleeve_key: 'us',
+      transition_destination_sleeve_key: 'transition_nested',
+      label: 'Portfolio transition label',
+      current: snapshot,
+      proposed_basket: snapshot,
+      target: {
+        us_sleeve_whole_portfolio_pct: '100.0000',
+        children: {
+          transition_nested: { within_us_sleeve_pct: '100.0000', whole_portfolio_pct: '100.0000' },
+        },
+      },
+    },
+  };
+}
+
 function setup(run: OptimizerRecommendationsResponse | null = makeRun()) {
   const pinia = createPinia();
   setActivePinia(pinia);
@@ -302,11 +445,15 @@ function setup(run: OptimizerRecommendationsResponse | null = makeRun()) {
     active: {
       id: 'policy-r1',
       activation_errors: [],
-      sleeves: [{ sleeve_key: 'us', display_name: 'US equity' }],
+      sleeves: [{ sleeve_key: 'us', display_name: 'Active US (renamed)' }],
     },
     drafts: [],
     superseded: [],
   } as never;
+  const confirmedAt = '2025-02-01T12:00:00Z';
+  store.resourceFreshness.health = { status: 'fresh', confirmedAt };
+  store.resourceFreshness.portfolio = { status: 'fresh', confirmedAt };
+  store.resourceFreshness.policy = { status: 'fresh', confirmedAt };
   if (run) {
     store.currentRun = run;
     store.currentRunView = 'current';
@@ -321,6 +468,82 @@ afterEach(() => {
 });
 
 describe('RecommendationsPage', () => {
+  it('uses portfolio keys for allocation and nested transition when successful reads disagree', async () => {
+    const { pinia, store } = setup();
+    store.portfolio = portfolioWithTransition('portfolio-revision-a') as never;
+    store.policy = {
+      active: {
+        id: 'active-policy-b',
+        activation_errors: [],
+        sleeves: [
+          { sleeve_key: 'us', display_name: 'Active policy US label' },
+          { sleeve_key: 'transition_nested', display_name: 'Active policy nested label' },
+        ],
+      },
+      drafts: [],
+      superseded: [],
+    } as never;
+    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain(
+      'Portfolio effects use policy revision portfolio-revision-a; the active policy is active-policy-b.',
+    );
+    const effects = wrapper.get('.effects-panel').text();
+    expect(effects).toContain('us');
+
+    expect(effects).toContain('65.0000%');
+    expect(effects).toContain('transition_nested');
+    expect(effects).not.toContain('Active policy US label');
+    expect(effects).not.toContain('Active policy nested label');
+    wrapper.unmount();
+  });
+
+  it('keeps cached portfolio keys after a failed follow-up portfolio read', async () => {
+    const { pinia, store } = setup();
+    store.portfolio = portfolioWithTransition('portfolio-revision-a') as never;
+    store.policy = {
+      active: {
+        id: 'active-policy-b',
+        activation_errors: [],
+        sleeves: [
+          { sleeve_key: 'us', display_name: 'Active policy US label' },
+          { sleeve_key: 'transition_nested', display_name: 'Active policy nested label' },
+        ],
+      },
+      drafts: [],
+      superseded: [],
+    } as never;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(() => Promise.reject(new Error('portfolio transport failed'))),
+    );
+    await expect(store.loadPortfolio()).rejects.toThrow('portfolio transport failed');
+    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('cached data is being shown');
+    expect(wrapper.text()).toContain('Portfolio effects use policy revision portfolio-revision-a');
+    const effects = wrapper.get('.effects-panel').text();
+    expect(effects).toContain('65.0000%');
+    expect(effects).not.toContain('Active policy US label');
+    expect(effects).not.toContain('Active policy nested label');
+    wrapper.unmount();
+  });
+  it('uses shared policy freshness and run provenance selectors before displaying effects', async () => {
+    const { pinia, store } = setup();
+    store.resourceFreshness.policy = { status: 'stale', confirmedAt: '2025-02-01T12:00:00Z' };
+    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    await flushPromises();
+
+    expect(wrapper.get('.provenance-banner').text()).toContain('Stale/unverified run · read-only');
+    expect(wrapper.get('.effects-panel').text()).toContain(
+      'Current portfolio API values with active-policy labels',
+    );
+    expect(wrapper.text()).toContain('cached data is being shown');
+    wrapper.unmount();
+  });
+
   it('sends an explicit trade date and shows the persisted date in run provenance', async () => {
     const { pinia } = setup(null);
     const run = { ...makeRun('run-with-date'), proposed_trade_date: '2026-11-06' };
@@ -351,8 +574,63 @@ describe('RecommendationsPage', () => {
     wrapper.unmount();
   });
 
-  it('shows API-only DEMO values, renders a shared BUY once, and re-solves group selections with broker lot IDs', async () => {
+  it('keeps review-mutation pending state across recommendation-page unmount and remount', async () => {
     const { pinia, store } = setup();
+    const run = store.currentRun!;
+    const response = {
+      ...run,
+      groups: run.groups.map((group) =>
+        group.group_id === 'group-a' ? { ...group, note: 'confirmed after navigation' } : group,
+      ),
+    };
+    const pendingResponse = deferred<Response>();
+    const fetcher = vi.fn<typeof fetch>(() => pendingResponse.promise);
+    vi.stubGlobal('fetch', fetcher);
+
+    const pendingMutation = store.annotateGroup(run.run_id, 'group-a', {
+      note: 'confirmed after navigation',
+    });
+    expect(store.reviewMutationPending).toBe(true);
+    await Promise.resolve();
+    const firstMount = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    await flushPromises();
+    expect(firstMount.text()).toContain('Previous basket effects are withheld');
+    firstMount.unmount();
+
+    const remounted = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    await flushPromises();
+    expect(remounted.text()).toContain('Previous basket effects are withheld');
+
+    pendingResponse.resolve(jsonResponse(response));
+    await pendingMutation;
+    await flushPromises();
+    expect(store.reviewMutationPending).toBe(false);
+    expect(store.currentRun?.groups[0]?.note).toBe('confirmed after navigation');
+    expect(remounted.text()).not.toContain('Previous basket effects are withheld');
+    remounted.unmount();
+  });
+
+  it('shows API-only DEMO values, renders a shared BUY once, and re-solves group selections with broker lot IDs', async () => {
+    const run = makeRun();
+    const sharedBuy = run.consolidated_legs.find((leg) => leg.leg_id === 'buy-shared')!;
+    const localBuy = {
+      ...sharedBuy,
+      leg_id: 'buy-local',
+      ticker: 'VXUS',
+      group_ids: ['group-a'],
+      sequence: 4,
+      dependencies: ['sell-a'],
+    };
+    const runWithLocalBuy = {
+      ...run,
+      groups: run.groups.map((group) =>
+        group.group_id === 'group-a'
+          ? { ...group, leg_ids: [...group.leg_ids, 'buy-local'] }
+          : group,
+      ),
+      consolidated_legs: [...run.consolidated_legs, localBuy],
+    };
+    const { pinia, store } = setup(runWithLocalBuy);
     const updatedRun = makeRun('run-current', ['group-a', 'group-b']);
     const fetcher = vi.fn<typeof fetch>((input, init) => {
       const url = urlOf(input);
@@ -374,6 +652,20 @@ describe('RecommendationsPage', () => {
     expect(
       wrapper.findAll('.leg-card').filter((card) => card.attributes('id') === 'leg-buy-shared'),
     ).toHaveLength(1);
+    expect(wrapper.find('[aria-label="Recommendation filters"]').exists()).toBe(true);
+    const legLinks = wrapper.findAll('.group-card a[href^="#leg-"]');
+    const legDetailIds = wrapper.findAll('.leg-card').map((detail) => detail.attributes('id'));
+    expect(legDetailIds).toContain('leg-sell-a');
+    expect(legDetailIds).toContain('leg-buy-local');
+    expect(legDetailIds.filter((id) => id === 'leg-buy-shared')).toHaveLength(1);
+    expect(legLinks.filter((link) => link.attributes('href') === '#leg-buy-shared')).toHaveLength(
+      2,
+    );
+    for (const link of legLinks) {
+      const href = link.attributes('href') ?? '';
+      expect(href).toMatch(/^#leg-/);
+      expect(legDetailIds.filter((id) => id === href.slice(1))).toHaveLength(1);
+    }
     expect(
       wrapper
         .findAll('button')
@@ -474,6 +766,188 @@ describe('RecommendationsPage', () => {
     expect(wrapper.text()).not.toContain('requested group selected');
   });
 
+  it('rejects a selected group with one full-run PATCH while preserving other selected groups', async () => {
+    const initialRun = makeRun('run-current', ['group-a', 'group-b']);
+    const baseUpdatedRun = withGroupAnnotations(makeRun('run-current', ['group-b']), {
+      'group-a': { note: null, rejectionReason: 'Not appropriate for this batch' },
+    });
+    const updatedRun = {
+      ...baseUpdatedRun,
+      groups: baseUpdatedRun.groups.map((group) =>
+        group.group_id === 'group-a' ? { ...group, rejected: true } : group,
+      ),
+    };
+    const { pinia, store } = setup(initialRun);
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      const url = urlOf(input);
+      if (url.pathname.endsWith('/recommendations/group-a') && init?.method === 'PATCH')
+        return Promise.resolve(jsonResponse(updatedRun));
+      return Promise.reject(new Error(`Unexpected request: ${init?.method} ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    await flushPromises();
+
+    const annotation = wrapper.get('[aria-label="Notes and rejection for group-a"]');
+    await annotation.get('input').setValue('Not appropriate for this batch');
+    await annotation
+      .findAll('button')
+      .find((button) => button.text().includes('Reject group'))!
+      .trigger('click');
+    await flushPromises();
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0]?.[1]?.method).toBe('PATCH');
+    expect(JSON.parse(fetcher.mock.calls[0]?.[1]?.body as string)).toEqual({
+      rejected: true,
+      rejection_reason: 'Not appropriate for this batch',
+    });
+    expect(fetcher.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+    expect(store.currentRun).toEqual(updatedRun);
+    expect(store.currentRun?.groups.find((group) => group.group_id === 'group-a')).toMatchObject({
+      rejected: true,
+      selected: false,
+    });
+    expect(store.currentRun?.groups.find((group) => group.group_id === 'group-b')?.selected).toBe(
+      true,
+    );
+    expect(
+      store.currentRun?.consolidated_legs.find((leg) => leg.leg_id === 'buy-shared')?.selected,
+    ).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('keeps the full basket on an overlong or failed rejection reason', async () => {
+    const initialRun = makeRun('run-current', ['group-a', 'group-b']);
+    const { pinia, store } = setup(initialRun);
+    const fetcher = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        jsonResponse(
+          {
+            code: 'invalid_annotation',
+            message: 'The rejection reason is too long',
+            correlation_id: 'rejection-error',
+            details: {},
+          },
+          422,
+        ),
+      ),
+    );
+    vi.stubGlobal('fetch', fetcher);
+    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    await flushPromises();
+    const previousRun = store.currentRun;
+    const annotation = wrapper.get('[aria-label="Notes and rejection for group-a"]');
+    const reasonInput = annotation.get('input');
+    expect(reasonInput.attributes('maxlength')).toBe('500');
+    await reasonInput.setValue('x'.repeat(501));
+    const rejectButton = annotation
+      .findAll('button')
+      .find((button) => button.text().includes('Reject group'))!;
+    expect((rejectButton.element as HTMLButtonElement).disabled).toBe(true);
+    await rejectButton.trigger('click');
+    await flushPromises();
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(store.currentRun).toBe(previousRun);
+
+    await reasonInput.setValue('Valid reason');
+    await rejectButton.trigger('click');
+    await flushPromises();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0]?.[1]?.method).toBe('PATCH');
+    expect(fetcher.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+    expect(store.currentRun).toBe(previousRun);
+    expect(
+      store.currentRun?.groups.filter((group) => group.selected).map((group) => group.group_id),
+    ).toEqual(['group-a', 'group-b']);
+    expect(wrapper.text()).toContain('Group note or rejection was not saved');
+    wrapper.unmount();
+  });
+
+  it('clears a saved note with an explicit null and replaces the full returned run', async () => {
+    const initialRun = withGroupAnnotations(makeRun(), {
+      'group-a': { note: 'Existing note', rejectionReason: null },
+    });
+    const updatedRun = withGroupAnnotations(makeRun(), {
+      'group-a': { note: null, rejectionReason: null },
+    });
+    const { pinia, store } = setup(initialRun);
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      if (urlOf(input).pathname.endsWith('/recommendations/group-a') && init?.method === 'PATCH')
+        return Promise.resolve(jsonResponse(updatedRun));
+      return Promise.reject(
+        new Error(`Unexpected request: ${init?.method} ${urlOf(input).pathname}`),
+      );
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    await flushPromises();
+    const annotation = wrapper.get('[aria-label="Notes and rejection for group-a"]');
+    const noteInput = annotation.get('textarea');
+    expect(noteInput.attributes('maxlength')).toBe('2000');
+    await noteInput.setValue('');
+    await annotation
+      .findAll('button')
+      .find((button) => button.text() === 'Save note')!
+      .trigger('click');
+    await flushPromises();
+
+    expect(JSON.parse(fetcher.mock.calls[0]?.[1]?.body as string)).toEqual({ note: null });
+    expect(store.currentRun).toEqual(updatedRun);
+    expect(store.currentRun?.groups.find((group) => group.group_id === 'group-a')?.note).toBeNull();
+    expect((noteInput.element as HTMLTextAreaElement).value).toBe('');
+    wrapper.unmount();
+  });
+
+  it('restores a rejected group without selecting it or clearing its note', async () => {
+    const baseRun = withGroupAnnotations(makeRun('run-current', ['group-b']), {
+      'group-a': { note: 'Keep this note', rejectionReason: 'Old rejection' },
+    });
+    const initialRun = {
+      ...baseRun,
+      groups: baseRun.groups.map((group) =>
+        group.group_id === 'group-a' ? { ...group, rejected: true, selected: false } : group,
+      ),
+    };
+    const updatedRun = withGroupAnnotations(baseRun, {
+      'group-a': { note: 'Keep this note', rejectionReason: null },
+    });
+    const { pinia, store } = setup(initialRun);
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      if (urlOf(input).pathname.endsWith('/recommendations/group-a') && init?.method === 'PATCH')
+        return Promise.resolve(jsonResponse(updatedRun));
+      return Promise.reject(
+        new Error(`Unexpected request: ${init?.method} ${urlOf(input).pathname}`),
+      );
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    await flushPromises();
+
+    const annotation = wrapper.get('[aria-label="Notes and rejection for group-a"]');
+    await annotation
+      .findAll('button')
+      .find((button) => button.text().includes('Restore rejected group'))!
+      .trigger('click');
+    await flushPromises();
+
+    expect(JSON.parse(fetcher.mock.calls[0]?.[1]?.body as string)).toEqual({
+      rejected: false,
+    });
+    expect(store.currentRun).toEqual(updatedRun);
+    expect(store.currentRun?.groups.find((group) => group.group_id === 'group-a')).toMatchObject({
+      rejected: false,
+      selected: false,
+      note: 'Keep this note',
+      rejection_reason: null,
+    });
+    expect(store.currentRun?.groups.find((group) => group.group_id === 'group-b')?.selected).toBe(
+      true,
+    );
+    expect(fetcher.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+    wrapper.unmount();
+  });
+
   it('opens saved runs as frozen read-only context without running an optimizer on mount', async () => {
     const { pinia, store } = setup(null);
     const savedRun = makeRun('saved-run-1');
@@ -496,6 +970,11 @@ describe('RecommendationsPage', () => {
 
     expect(store.currentRunView).toBe('saved');
     expect(wrapper.text()).toContain('Saved run · frozen API context · read-only');
+    const frozenContextPanel = wrapper.get('[aria-label="Frozen run display context"]');
+    expect(frozenContextPanel.text()).toContain('Frozen US equity');
+    expect(frozenContextPanel.text()).toContain('100.0000%');
+    expect(frozenContextPanel.text()).toContain('3210.00');
+    expect(frozenContextPanel.text()).not.toContain('Active US (renamed)');
     expect(
       (
         wrapper.get('input[aria-label="Select recommendation group group-a"]')
@@ -503,6 +982,115 @@ describe('RecommendationsPage', () => {
       ).disabled,
     ).toBe(true);
     expect(fetcher.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+  });
+  it('keeps stale-run group labels frozen while current portfolio effects use active-policy labels', async () => {
+    const { pinia, store } = setup(makeRun());
+    store.currentRunView = 'stale';
+    store.policy = {
+      active: {
+        id: 'policy-current',
+        activation_errors: [],
+        sleeves: [
+          { sleeve_key: 'us', display_name: 'Current US policy label' },
+          { sleeve_key: 'current-child', display_name: 'Current transition child' },
+        ],
+      },
+      drafts: [],
+      superseded: [],
+    } as never;
+    store.portfolio = {
+      ...readyPortfolio(),
+      active_policy_revision_id: 'policy-current',
+      allocation: {
+        current: { total_portfolio_usd: '100.00', sleeve_weights_pct: { us: '80.0000' } },
+        proposed: null,
+        target: null,
+      },
+      us_transition: transitionResponse(['current-child'], 'Current portfolio transition'),
+    } as never;
+    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    await flushPromises();
+
+    const effects = wrapper.get('.effects-panel');
+    expect(effects.text()).toContain('Current portfolio API values with active-policy labels');
+    expect(effects.get('.allocation-panel').text()).toContain('Current US policy label');
+    expect(effects.get('.allocation-panel').text()).not.toContain('Frozen US equity');
+    const transition = effects.get('.transition-panel');
+    expect(transition.text()).toContain('Current transition child');
+    expect(transition.text()).not.toContain('current-child');
+    const group = wrapper.get('.group-card');
+    expect(group.text()).toContain('Frozen US equity');
+    expect(group.text()).not.toContain('Current US policy label');
+    wrapper.unmount();
+  });
+
+  it('uses frozen labels for nested transition children in a saved run', async () => {
+    const baseRun = makeRun('saved-transition-run');
+    const savedRun = {
+      ...baseRun,
+      portfolio_effects: {
+        allocation: baseRun.portfolio_effects?.allocation ?? {
+          current: null,
+          proposed: null,
+          target: null,
+        },
+        us_transition: transitionResponse(
+          ['historical-us-direct', 'historical-us-etf'],
+          'Historical US transition',
+        ),
+      },
+      frozen_display_context: frozenContextWithTransitionLabels(),
+    };
+    const { pinia } = setup(null);
+    const fetcher = vi.fn<typeof fetch>((input) => {
+      const url = urlOf(input);
+      if (url.pathname === '/api/v1/optimizer/runs/saved-transition-run')
+        return Promise.resolve(jsonResponse(savedRun));
+      if (url.pathname === '/api/v1/optimizer/runs/saved-transition-run/recommendations')
+        return Promise.resolve(jsonResponse(savedRun));
+      return Promise.reject(new Error(`Unexpected request: ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    await flushPromises();
+    await wrapper.get('input[placeholder="Run ID from Activity"]').setValue('saved-transition-run');
+    await wrapper.get('form.saved-run-form').trigger('submit');
+    await flushPromises();
+
+    const transition = wrapper.get('.transition-panel');
+    expect(transition.text()).toContain('Historical direct-index sleeve');
+    expect(transition.text()).toContain('Historical replacement ETF sleeve');
+    expect(transition.text()).not.toContain('historical-us-direct');
+    expect(transition.text()).not.toContain('historical-us-etf');
+    expect(transition.text()).not.toContain('Active US (renamed)');
+    expect(wrapper.get('.effects-panel').text()).toContain('Frozen run effects and labels');
+    wrapper.unmount();
+  });
+
+  it('shows frozen-context unavailability instead of borrowing active-policy labels', async () => {
+    const run = {
+      ...makeRun(),
+      frozen_display_context: {
+        ...frozenContext(),
+        available: false,
+        source: null,
+        sleeves: null,
+        settings: null,
+        allowed_securities: null,
+        overrides: null,
+        unavailable_reason: 'historical policy revision unavailable',
+      },
+    } as unknown as OptimizerRecommendationsResponse;
+    const { pinia } = setup(run);
+    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    await flushPromises();
+
+    const panel = wrapper.get('[aria-label="Frozen run display context"]');
+    expect(panel.text()).toContain('Unavailable');
+    expect(panel.text()).toContain('historical policy revision unavailable');
+    expect(wrapper.text()).toContain('Unavailable (frozen run context)');
+    expect(panel.text()).not.toContain('Active US (renamed)');
+    wrapper.unmount();
   });
 
   it('exports the self-describing API JSON through a temporary object URL', async () => {
@@ -649,6 +1237,10 @@ describe('RecommendationsPage', () => {
     const initialRun = withGroupAnnotations(makeRun(), annotations);
     const selectedRun = withGroupAnnotations(makeRun('run-current', ['group-b']), annotations);
     const { pinia, store } = setup(initialRun);
+    const annotatedRun = withGroupAnnotations(selectedRun, {
+      ...annotations,
+      'group-b': { note: 'confirmed note B', rejectionReason: 'saved rejection B' },
+    });
     let annotationPayload: unknown;
     const fetcher = vi.fn<typeof fetch>((input, init) => {
       const url = urlOf(input);
@@ -656,10 +1248,7 @@ describe('RecommendationsPage', () => {
         return Promise.resolve(jsonResponse(selectedRun));
       if (url.pathname.endsWith('/recommendations/group-b') && init?.method === 'PATCH') {
         annotationPayload = JSON.parse(init.body as string);
-        const group = selectedRun.groups.find((item) => item.group_id === 'group-b')!;
-        return Promise.resolve(
-          jsonResponse({ ...group, note: (annotationPayload as { note: string }).note }),
-        );
+        return Promise.resolve(jsonResponse(annotatedRun));
       }
       return Promise.reject(new Error(`Unexpected request: ${init?.method} ${url.pathname}`));
     });
@@ -684,6 +1273,7 @@ describe('RecommendationsPage', () => {
     await groupB.get('button').trigger('click');
     await flushPromises();
 
+    expect(store.currentRun).toEqual(annotatedRun);
     expect(store.currentRun?.groups.find((group) => group.group_id === 'group-b')?.note).toBe(
       'confirmed note B',
     );

@@ -568,4 +568,54 @@ describe('PolicyPage', () => {
       'Disable or reparent enabled child sleeves before disabling this parent.',
     );
   });
+
+  it('preserves a dirty editor across refresh and PolicyPage remounts', async () => {
+    let policyReads = 0;
+    const fetcher = vi.fn<typeof fetch>((input) => {
+      const url = requestAddress(input);
+      if (url.pathname === '/api/v1/policy') {
+        policyReads += 1;
+        const policyResponse: PolicyResponse = {
+          active: activeRevision,
+          drafts: [],
+          superseded: [],
+        };
+        return Promise.resolve(jsonResponse(policyResponse));
+      }
+      if (url.pathname === '/api/v1/portfolio')
+        return Promise.resolve(jsonResponse(notSyncedPortfolioResponse()));
+      return Promise.reject(new Error(`Unhandled local API request: ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const pinia = createPinia();
+    const mountPage = () =>
+      mount(PolicyPage, {
+        global: { plugins: [pinia], stubs: { QPage: { template: '<div><slot /></div>' } } },
+      });
+    const first = mountPage();
+    await flushPromises();
+    const rateSelector = '.settings-group input';
+    await first.find(rateSelector).setValue('0.2750000000000000001');
+    expect(first.text()).toContain('Unsaved changes.');
+
+    await first
+      .findAll('button')
+      .find((button) => button.text().includes('Refresh policy list'))!
+      .trigger('click');
+    await flushPromises();
+    expect(first.find(rateSelector).element).toHaveProperty('value', '0.2750000000000000001');
+    expect(policyReads).toBe(2);
+    first.unmount();
+
+    const remounted = mountPage();
+    await flushPromises();
+    expect(remounted.find(rateSelector).element).toHaveProperty('value', '0.2750000000000000001');
+    expect(remounted.text()).toContain('Unsaved changes.');
+    expect(remounted.text()).toContain(activeRevision.id);
+    remounted.unmount();
+
+    const unload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(unload);
+    expect(unload.defaultPrevented).toBe(true);
+  });
 });

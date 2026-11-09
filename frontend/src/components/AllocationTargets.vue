@@ -12,7 +12,11 @@
     <p v-if="!allocation" class="empty-state">
       Allocation data is unavailable from the portfolio API.
     </p>
-    <div v-else-if="sleeveKeys.length" class="table-wrap">
+    <WorkspaceTableFrame
+      v-else-if="sleeveKeys.length"
+      class="table-wrap"
+      label="Portfolio allocation weights"
+    >
       <table>
         <caption class="visually-hidden">
           Current, proposed basket, and policy target allocation weights
@@ -28,13 +32,13 @@
         <tbody>
           <tr v-for="sleeveKey in sleeveKeys" :key="sleeveKey">
             <th scope="row">{{ labels[sleeveKey] ?? sleeveKey }}</th>
-            <td>{{ displayPercent(allocation.current?.sleeve_weights_pct[sleeveKey]) }}</td>
-            <td>{{ displayPercent(allocation.proposed?.sleeve_weights_pct[sleeveKey]) }}</td>
-            <td>{{ displayPercent(allocation.target?.sleeve_weights_pct[sleeveKey]) }}</td>
+            <td>{{ formatPercent(allocation.current?.sleeve_weights_pct[sleeveKey]) }}</td>
+            <td>{{ formatPercent(allocation.proposed?.sleeve_weights_pct[sleeveKey]) }}</td>
+            <td>{{ formatPercent(allocation.target?.sleeve_weights_pct[sleeveKey]) }}</td>
           </tr>
         </tbody>
       </table>
-    </div>
+    </WorkspaceTableFrame>
     <p v-else class="empty-state">No allocation weights were returned.</p>
   </section>
 </template>
@@ -42,6 +46,8 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { AllocationResponse } from '@/types/api';
+import { formatPercent } from '@/utils/display-values';
+import WorkspaceTableFrame from '@/components/WorkspaceTableFrame.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -64,10 +70,6 @@ const sleeveKeys = computed(() => {
     ]),
   ];
 });
-
-function displayPercent(value: string | null | undefined): string {
-  return value == null || value === '' ? 'Unavailable' : `${value}%`;
-}
 </script>
 
 <style scoped>

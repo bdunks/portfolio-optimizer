@@ -1,23 +1,22 @@
 <template>
   <section class="workspace-page activity-page" aria-labelledby="activity-title">
-    <header class="page-header">
-      <div>
-        <p class="eyebrow">Workspace history</p>
-        <h1 id="activity-title">Activity</h1>
-        <p class="page-subtitle">
-          Timestamped API events, structured details, and saved optimizer-run reopening. Reopening a
-          run does not approve any trade.
-        </p>
-      </div>
-      <button type="button" class="primary-button" :disabled="isLoading" @click="refresh">
-        {{ isLoading ? 'Loading…' : 'Refresh activity' }}
-      </button>
-    </header>
+    <WorkspacePageHeader
+      eyebrow="Workspace history"
+      title="Activity"
+      title-id="activity-title"
+      subtitle="Timestamped API events, structured details, and saved optimizer-run reopening. Reopening a run does not approve any trade."
+    >
+      <template #actions>
+        <button type="button" class="primary-button" :disabled="isLoading" @click="refresh">
+          {{ isLoading ? 'Loading…' : 'Refresh activity' }}
+        </button>
+      </template>
+    </WorkspacePageHeader>
 
-    <p class="demo-notice" role="status">
-      <strong>DEMO ONLY.</strong> This local activity view never connects to E*TRADE and contains no
-      order preview or submission controls.
-    </p>
+    <WorkspaceCapabilityNotice label="DEMO ONLY.">
+      This local activity view never connects to E*TRADE and contains no order preview or submission
+      controls.
+    </WorkspaceCapabilityNotice>
 
     <div class="error-stack">
       <ApiActionError
@@ -30,89 +29,17 @@
       />
     </div>
 
-    <section v-if="savedRunSummary" class="summary-card" aria-labelledby="saved-run-title">
-      <div class="section-heading">
-        <div>
-          <h2 id="saved-run-title">Saved run summary and frozen settings</h2>
-          <p class="section-subtitle">
-            Values below are from the API run summary. Only the fields returned by the summary DTO
-            are shown; no missing assumptions are reconstructed.
-          </p>
-        </div>
-        <span class="demo-badge">DEMO · non-actionable</span>
-      </div>
-      <dl class="run-summary-grid">
-        <div>
-          <dt>Run ID</dt>
-          <dd>{{ savedRunSummary.run_id }}</dd>
-        </div>
-        <div>
-          <dt>Status / mode</dt>
-          <dd>{{ savedRunSummary.status }} · {{ savedRunSummary.mode }}</dd>
-        </div>
-        <div>
-          <dt>Policy revision</dt>
-          <dd>{{ savedRunSummary.policy_revision_id }}</dd>
-        </div>
-        <div>
-          <dt>Source generation</dt>
-          <dd>{{ savedRunSummary.source_generation }}</dd>
-        </div>
-        <div>
-          <dt>As of</dt>
-          <dd>{{ savedRunSummary.as_of }}</dd>
-        </div>
-        <div>
-          <dt>Proposed trade date</dt>
-          <dd>{{ savedRunSummary.proposed_trade_date ?? 'Unavailable' }}</dd>
-        </div>
-        <div>
-          <dt>Solver</dt>
-          <dd>{{ savedRunSummary.solver_version }}</dd>
-        </div>
-        <div>
-          <dt>Tax profile configured</dt>
-          <dd>{{ savedRunSummary.tax_profile_configured ? 'Yes' : 'No' }}</dd>
-        </div>
-        <div>
-          <dt>Tax estimate status</dt>
-          <dd>{{ savedRunSummary.estimated_tax_benefit_status }}</dd>
-        </div>
-        <div>
-          <dt>Estimated realized ST</dt>
-          <dd>{{ displayUsd(savedRunSummary.estimated_realized_st_usd) }}</dd>
-        </div>
-        <div>
-          <dt>Estimated realized LT</dt>
-          <dd>{{ displayUsd(savedRunSummary.estimated_realized_lt_usd) }}</dd>
-        </div>
-        <div>
-          <dt>Estimated tax benefit</dt>
-          <dd>{{ displayUsd(savedRunSummary.estimated_tax_benefit_usd) }}</dd>
-        </div>
-        <div>
-          <dt>Cash before / after</dt>
-          <dd>
-            {{ displayUsd(savedRunSummary.cash_before_usd) }} /
-            {{ displayUsd(savedRunSummary.cash_after_usd) }}
-          </dd>
-        </div>
-      </dl>
-      <h3>Batch settings returned by the API</h3>
-      <pre>{{ formatJson(savedRunSummary.batch_settings) }}</pre>
-      <p
-        v-if="savedRunSummary.input_fingerprint || savedRunSummary.source_checksum"
-        class="provenance-note"
-      >
-        Provenance — input fingerprint: {{ savedRunSummary.input_fingerprint ?? 'Unavailable' }} ·
-        source checksum: {{ savedRunSummary.source_checksum ?? 'Unavailable' }}
-      </p>
-      <ul v-if="savedRunSummary.warnings.length" class="warning-list">
-        <li v-for="warning in savedRunSummary.warnings" :key="warning">{{ warning }}</li>
-      </ul>
-    </section>
+    <ResourceFreshnessNotice :resources="['activity']" />
 
-    <form class="filter-panel" @submit.prevent="applyFilters">
+    <RunSummary
+      v-if="savedRunSummary || store.actionState.openSavedRun.pending"
+      mode="saved"
+      :summary="savedRunSummary"
+      :context="savedRunSummary?.frozen_display_context ?? null"
+      :pending="store.actionState.openSavedRun.pending"
+    />
+
+    <WorkspaceFilterPanel label="Activity filters" class="filter-panel" @submit="applyFilters">
       <label>
         <span>Event type</span>
         <input v-model="eventType" type="search" placeholder="Exact API event type" />
@@ -156,7 +83,7 @@
       <button type="button" class="text-button" :disabled="isLoading" @click="clearFilters">
         Clear filters
       </button>
-    </form>
+    </WorkspaceFilterPanel>
 
     <p
       v-if="store.actionState.loadActivity.pending && !activity"
@@ -165,28 +92,25 @@
     >
       Loading activity from the local API…
     </p>
-    <section v-else-if="!activity" class="empty-state" aria-live="polite">
-      <h2>No activity page loaded</h2>
-      <p>Retry to request current activity. No events are generated by this page.</p>
-      <button type="button" class="secondary-button" :disabled="isLoading" @click="refresh">
-        Retry loading activity
-      </button>
-    </section>
-    <section v-else-if="activity.total === 0" class="empty-state" aria-live="polite">
-      <h2>No activity events returned</h2>
-      <p>The API returned no events for the selected filters.</p>
-    </section>
+    <WorkspaceEmptyState v-else-if="!activity" title="No activity page loaded">
+      Retry to request current activity. No events are generated by this page.
+      <template #action>
+        <button type="button" class="secondary-button" :disabled="isLoading" @click="refresh">
+          Retry loading activity
+        </button>
+      </template>
+    </WorkspaceEmptyState>
+    <WorkspaceEmptyState v-else-if="activity.total === 0" title="No activity events returned">
+      The API returned no events for the selected filters.
+    </WorkspaceEmptyState>
     <template v-else>
       <p class="results-summary">
         {{ activity.items.length }} events on this page · {{ activity.total }} matching events ·
         page {{ pageNumber }} of {{ pageCount }}
       </p>
-      <section v-if="activity.items.length === 0" class="empty-state" aria-live="polite">
-        <h2>No events on this page</h2>
-        <p>
-          The API returned no events for this offset. Use the filters or return to a previous page.
-        </p>
-      </section>
+      <WorkspaceEmptyState v-if="activity.items.length === 0" title="No events on this page">
+        The API returned no events for this offset. Use the filters or return to a previous page.
+      </WorkspaceEmptyState>
       <ol v-else class="event-list" aria-label="Activity events">
         <li v-for="event in activity.items" :key="event.id" class="event-card">
           <header class="event-heading">
@@ -225,26 +149,16 @@
           </button>
         </li>
       </ol>
-      <nav class="pagination" aria-label="Activity pages">
-        <button
-          type="button"
-          class="secondary-button"
-          :disabled="isLoading || activity.offset === 0"
-          @click="changePage(-1)"
-        >
-          Previous page
-        </button>
-        <span>Page {{ pageNumber }} of {{ pageCount }}</span>
-        <button
-          type="button"
-          class="secondary-button"
-          :disabled="isLoading || activity.offset + activity.limit >= activity.total"
-          @click="changePage(1)"
-        >
-          Next page
-        </button>
-      </nav>
     </template>
+    <WorkspacePagination
+      v-if="activity"
+      :offset="activity.offset"
+      :limit="activity.limit"
+      :total="activity.total"
+      :pending="isLoading"
+      label="Activity pages"
+      @page="loadActivity"
+    />
   </section>
 </template>
 
@@ -252,9 +166,18 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import ApiActionError from '@/components/ApiActionError.vue';
+import RunSummary from '@/components/RunSummary.vue';
+import WorkspacePageHeader from '@/components/WorkspacePageHeader.vue';
+import WorkspaceCapabilityNotice from '@/components/WorkspaceCapabilityNotice.vue';
+import WorkspaceEmptyState from '@/components/WorkspaceEmptyState.vue';
+import WorkspaceFilterPanel from '@/components/WorkspaceFilterPanel.vue';
+import WorkspacePagination from '@/components/WorkspacePagination.vue';
+import { getPaginationMetadata } from '@/components/workspace-pagination-state';
+
+import ResourceFreshnessNotice from '@/components/ResourceFreshnessNotice.vue';
 import { useWorkspaceStore } from '@/stores/workspace-store';
 import type { ActivityQuery } from '@/services/api';
-import type { ActivityEventResponse, JSONValue } from '@/types/api';
+import type { ActivityEventResponse } from '@/types/api';
 
 const store = useWorkspaceStore();
 const router = useRouter();
@@ -271,21 +194,15 @@ const sinceEdited = ref(false);
 const untilEdited = ref(false);
 const pageLimit = ref(store.activityFilters.limit ?? 25);
 const isLoading = computed(() => store.actionState.loadActivity.pending);
-const pageNumber = computed(() => {
+const pagination = computed(() => {
   const page = activity.value;
-  return page ? Math.floor(page.offset / page.limit) + 1 : 1;
+  return getPaginationMetadata(page?.offset ?? 0, page?.limit ?? 1, page?.total ?? 0);
 });
-const pageCount = computed(() => {
-  const page = activity.value;
-  return page ? Math.max(1, Math.ceil(page.total / page.limit)) : 1;
-});
+const pageNumber = computed(() => pagination.value.pageNumber);
+const pageCount = computed(() => pagination.value.pageCount);
 
-function displayUsd(value: string | null): string {
-  return value === null ? 'Unavailable' : `${value} USD`;
-}
-
-function formatJson(value: JSONValue): string {
-  return JSON.stringify(value, null, 2);
+function formatJson(value: unknown): string {
+  return JSON.stringify(value, null, 2) ?? 'Unavailable';
 }
 
 function savedRunId(event: ActivityEventResponse): string | null {
@@ -373,13 +290,6 @@ function refresh(): void {
   void loadActivity(activity.value?.offset ?? 0);
 }
 
-function changePage(direction: -1 | 1): void {
-  const page = activity.value;
-  if (!page) return;
-  const nextOffset = Math.max(0, page.offset + direction * page.limit);
-  void loadActivity(nextOffset);
-}
-
 async function reopenRun(runId: string): Promise<void> {
   try {
     await store.openSavedRun(runId);
@@ -399,30 +309,18 @@ onMounted(() => {
   max-width: 1600px;
 }
 
-.event-heading,
-.pagination {
+.event-heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
 }
 
-.demo-notice {
-  margin: 0;
-  padding: 0.8rem 1rem;
-  border: 1px solid #f2dcad;
-  border-radius: 0.65rem;
-  background: #fff7e8;
-  color: #765016;
-  font-size: 0.82rem;
-  line-height: 1.5;
-}
 .error-stack {
   display: grid;
   gap: 0.6rem;
 }
 .filter-panel,
-.summary-card,
 .empty-state,
 .event-card {
   min-width: 0;
@@ -504,14 +402,12 @@ button:disabled {
   font-size: 0.68rem;
   font-weight: 800;
 }
-.run-summary-grid,
 .event-meta {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.65rem;
   margin: 0;
 }
-.run-summary-grid > div,
 .event-meta > div {
   min-width: 0;
   padding: 0.6rem;
@@ -529,12 +425,6 @@ dl dd {
   font-weight: 700;
   overflow-wrap: anywhere;
 }
-.summary-card h3 {
-  margin: 0.9rem 0 0.4rem;
-  color: #526c7c;
-  font-size: 0.75rem;
-  text-transform: uppercase;
-}
 pre {
   max-height: 20rem;
   margin: 0;
@@ -547,23 +437,12 @@ pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.provenance-note,
-.warning-list,
 .state-message,
 .empty-state p,
 .results-summary {
   color: #657d8b;
   font-size: 0.78rem;
   line-height: 1.5;
-}
-.provenance-note {
-  margin: 0.6rem 0 0;
-  overflow-wrap: anywhere;
-}
-.warning-list {
-  margin: 0.6rem 0 0;
-  padding-left: 1.2rem;
-  color: #765016;
 }
 .results-summary {
   margin: 0;
@@ -621,31 +500,19 @@ details pre {
 .reopen-button {
   margin-top: 0.7rem;
 }
-.pagination {
-  align-items: center;
-  justify-content: center;
-  color: #526c7c;
-  font-size: 0.78rem;
-}
 .empty-state p {
   margin: 0.6rem 0 0.8rem;
 }
 @media (max-width: 900px) {
-  .run-summary-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 @media (max-width: 650px) {
-  .page-header,
-  .event-heading,
-  .pagination {
+  .event-heading {
     align-items: stretch;
     flex-direction: column;
   }
   .filter-panel label {
     width: 100%;
   }
-  .run-summary-grid,
   .event-meta {
     grid-template-columns: 1fr;
   }

@@ -202,10 +202,6 @@ export function unlinkedLegs(run: OptimizerRecommendationsResponse): Recommendat
   });
 }
 
-export function displayUsd(value: string | null | undefined): string {
-  return value == null || value === '' ? 'Unavailable (not returned by API)' : `${value} USD`;
-}
-
 export function displayJson(value: unknown): string {
   if (value == null) return 'No reason was returned by the API.';
   if (typeof value === 'string') return value;

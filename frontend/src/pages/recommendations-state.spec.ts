@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { OptimizerRecommendationsResponse } from '@/types/api';
+import type {
+  FrozenRunDisplayContextResponse,
+  OptimizerRecommendationsResponse,
+} from '@/types/api';
+
 import {
   buildSelectionPayload,
   canonicalLegs,
@@ -7,6 +11,19 @@ import {
   sharedLegs,
 } from './recommendations-state';
 
+const frozenDisplayContext = {
+  available: true,
+  source: 'policy_revision',
+  policy_revision_id: 'policy-fixture',
+  revision_number: 1,
+  created_at: '2025-01-01T00:00:00Z',
+  activated_at: '2025-01-01T00:00:00Z',
+  sleeves: [],
+  settings: { target_retained_net_loss_usd: '3000.00' },
+  allowed_securities: [],
+  overrides: [],
+  unavailable_reason: null,
+} satisfies FrozenRunDisplayContextResponse;
 const run = {
   run_id: 'run-fixture',
   status: 'demo',
@@ -34,6 +51,7 @@ const run = {
   no_trade_reason: null,
   warnings: [],
   tax_profile_configured: false,
+  frozen_display_context: frozenDisplayContext,
   groups: [
     {
       group_id: 'group-a',

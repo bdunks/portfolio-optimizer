@@ -59,6 +59,28 @@ describe('typed local API transport', () => {
     });
   });
 
+  it('sends annotation patches and receives the complete recommendation snapshot', async () => {
+    const fullRun = {
+      run_id: 'run-1',
+      groups: [{ group_id: 'group-1', selected: false, rejected: true, note: null }],
+      consolidated_legs: [],
+      orders_count: 0,
+    };
+    const fetcher = vi.fn<typeof fetch>(() => Promise.resolve(jsonResponse(fullRun)));
+    const client = createApiClient(fetcher);
+
+    const response = await client.annotateGroup('run/1', 'group 1', { note: null });
+
+    expect(fetcher.mock.calls[0]?.[0]).toBe(
+      '/api/v1/optimizer/runs/run%2F1/recommendations/group%201',
+    );
+    expect(fetcher.mock.calls[0]?.[1]?.method).toBe('PATCH');
+    expect(bodyJson(fetcher.mock.calls[0]?.[1])).toEqual({ note: null });
+    expect(response).toEqual(fullRun);
+    expect(response.run_id).toBe('run-1');
+    expect(response.groups[0]?.selected).toBe(false);
+  });
+
   it('surfaces backend error details and correlation IDs', async () => {
     const client = createApiClient(
       vi.fn<typeof fetch>(() =>

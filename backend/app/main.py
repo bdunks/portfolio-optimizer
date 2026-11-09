@@ -62,7 +62,6 @@ from app.schemas import (
     PolicyRevisionResponse,
     PortfolioResponse,
     RecommendationAnnotationInput,
-    RecommendationGroupResponse,
     SyncResponseDTO,
     WashSalesResponse,
 )
@@ -619,7 +618,7 @@ def create_app(
 
     @application.get("/api/v1/optimizer/runs/{run_id}", response_model=OptimizerRunResponse, responses=API_ERROR_RESPONSES)
     def optimizer_run_detail(run_id: str, session: Session = session_dependency) -> dict[str, Any]:
-        return run_summary(get_run(session, run_id))
+        return run_summary(get_run(session, run_id), session=session)
 
     @application.get("/api/v1/optimizer/runs/{run_id}/recommendations", response_model=OptimizerRecommendationsResponse, responses=API_ERROR_RESPONSES)
     def optimizer_run_recommendations(run_id: str, session: Session = session_dependency) -> dict[str, Any]:
@@ -641,7 +640,7 @@ def create_app(
             )
             return run_recommendations(session, run)
 
-    @application.patch("/api/v1/optimizer/runs/{run_id}/recommendations/{group_id}", response_model=RecommendationGroupResponse, responses=API_ERROR_RESPONSES)
+    @application.patch("/api/v1/optimizer/runs/{run_id}/recommendations/{group_id}", response_model=OptimizerRecommendationsResponse, responses=API_ERROR_RESPONSES)
     def annotate_recommendation_group(
         run_id: str,
         group_id: str,
@@ -657,9 +656,7 @@ def create_app(
                 payload,
                 correlation_id=request.state.correlation_id,
             )
-            return next(
-                item for item in run_recommendations(session, run)["groups"] if item["group_id"] == group_id
-            )
+            return run_recommendations(session, run)
 
     @application.get("/api/v1/optimizer/runs/{run_id}/export", response_model=None, responses=EXPORT_RESPONSES)
     def export_optimizer_run(

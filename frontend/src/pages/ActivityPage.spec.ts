@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import type {
+  FrozenRunDisplayContextResponse,
   ActivityEventResponse,
   ActivityPageResponse,
   OptimizerRecommendationsResponse,
@@ -11,6 +12,34 @@ import type {
 } from '@/types/api';
 import ActivityPage from './ActivityPage.vue';
 import { useWorkspaceStore } from '@/stores/workspace-store';
+
+const frozenDisplayContext: FrozenRunDisplayContextResponse = {
+  available: true,
+  source: 'policy_revision',
+  policy_revision_id: 'policy-synthetic',
+  revision_number: 4,
+  created_at: '2024-01-01T00:00:00Z',
+  activated_at: '2024-01-02T00:00:00Z',
+  sleeves: [
+    {
+      sleeve_key: 'us',
+      display_name: 'Historical US equity',
+      sort_order: 1,
+      parent_sleeve_key: null,
+      target_pct: '63.0000',
+      drift_band_pp: '5.0000',
+      enabled: true,
+      is_direct_index_container: true,
+      is_direct_index_sleeve: false,
+      is_transition_destination: false,
+      is_cash_sleeve: false,
+    },
+  ],
+  settings: { target_retained_net_loss_usd: '3210.00' },
+  allowed_securities: [],
+  overrides: [],
+  unavailable_reason: null,
+};
 
 const savedRun: OptimizerRunResponse = {
   run_id: 'saved-run-synthetic',
@@ -39,6 +68,7 @@ const savedRun: OptimizerRunResponse = {
   no_trade_reason: null,
   warnings: ['Synthetic saved-run warning'],
   tax_profile_configured: false,
+  frozen_display_context: frozenDisplayContext,
 };
 
 const savedRecommendations: OptimizerRecommendationsResponse = {
@@ -220,6 +250,15 @@ describe('ActivityPage', () => {
     });
     vi.stubGlobal('fetch', fetcher);
     const router = testRouter();
+    const store = useWorkspaceStore();
+    store.policy = {
+      active: {
+        id: 'policy-current',
+        sleeves: [{ sleeve_key: 'us', display_name: 'Current US renamed' }],
+      },
+      drafts: [],
+      superseded: [],
+    } as never;
     await router.push('/activity');
     await router.isReady();
     const wrapper = mount(ActivityPage, { global: { plugins: [router] } });
@@ -232,6 +271,12 @@ describe('ActivityPage', () => {
     expect(router.currentRoute.value.path).toBe('/recommendations');
     expect(wrapper.text()).toContain('Saved run summary and frozen settings');
     expect(wrapper.text()).toContain('policy-synthetic');
+    const summaryCard = wrapper.get('.run-summary');
+    expect(summaryCard.text()).toContain('Historical US equity');
+    expect(summaryCard.text()).toContain('63.0000%');
+    expect(summaryCard.text()).toContain('3210.00');
+    expect(summaryCard.text()).not.toContain('Current US renamed');
+    expect(store.currentRunSummary?.frozen_display_context).toEqual(frozenDisplayContext);
     expect(wrapper.text()).toContain('loss_budget_usd');
     expect(wrapper.text()).toContain('25.00');
     expect(wrapper.text()).toContain('Synthetic saved-run warning');

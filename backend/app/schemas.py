@@ -241,13 +241,28 @@ class OptimizerSelectionInput(StrictModel):
 
 
 class RecommendationAnnotationInput(StrictModel):
-    note: str | None = Field(default=None, max_length=2000)
-    rejected: bool | None = None
-    rejection_reason: str | None = Field(default=None, max_length=500)
+    note: str | None = Field(
+        default=None,
+        max_length=2000,
+        description="Optional note (maximum 2000 characters); omitted leaves it unchanged and explicit null clears it.",
+    )
+    rejected: bool | None = Field(
+        default=None,
+        description="Set rejection state; restoring with false clears the reason and does not reselect the group.",
+    )
+    rejection_reason: str | None = Field(
+        default=None,
+        max_length=500,
+        description="Optional rejection reason (maximum 500 characters); may be changed only with rejected=true.",
+    )
+
     @model_validator(mode="after")
     def require_annotation(self) -> RecommendationAnnotationInput:
-        if self.note is None and self.rejected is None and self.rejection_reason is None:
-            raise ValueError("at least one annotation field is required")
+        fields_set = self.model_fields_set
+        if not fields_set or ("note" not in fields_set and self.rejected is None):
+            raise ValueError("at least one annotation change is required")
+        if "rejection_reason" in fields_set and self.rejected is not True:
+            raise ValueError("a rejection reason may only be supplied with rejected=true")
         return self
 
 
@@ -595,6 +610,50 @@ class RecommendationGroupResponse(StrictModel):
     warnings: list[str]
 
 
+class RunPolicySleeveResponse(StrictModel):
+    sleeve_key: str
+    display_name: str
+    sort_order: int
+    parent_sleeve_key: str | None
+    target_pct: str | None
+    drift_band_pp: str | None
+    enabled: bool
+    is_direct_index_container: bool
+    is_direct_index_sleeve: bool
+    is_transition_destination: bool
+    is_cash_sleeve: bool
+
+
+class RunPolicyAllowedSecurityResponse(StrictModel):
+    ticker: str
+    sleeve_key: str
+    sub_sleeve_key: str | None
+    replacement_set_id: str
+    priority: int
+    enabled: bool
+    exposure_suitability: str | None
+
+
+class RunPolicyOverrideResponse(StrictModel):
+    ticker: str
+    sleeve_key: str
+    sub_sleeve_key: str | None
+
+
+class FrozenRunDisplayContextResponse(StrictModel):
+    available: bool
+    source: Literal["frozen_input_bundle", "policy_revision"] | None
+    policy_revision_id: str
+    revision_number: int | None
+    created_at: datetime | None
+    activated_at: datetime | None
+    sleeves: list[RunPolicySleeveResponse] | None
+    settings: dict[str, JSONValue] | None
+    allowed_securities: list[RunPolicyAllowedSecurityResponse] | None
+    overrides: list[RunPolicyOverrideResponse] | None
+    unavailable_reason: str | None
+
+
 class OptimizerRunResponse(StrictModel):
     run_id: str
     status: Literal["demo"]
@@ -623,6 +682,7 @@ class OptimizerRunResponse(StrictModel):
     no_trade_reason: JSONValue | None
     warnings: list[str]
     tax_profile_configured: bool
+    frozen_display_context: FrozenRunDisplayContextResponse
 
 
 class OptimizerRecommendationsResponse(OptimizerRunResponse):
@@ -686,6 +746,7 @@ class OptimizerExportMetadataResponse(StrictModel):
     input_fingerprint: str | None
     source_checksum: str | None
     warnings: list[str]
+    frozen_display_context: FrozenRunDisplayContextResponse
 
 
 class OptimizerExportJSONResponse(StrictModel):

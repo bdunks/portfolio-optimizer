@@ -77,6 +77,20 @@ export type EtradeAuthStatusResponse = {
   "message": string;
 };
 
+export type FrozenRunDisplayContextResponse = {
+  "available": boolean;
+  "source": "frozen_input_bundle" | "policy_revision" | null;
+  "policy_revision_id": string;
+  "revision_number": number | null;
+  "created_at": string | null;
+  "activated_at": string | null;
+  "sleeves": Array<RunPolicySleeveResponse> | null;
+  "settings": Record<string, JSONValue> | null;
+  "allowed_securities": Array<RunPolicyAllowedSecurityResponse> | null;
+  "overrides": Array<RunPolicyOverrideResponse> | null;
+  "unavailable_reason": string | null;
+};
+
 export type GroupImpactResponse = {
   "demo": true;
   "wash_status": "not_validated_demo";
@@ -148,6 +162,7 @@ export type OptimizerExportMetadataResponse = {
   "input_fingerprint": string | null;
   "source_checksum": string | null;
   "warnings": Array<string>;
+  "frozen_display_context": FrozenRunDisplayContextResponse;
 };
 
 export type OptimizerRecommendationsResponse = {
@@ -178,6 +193,7 @@ export type OptimizerRecommendationsResponse = {
   "no_trade_reason": JSONValue | null;
   "warnings": Array<string>;
   "tax_profile_configured": boolean;
+  "frozen_display_context": FrozenRunDisplayContextResponse;
   "groups": Array<RecommendationGroupResponse>;
   "consolidated_legs": Array<RecommendationLegResponse>;
 };
@@ -218,6 +234,7 @@ export type OptimizerRunResponse = {
   "no_trade_reason": JSONValue | null;
   "warnings": Array<string>;
   "tax_profile_configured": boolean;
+  "frozen_display_context": FrozenRunDisplayContextResponse;
 };
 
 export type OptimizerSelectionInput = {
@@ -437,6 +454,36 @@ export type RecommendationLegResponse = {
   "dependencies": Array<string>;
   "selected_lots": Array<SelectedLotResponse>;
   "details": Record<string, JSONValue>;
+};
+
+export type RunPolicyAllowedSecurityResponse = {
+  "ticker": string;
+  "sleeve_key": string;
+  "sub_sleeve_key": string | null;
+  "replacement_set_id": string;
+  "priority": number;
+  "enabled": boolean;
+  "exposure_suitability": string | null;
+};
+
+export type RunPolicyOverrideResponse = {
+  "ticker": string;
+  "sleeve_key": string;
+  "sub_sleeve_key": string | null;
+};
+
+export type RunPolicySleeveResponse = {
+  "sleeve_key": string;
+  "display_name": string;
+  "sort_order": number;
+  "parent_sleeve_key": string | null;
+  "target_pct": string | null;
+  "drift_band_pp": string | null;
+  "enabled": boolean;
+  "is_direct_index_container": boolean;
+  "is_direct_index_sleeve": boolean;
+  "is_transition_destination": boolean;
+  "is_cash_sleeve": boolean;
 };
 
 export type SelectedLotResponse = {
@@ -767,7 +814,7 @@ export interface ApiOperations {
     query: Record<never, never>;
     request: RecommendationAnnotationInput;
     responses: {
-      "200": RecommendationGroupResponse;
+      "200": OptimizerRecommendationsResponse;
       "403": ErrorEnvelope;
       "404": ErrorEnvelope;
       "409": ErrorEnvelope;

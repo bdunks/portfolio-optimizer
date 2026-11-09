@@ -9,6 +9,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -20,7 +21,10 @@ from app.db.models import (
     CurrentQuote,
     CurrentTaxLot,
     OptimizerRun,
+    PolicyAllowedSecurity,
     PolicyRevision,
+    PolicySecurityOverride,
+    PolicySleeve,
     RecommendationGroup,
     RecommendationGroupLeg,
     RecommendationLeg,
@@ -46,7 +50,7 @@ from app.domain.portfolio_accounting import (
     evaluate_portfolio,
 )
 from app.domain.trade_dates import resolve_proposed_trade_date
-from app.schemas import OptimizerRunInput, OptimizerSelectionInput
+from app.schemas import FrozenRunDisplayContextResponse, OptimizerRunInput, OptimizerSelectionInput
 from app.services.demo_candidates import _candidate_groups, _datetime_iso, _decimal
 from app.services.errors import AppError
 from app.services.financial_input_loader import load_financial_inputs
@@ -918,19 +922,19 @@ def annotate_group(
         raise AppError("recommendation_group_not_found", "Recommendation group was not found", status_code=404)
     if not isinstance(payload, RecommendationAnnotationInput):
         raise AppError("invalid_annotation", "Recommendation annotation is invalid", status_code=422)
-    if payload.note is not None:
+    fields_set = payload.model_fields_set
+    if "note" in fields_set:
         group.note = payload.note
-    if payload.rejected is not None:
-        group.rejected = payload.rejected
-        if payload.rejected:
-            group.selected = False
+    if payload.rejected is True:
+        group.rejected = True
+        group.selected = False
+        if "rejection_reason" in fields_set:
             group.rejection_reason = payload.rejection_reason
-            for row in _group_lot_rows(session, group.id):
-                row.selected = False
-        else:
-            group.rejection_reason = None
-    elif payload.rejection_reason is not None:
-        raise AppError("invalid_annotation", "A rejection reason requires rejected=true", status_code=422)
+        for row in _group_lot_rows(session, group.id):
+            row.selected = False
+    elif payload.rejected is False:
+        group.rejected = False
+        group.rejection_reason = None
     if payload.rejected:
         active_groups = [
             row
@@ -998,11 +1002,224 @@ def _presentation_group_impact(value: object) -> object:
     presented["portfolio_effects"] = presented_effects
     return presented
 
+_RUN_DISPLAY_POLICY_SETTINGS = (
+    "short_term_tax_rate",
+    "long_term_tax_rate",
+    "st_loss_carryforward_usd",
+    "lt_loss_carryforward_usd",
+    "ytd_realized_st_usd",
+    "ytd_realized_lt_usd",
+    "ytd_source",
+    "ytd_as_of",
+    "target_retained_net_loss_usd",
+    "ordinary_income_deduction_limit_usd",
+    "carryforward_loss_discount_factor",
+    "gain_budget_usd",
+    "max_incremental_tax_cost_usd",
+    "st_gain_limit_usd",
+    "lt_gain_limit_usd",
+    "budget_period",
+    "max_sell_tickers_per_batch",
+    "max_sell_lots_per_batch",
+    "max_total_orders_per_batch",
+    "max_batch_turnover_pct",
+    "min_buy_order_notional_usd",
+    "cash_reserve_usd",
+    "prefer_etf_buys",
+    "allow_gain_sales",
+    "permit_etf_harvest",
+    "permit_muni_exit",
+)
 
-def run_summary(run: OptimizerRun) -> dict[str, object]:
+_RUN_DISPLAY_SLEEVE_FIELDS = (
+    "sleeve_key",
+    "display_name",
+    "sort_order",
+    "parent_sleeve_key",
+    "target_pct",
+    "drift_band_pp",
+    "enabled",
+    "is_direct_index_container",
+    "is_direct_index_sleeve",
+    "is_transition_destination",
+    "is_cash_sleeve",
+)
+_RUN_DISPLAY_ALLOWED_FIELDS = (
+    "ticker",
+    "sleeve_key",
+    "sub_sleeve_key",
+    "replacement_set_id",
+    "priority",
+    "enabled",
+    "exposure_suitability",
+)
+_RUN_DISPLAY_OVERRIDE_FIELDS = ("ticker", "sleeve_key", "sub_sleeve_key")
+
+
+def _run_context_datetime(value: datetime | str | None) -> str | None:
+    if value is None:
+        return None
+    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(value)
+    return parsed.isoformat().replace("+00:00", "Z")
+
+
+def _frozen_run_display_context(run: OptimizerRun) -> dict[str, object] | None:
+    policy = run.frozen_input_bundle.get("policy")
+    if not isinstance(policy, dict) or policy.get("id") != run.policy_revision_id:
+        return None
+    settings = policy.get("settings")
+    sleeves = policy.get("sleeves")
+    allowed_securities = policy.get("allowed_securities")
+    overrides = policy.get("overrides")
+    revision_number = policy.get("revision_number")
+    if (
+        not isinstance(settings, dict)
+        or not isinstance(sleeves, list)
+        or not isinstance(allowed_securities, list)
+        or not isinstance(overrides, list)
+        or not isinstance(revision_number, int)
+        or isinstance(revision_number, bool)
+    ):
+        return None
+    if any(not isinstance(row, dict) or not set(_RUN_DISPLAY_SLEEVE_FIELDS) <= row.keys() for row in sleeves):
+        return None
+    if any(not isinstance(row, dict) or not set(_RUN_DISPLAY_ALLOWED_FIELDS) <= row.keys() for row in allowed_securities):
+        return None
+    if any(not isinstance(row, dict) or not set(_RUN_DISPLAY_OVERRIDE_FIELDS) <= row.keys() for row in overrides):
+        return None
+    raw_created_at = policy.get("created_at")
+    raw_activated_at = policy.get("activated_at")
+    if (raw_created_at is not None and not isinstance(raw_created_at, str)) or (
+        raw_activated_at is not None and not isinstance(raw_activated_at, str)
+    ):
+        return None
+    try:
+        created_at = _run_context_datetime(raw_created_at)
+        activated_at = _run_context_datetime(raw_activated_at)
+    except (TypeError, ValueError):
+        return None
+    context = {
+        "available": True,
+        "source": "frozen_input_bundle",
+        "policy_revision_id": run.policy_revision_id,
+        "revision_number": revision_number,
+        "created_at": created_at,
+        "activated_at": activated_at,
+        "sleeves": [{key: row[key] for key in _RUN_DISPLAY_SLEEVE_FIELDS} for row in sleeves],
+        "settings": settings,
+        "allowed_securities": [{key: row[key] for key in _RUN_DISPLAY_ALLOWED_FIELDS} for row in allowed_securities],
+        "overrides": [{key: row[key] for key in _RUN_DISPLAY_OVERRIDE_FIELDS} for row in overrides],
+        "unavailable_reason": None,
+    }
+    try:
+        FrozenRunDisplayContextResponse.model_validate(context)
+    except ValidationError:
+        return None
+    return context
+
+
+def _policy_revision_run_display_context(session: Session, run: OptimizerRun) -> dict[str, object] | None:
+    revision = session.get(PolicyRevision, run.policy_revision_id)
+    if revision is None:
+        return None
+    sleeves = session.scalars(
+        select(PolicySleeve)
+        .where(PolicySleeve.policy_revision_id == revision.id)
+        .order_by(PolicySleeve.sort_order, PolicySleeve.sleeve_key)
+    ).all()
+    allowed_securities = session.scalars(
+        select(PolicyAllowedSecurity)
+        .where(PolicyAllowedSecurity.policy_revision_id == revision.id)
+        .order_by(
+            PolicyAllowedSecurity.sleeve_key,
+            PolicyAllowedSecurity.replacement_set_id,
+            PolicyAllowedSecurity.priority,
+            PolicyAllowedSecurity.ticker,
+        )
+    ).all()
+    overrides = session.execute(
+        select(PolicySecurityOverride, Security.ticker)
+        .join(Security, Security.id == PolicySecurityOverride.security_id)
+        .where(PolicySecurityOverride.policy_revision_id == revision.id)
+        .order_by(Security.ticker)
+    ).all()
+    settings: dict[str, object] = {}
+    for key in _RUN_DISPLAY_POLICY_SETTINGS:
+        value = getattr(revision, key)
+        settings[key] = value.isoformat() if isinstance(value, date) else str(value) if isinstance(value, Decimal) else value
+    return {
+        "available": True,
+        "source": "policy_revision",
+        "policy_revision_id": revision.id,
+        "revision_number": revision.revision_number,
+        "created_at": _run_context_datetime(revision.created_at),
+        "activated_at": _run_context_datetime(revision.activated_at),
+        "sleeves": [
+            {
+                "sleeve_key": row.sleeve_key,
+                "display_name": row.display_name,
+                "sort_order": row.sort_order,
+                "parent_sleeve_key": row.parent_sleeve_key,
+                "target_pct": str(row.target_pct),
+                "drift_band_pp": str(row.drift_band_pp),
+                "enabled": row.enabled,
+                "is_direct_index_container": row.is_direct_index_container,
+                "is_direct_index_sleeve": row.is_direct_index_sleeve,
+                "is_transition_destination": row.is_transition_destination,
+                "is_cash_sleeve": row.is_cash_sleeve,
+            }
+            for row in sleeves
+        ],
+        "settings": settings,
+        "allowed_securities": [
+            {
+                "ticker": row.ticker,
+                "sleeve_key": row.sleeve_key,
+                "sub_sleeve_key": row.sub_sleeve_key,
+                "replacement_set_id": row.replacement_set_id,
+                "priority": row.priority,
+                "enabled": row.enabled,
+                "exposure_suitability": row.exposure_suitability,
+            }
+            for row in allowed_securities
+        ],
+        "overrides": [
+            {"ticker": ticker, "sleeve_key": row.sleeve_key, "sub_sleeve_key": row.sub_sleeve_key}
+            for row, ticker in overrides
+        ],
+        "unavailable_reason": None,
+    }
+
+
+def _run_display_context(run: OptimizerRun, session: Session | None) -> dict[str, object]:
+    context = _frozen_run_display_context(run)
+    if context is None and session is not None:
+        context = _policy_revision_run_display_context(session, run)
+    if context is not None:
+        return context
+    return {
+        "available": False,
+        "source": None,
+        "policy_revision_id": run.policy_revision_id,
+        "revision_number": None,
+        "created_at": None,
+        "activated_at": None,
+        "sleeves": None,
+        "settings": None,
+        "allowed_securities": None,
+        "overrides": None,
+        "unavailable_reason": "Frozen policy display provenance is unavailable",
+    }
+
+
+
+def run_summary(run: OptimizerRun, *, session: Session | None = None) -> dict[str, object]:
     metrics = run.metrics
     bundle = run.frozen_input_bundle
-    settings = bundle.get("policy", {}).get("settings", {})
+    policy = bundle.get("policy")
+    settings = policy.get("settings", {}) if isinstance(policy, dict) else {}
+    display_context = _run_display_context(run, session)
+    display_settings = display_context["settings"] if isinstance(display_context.get("settings"), dict) else settings
     tax_status = metrics.get("estimated_tax_benefit_status", "tax_profile_incomplete")
     return {
         "run_id": run.id,
@@ -1031,8 +1248,9 @@ def run_summary(run: OptimizerRun) -> dict[str, object]:
         "constraints_satisfied": None,
         "no_trade_reason": metrics.get("no_trade_reason"),
         "warnings": list(run.warnings),
-        "tax_profile_configured": settings.get("short_term_tax_rate") is not None
-        and settings.get("long_term_tax_rate") is not None,
+        "tax_profile_configured": display_settings.get("short_term_tax_rate") is not None
+        and display_settings.get("long_term_tax_rate") is not None,
+        "frozen_display_context": display_context,
     }
 
 
@@ -1110,7 +1328,7 @@ def run_recommendations(session: Session, run: OptimizerRun) -> dict[str, object
         .order_by(RecommendationGroup.rank)
     ).all()
     if not groups:
-        return {**run_summary(run), "groups": [], "consolidated_legs": []}
+        return {**run_summary(run, session=session), "groups": [], "consolidated_legs": []}
 
     group_ids = [group.id for group in groups]
     group_rank = {group.id: group.rank for group in groups}
@@ -1175,7 +1393,7 @@ def run_recommendations(session: Session, run: OptimizerRun) -> dict[str, object
         for leg in legs
     ]
     return {
-        **run_summary(run),
+        **run_summary(run, session=session),
         "groups": [_group_dict(group, group_leg_ids[group.id]) for group in groups],
         "consolidated_legs": serialized_legs,
     }
@@ -1204,6 +1422,7 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
             "input_fingerprint",
             "source_checksum",
             "warnings",
+            "frozen_display_context",
         )
     }
     if file_format == "json":
@@ -1230,6 +1449,7 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
         "cash_before_usd",
         "cash_after_usd",
         "portfolio_effects_json",
+        "frozen_display_context_json",
         "actionable",
         "group_id",
         "group_ids",
@@ -1273,6 +1493,9 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
             "estimated_tax_benefit_usd": response["estimated_tax_benefit_usd"],
             "cash_before_usd": response["cash_before_usd"],
             "cash_after_usd": response["cash_after_usd"],
+            "frozen_display_context_json": json.dumps(
+                response["frozen_display_context"], sort_keys=True, separators=(",", ":"), default=str
+            ),
             "portfolio_effects_json": json.dumps(
                 response["portfolio_effects"], sort_keys=True, separators=(",", ":"), default=str
             ),

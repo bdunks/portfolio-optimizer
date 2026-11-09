@@ -1,14 +1,12 @@
 <template>
   <q-page class="workspace-page overview-page">
-    <header class="page-header">
-      <div>
-        <p class="eyebrow">Workspace overview</p>
-        <h1>Overview</h1>
-        <p class="page-subtitle">
-          Current account state and API-supplied allocation context for a single local workspace.
-        </p>
-      </div>
-      <div class="page-actions">
+    <WorkspacePageHeader
+      eyebrow="Workspace overview"
+      title="Overview"
+      title-id="overview-title"
+      subtitle="Current account state and API-supplied allocation context for a single local workspace."
+    >
+      <template #actions>
         <q-btn
           outline
           color="primary"
@@ -29,8 +27,8 @@
           :disable="!canRunOptimizer"
           @click="runOptimizer"
         />
-      </div>
-    </header>
+      </template>
+    </WorkspacePageHeader>
 
     <p v-if="!canRunOptimizer" class="run-help">
       Recommendations require a ready portfolio snapshot and a valid active policy. Nothing runs
@@ -60,23 +58,30 @@
       />
     </div>
 
-    <q-banner class="overview-demo-banner" rounded>
-      <strong>DEMO analysis only.</strong> Recommendations are non-actionable; no broker calls,
-      OAuth, live writes, or orders are available.
-    </q-banner>
+    <ResourceFreshnessNotice />
+    <p v-if="portfolioLabelContext.revisionMismatch" class="state-message" role="status">
+      Portfolio effects use policy revision
+      {{ portfolioLabelContext.portfolioRevisionId ?? 'unavailable' }}; the active policy is
+      {{ portfolioLabelContext.policyRevisionId ?? 'unavailable' }}. Cached values remain visible
+      with API sleeve keys until matching policy labels are confirmed.
+    </p>
+    <WorkspaceCapabilityNotice label="DEMO analysis only.">
+      Recommendations are non-actionable; no broker calls, OAuth, live writes, or orders are
+      available.
+    </WorkspaceCapabilityNotice>
 
     <section class="summary-grid" aria-label="Current portfolio summary">
       <q-card flat bordered class="summary-card">
         <q-card-section>
           <p class="summary-label">Portfolio value</p>
-          <p class="summary-value">{{ displayMoney(portfolio?.portfolio_total_usd) }}</p>
+          <p class="summary-value">{{ formatUsd(portfolio?.portfolio_total_usd) }}</p>
           <p class="summary-foot">Value returned by the portfolio API</p>
         </q-card-section>
       </q-card>
       <q-card flat bordered class="summary-card">
         <q-card-section>
           <p class="summary-label">Cash</p>
-          <p class="summary-value">{{ displayMoney(portfolio?.cash_usd) }}</p>
+          <p class="summary-value">{{ formatUsd(portfolio?.cash_usd) }}</p>
           <p class="summary-foot">Cash balance returned by the portfolio API</p>
         </q-card-section>
       </q-card>
@@ -185,42 +190,16 @@
             No current matching recommendation run. Saved or stale runs are not used as current
             portfolio comparisons.
           </p>
-          <dl v-else class="data-list run-metrics">
-            <div>
-              <dt>Realized short-term P/L (estimated)</dt>
-              <dd>{{ displayMoney(store.currentRun?.estimated_realized_st_usd) }}</dd>
-            </div>
-            <div>
-              <dt>Realized long-term P/L (estimated)</dt>
-              <dd>{{ displayMoney(store.currentRun?.estimated_realized_lt_usd) }}</dd>
-            </div>
-            <div>
-              <dt>Estimated tax benefit</dt>
-              <dd>{{ displayMoney(store.currentRun?.estimated_tax_benefit_usd) }}</dd>
-            </div>
-            <div>
-              <dt>Lots sold / positions exited</dt>
-              <dd>
-                {{ displayCount(store.currentRun?.lots_sold_count) }} /
-                {{ displayCount(store.currentRun?.positions_exited_count) }}
-              </dd>
-            </div>
-            <div>
-              <dt>Orders in recommendation</dt>
-              <dd>{{ displayCount(store.currentRun?.orders_count) }}</dd>
-            </div>
-            <div>
-              <dt>Cash before / after</dt>
-              <dd>
-                {{ displayMoney(store.currentRun?.cash_before_usd) }} /
-                {{ displayMoney(store.currentRun?.cash_after_usd) }}
-              </dd>
-            </div>
-            <div>
-              <dt>Tax estimate status</dt>
-              <dd>{{ store.currentRun?.estimated_tax_benefit_status ?? 'Unavailable' }}</dd>
-            </div>
-          </dl>
+          <RunSummary
+            v-if="store.currentRun || store.currentRunSummary"
+            mode="overview"
+            :run="store.currentRun"
+            :summary="store.currentRunSummary"
+            :context="runDisplayContext"
+            :pending="runPresentation.reviewMutationPending"
+            :show-metrics="currentRunMatches"
+            :view="store.currentRunView"
+          />
         </q-card-section>
       </q-card>
 
@@ -228,7 +207,7 @@
         <q-card-section>
           <AllocationTargets
             :allocation="allocation"
-            :labels="policyLabels"
+            :labels="effectLabels"
             :show-no-current-basket="!currentRunAllocationAvailable"
           />
         </q-card-section>
@@ -238,7 +217,7 @@
         <q-card-section>
           <USAllocationTransition
             :transition="usTransition"
-            :labels="policyLabels"
+            :labels="effectLabels"
             :show-no-current-basket="!currentRunTransitionAvailable"
           />
         </q-card-section>
@@ -264,7 +243,7 @@
             <ul v-if="enabledSleeves.length" class="policy-list">
               <li v-for="sleeve in enabledSleeves" :key="sleeve.sleeve_key">
                 <span>{{ sleeve.display_name }}</span>
-                <strong>{{ sleeve.target_pct }}%</strong>
+                <strong>{{ formatPercent(sleeve.target_pct) }}</strong>
               </li>
             </ul>
             <p v-else class="empty-note">No enabled sleeves were returned.</p>
@@ -292,22 +271,44 @@ import { computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import AllocationTargets from '@/components/AllocationTargets.vue';
 import ApiActionError from '@/components/ApiActionError.vue';
+import RunSummary from '@/components/RunSummary.vue';
+import WorkspacePageHeader from '@/components/WorkspacePageHeader.vue';
+import WorkspaceCapabilityNotice from '@/components/WorkspaceCapabilityNotice.vue';
+import { formatPercent, formatUsd } from '@/utils/display-values';
 import USAllocationTransition from '@/components/USAllocationTransition.vue';
 import { useWorkspaceStore } from '@/stores/workspace-store';
-import { displayCount, displayMoney, isMatchingCurrentRun } from './overview-state';
+import { displayCount } from './overview-state';
+
+import { completeFrozenRunSleeveLabels } from './run-context';
+import {
+  selectPortfolioLabelContext,
+  selectRunPresentation,
+  selectWorkspaceReadiness,
+} from '@/stores/workspace-selectors';
+import ResourceFreshnessNotice from '@/components/ResourceFreshnessNotice.vue';
 
 const store = useWorkspaceStore();
 const router = useRouter();
 const portfolio = computed(() => store.portfolio);
 const activePolicy = computed(() => store.policy?.active ?? null);
-const currentRunMatches = computed(() =>
-  isMatchingCurrentRun(
-    portfolio.value?.status === 'ready' ? portfolio.value : null,
-    store.currentRun,
-    store.currentRunView,
-    store.proposedRunIsStale,
-  ),
+const runPresentation = computed(() =>
+  selectRunPresentation({
+    run: store.currentRun,
+    summary: store.currentRunSummary,
+    view: store.currentRunView,
+    proposedRunIsStale: store.proposedRunIsStale,
+    health: store.health,
+    portfolio: portfolio.value,
+    activePolicy: activePolicy.value,
+    resourceFreshness: store.resourceFreshness,
+
+    resourceReadsPending: store.workspaceResourceLoadPending,
+    reviewMutationPending: store.reviewMutationPending,
+  }),
 );
+const runDisplayContext = computed(() => runPresentation.value.displayContext);
+const currentRunMatches = computed(() => runPresentation.value.currentRunMatches);
+
 const currentRunAllocationAvailable = computed(
   () => currentRunMatches.value && store.currentRun?.portfolio_effects?.allocation != null,
 );
@@ -318,6 +319,57 @@ const policyLabels = computed(() =>
   Object.fromEntries(
     (activePolicy.value?.sleeves ?? []).map((sleeve) => [sleeve.sleeve_key, sleeve.display_name]),
   ),
+);
+const portfolioLabelContext = computed(() => {
+  const allocation = portfolio.value?.allocation;
+  const transition = portfolio.value?.us_transition;
+  const sleeveKeys = [
+    ...Object.keys(allocation?.current?.sleeve_weights_pct ?? {}),
+    ...Object.keys(allocation?.proposed?.sleeve_weights_pct ?? {}),
+    ...Object.keys(allocation?.target?.sleeve_weights_pct ?? {}),
+    ...(transition
+      ? [
+          transition.sleeve_key,
+          ...(transition.transition_destination_sleeve_key
+            ? [transition.transition_destination_sleeve_key]
+            : []),
+          ...Object.keys(transition.current.children),
+          ...Object.keys(transition.proposed_basket.children),
+          ...Object.keys(transition.target.children),
+        ]
+      : []),
+  ];
+  return selectPortfolioLabelContext({
+    portfolio: portfolio.value,
+    activePolicy: activePolicy.value,
+    sleeveKeys,
+  });
+});
+const runContextLabels = computed(() => {
+  const run = store.currentRun;
+  const allocation = run?.portfolio_effects?.allocation;
+  const transition = run?.portfolio_effects?.us_transition;
+  const sleeveKeys = [
+    ...(run?.groups.map((group) => group.sleeve_key) ?? []),
+    ...Object.keys(allocation?.current?.sleeve_weights_pct ?? {}),
+    ...Object.keys(allocation?.proposed?.sleeve_weights_pct ?? {}),
+    ...Object.keys(allocation?.target?.sleeve_weights_pct ?? {}),
+    ...(transition
+      ? [
+          transition.sleeve_key,
+          ...(transition.transition_destination_sleeve_key
+            ? [transition.transition_destination_sleeve_key]
+            : []),
+          ...Object.keys(transition.current.children),
+          ...Object.keys(transition.proposed_basket.children),
+          ...Object.keys(transition.target.children),
+        ]
+      : []),
+  ];
+  return completeFrozenRunSleeveLabels(runDisplayContext.value, sleeveKeys);
+});
+const effectLabels = computed(() =>
+  currentRunMatches.value ? runContextLabels.value : portfolioLabelContext.value.labels,
 );
 const allocation = computed(() => {
   if (currentRunAllocationAvailable.value) {
@@ -353,26 +405,19 @@ const enabledSleeves = computed(() =>
 const enabledSecurities = computed(() =>
   (activePolicy.value?.allowed_securities ?? []).filter((security) => security.enabled),
 );
-const canRunOptimizer = computed(
-  () =>
-    portfolio.value?.status === 'ready' &&
-    portfolio.value.sync.complete &&
-    store.health?.status === 'ok' &&
-    store.health.schema_ready &&
-    activePolicy.value !== null &&
-    portfolio.value.active_policy_revision_id === activePolicy.value.id &&
-    (activePolicy.value.activation_errors?.length ?? 0) === 0 &&
-    !store.actionState.syncPortfolio.pending &&
-    !store.actionState.runOptimizer.pending,
-);
+const workspaceReadiness = computed(() =>
+  selectWorkspaceReadiness({
+    health: store.health,
+    portfolio: portfolio.value,
+    activePolicy: activePolicy.value,
+    resourceFreshness: store.resourceFreshness,
 
-function loadInitialWorkspace(): void {
-  const requests: Promise<unknown>[] = [];
-  if (!store.health) requests.push(store.loadHealth());
-  if (!store.portfolio) requests.push(store.loadPortfolio());
-  if (!store.policy) requests.push(store.loadPolicy());
-  void Promise.allSettled(requests);
-}
+    resourceReadsPending: store.workspaceResourceLoadPending,
+    syncPending: store.actionState.syncPortfolio.pending,
+    runPending: store.actionState.runOptimizer.pending,
+  }),
+);
+const canRunOptimizer = computed(() => workspaceReadiness.value.canRunOptimizer);
 
 async function syncPortfolio(): Promise<void> {
   try {
@@ -392,7 +437,9 @@ async function runOptimizer(): Promise<void> {
   }
 }
 
-onMounted(loadInitialWorkspace);
+onMounted(() => {
+  void store.ensureInitialWorkspace();
+});
 </script>
 
 <style scoped>
@@ -412,14 +459,6 @@ onMounted(loadInitialWorkspace);
 .error-stack {
   display: grid;
   gap: 0.55rem;
-}
-
-.overview-demo-banner {
-  border: 1px solid #f2dcad;
-  background: #fff7e8;
-  color: #765016;
-  font-size: 0.82rem;
-  line-height: 1.5;
 }
 
 .summary-grid {
@@ -538,10 +577,6 @@ onMounted(loadInitialWorkspace);
   overflow-wrap: anywhere;
 }
 
-.run-metrics > div {
-  grid-template-columns: minmax(11rem, 1fr) minmax(0, 1fr);
-}
-
 .coverage-block {
   margin-top: 1.1rem;
 }
@@ -627,7 +662,6 @@ onMounted(loadInitialWorkspace);
 }
 
 @media (max-width: 620px) {
-  .page-header,
   .section-heading {
     flex-direction: column;
     align-items: stretch;
@@ -654,8 +688,7 @@ onMounted(loadInitialWorkspace);
     padding: 0.75rem;
   }
 
-  .data-list > div,
-  .run-metrics > div {
+  .data-list > div {
     grid-template-columns: 1fr;
     gap: 0.25rem;
   }

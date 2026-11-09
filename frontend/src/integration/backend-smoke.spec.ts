@@ -231,19 +231,53 @@ describe('isolated local backend smoke', () => {
     };
     const downloads: Blob[] = [];
     const requests: string[] = [];
+    const annotationBodies: string[] = [];
+    let holdNextDraftWrite = false;
+    const releaseWrite = {
+      draft: null as (() => void) | null,
+      activation: null as (() => void) | null,
+    };
+    let holdNextActivationWrite = false;
 
     try {
       backend = await startBackend(databasePath, port, true);
       let backendBase = backend.baseUrl;
       const networkFetch = globalThis.fetch.bind(globalThis);
-      vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+      vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
         const value =
           typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
         const address = new URL(value, `${backendBase}/`);
         if (address.origin !== backendBase || address.hostname !== '127.0.0.1') {
           throw new Error(`Integration test refuses non-local API traffic: ${address.origin}`);
         }
-        requests.push(`${init?.method ?? 'GET'} ${address.pathname}${address.search}`);
+        const method = init?.method ?? 'GET';
+        requests.push(`${method} ${address.pathname}${address.search}`);
+        if (
+          method === 'PATCH' &&
+          address.pathname.includes('/recommendations/') &&
+          typeof init?.body === 'string'
+        )
+          annotationBodies.push(init.body);
+        if (
+          method === 'POST' &&
+          address.pathname === '/api/v1/policy/drafts' &&
+          holdNextDraftWrite
+        ) {
+          holdNextDraftWrite = false;
+          await new Promise<void>((resolve) => {
+            releaseWrite.draft = resolve;
+          });
+        }
+        if (
+          method === 'POST' &&
+          address.pathname.endsWith('/activate') &&
+          holdNextActivationWrite
+        ) {
+          holdNextActivationWrite = false;
+          await new Promise<void>((resolve) => {
+            releaseWrite.activation = resolve;
+          });
+        }
         return networkFetch(address, init);
       });
 
@@ -315,46 +349,134 @@ describe('isolated local backend smoke', () => {
         'seed policy API response',
       );
       expect(workspace.wrapper.text()).toContain('Tax & Batch Settings');
-      const retainedLossInput = workspace.wrapper
-        .findAll('.settings-group input')
-        .find((input) =>
-          input.element.closest('label')?.textContent?.includes('Target retained net loss'),
-        );
+      const lifecycleStore = useWorkspaceStore(workspace.pinia);
+      await waitFor(
+        () => lifecycleStore.policyEditor.state.initialized,
+        'persistent policy editor initialization',
+      );
+      const initialSource = lifecycleStore.policyEditor.state.sourceRevisionId;
+      expect(initialSource).toBe(lifecycleStore.policy?.active?.id);
+      await lifecycleStore.runOptimizer();
+      expect(lifecycleStore.currentRunView).toBe('current');
+      const findRetainedLossInput = () =>
+        workspace!.wrapper
+          .findAll('.settings-group input')
+          .find((input) =>
+            input.element.closest('label')?.textContent?.includes('Target retained net loss'),
+          );
+      const retainedLossInput = findRetainedLossInput();
       expect(retainedLossInput).toBeDefined();
-      await retainedLossInput!.setValue('2345.67');
+      const exactRetainedLoss = '2345.670000000000001';
+      await retainedLossInput!.setValue(exactRetainedLoss);
+      expect(lifecycleStore.policyEditor.dirty).toBe(true);
+      expect(workspace.wrapper.text()).toContain(
+        'This draft stays in memory while the workspace is open; reload would discard it.',
+      );
+
+      await visit(workspace, '/activity');
+      await waitFor(() => workspace!.wrapper.find('h1').text() === 'Activity', 'policy route exit');
+      expect(lifecycleStore.policyEditor.state.sourceRevisionId).toBe(initialSource);
+      expect(lifecycleStore.policyEditor.state.draft.settings.target_retained_net_loss_usd).toBe(
+        exactRetainedLoss,
+      );
+      const unloadAfterLeavingPolicy = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(unloadAfterLeavingPolicy);
+      expect(unloadAfterLeavingPolicy.defaultPrevented).toBe(true);
+
+      await visit(workspace, '/policy');
+      await waitFor(() => !!findRetainedLossInput()?.element, 'dirty policy editor remount');
+      expect((findRetainedLossInput()!.element as HTMLInputElement).value).toBe(exactRetainedLoss);
+      const refreshPolicy = workspace.wrapper
+        .findAll('button')
+        .find((button) => button.text() === 'Refresh policy list');
+      expect(refreshPolicy).toBeDefined();
+      await refreshPolicy!.trigger('click');
+      await waitFor(
+        () => !lifecycleStore.actionState.loadPolicy.pending,
+        'policy revision-list refresh while the editor is dirty',
+      );
+      expect(lifecycleStore.policyEditor.state.sourceRevisionId).toBe(initialSource);
+      expect(lifecycleStore.policyEditor.state.draft.settings.target_retained_net_loss_usd).toBe(
+        exactRetainedLoss,
+      );
+
+      holdNextDraftWrite = true;
       const saveDraft = workspace.wrapper
         .findAll('button')
         .find((button) => button.text().includes('Save new draft revision'));
       expect(saveDraft).toBeDefined();
       await saveDraft!.trigger('click');
-      await flushPromises();
-      await waitFor(() => {
-        const store = useWorkspaceStore(workspace!.pinia);
-        return (
-          store.policy?.drafts.some(
-            (draft) => draft.settings.target_retained_net_loss_usd === '2345.67',
-          ) ?? false
-        );
-      }, 'policy draft save and reload');
+      await waitFor(
+        () => lifecycleStore.policyEditor.state.pendingSave,
+        'policy draft save pending',
+      );
+      await visit(workspace, '/activity');
+      expect(lifecycleStore.policyEditor.state.pendingSave).toBe(true);
+      expect(lifecycleStore.policyEditor.state.sourceRevisionId).toBe(initialSource);
+      expect(lifecycleStore.policyEditor.state.draft.settings.target_retained_net_loss_usd).toBe(
+        exactRetainedLoss,
+      );
+      expect(releaseWrite.draft).not.toBeNull();
+      releaseWrite.draft?.();
+      releaseWrite.draft = null;
+      await waitFor(
+        () =>
+          !lifecycleStore.policyEditor.state.pendingSave &&
+          (lifecycleStore.policy?.drafts.some(
+            (draft) => draft.settings.target_retained_net_loss_usd === exactRetainedLoss,
+          ) ??
+            false),
+        'pending draft save and API revision refresh after route exit',
+      );
+      await visit(workspace, '/policy');
+      await waitFor(
+        () =>
+          (findRetainedLossInput()?.element as HTMLInputElement | undefined)?.value ===
+          exactRetainedLoss,
+        'saved policy draft remount',
+      );
       expect(workspace.wrapper.text()).toContain('Current form matches saved revision');
+      const savedSource = lifecycleStore.policyEditor.state.sourceRevisionId;
+      expect(savedSource).not.toBe(initialSource);
+      expect(lifecycleStore.currentRunView).toBe('current');
+
       const activateDraft = workspace.wrapper
         .findAll('button')
         .find((button) => button.text().includes('Activate saved revision'));
       expect(activateDraft).toBeDefined();
       expect((activateDraft!.element as HTMLButtonElement).disabled).toBe(false);
+      holdNextActivationWrite = true;
       await activateDraft!.trigger('click');
-      await flushPromises();
+      await waitFor(
+        () => lifecycleStore.policyEditor.state.pendingActivation,
+        'policy activation pending',
+      );
+      await visit(workspace, '/activity');
+      expect(lifecycleStore.policyEditor.state.pendingActivation).toBe(true);
+      expect(lifecycleStore.policyEditor.state.sourceRevisionId).toBe(savedSource);
+      expect(lifecycleStore.policyEditor.state.draft.settings.target_retained_net_loss_usd).toBe(
+        exactRetainedLoss,
+      );
+      expect(releaseWrite.activation).not.toBeNull();
+      releaseWrite.activation?.();
+      releaseWrite.activation = null;
       await waitFor(
         () =>
+          !lifecycleStore.policyEditor.state.pendingActivation &&
           useWorkspaceStore(workspace!.pinia).policy?.active?.settings
-            .target_retained_net_loss_usd === '2345.67',
-        'policy activation and refreshed active revision',
+            .target_retained_net_loss_usd === exactRetainedLoss,
+        'policy activation and refreshed active revision after route exit',
       );
+      expect(lifecycleStore.currentRunView).toBe('stale');
       const savedValue = useWorkspaceStore(workspace.pinia).policy?.active?.settings
         .target_retained_net_loss_usd;
-      expect(savedValue).toBe('2345.67');
-      expect(workspace.wrapper.text()).toContain('ACTIVE · revision');
-
+      expect(savedValue).toBe(exactRetainedLoss);
+      await visit(workspace, '/policy');
+      await waitFor(
+        () => workspace!.wrapper.text().includes('Revision 2 · ACTIVE'),
+        'active policy remount after activation',
+      );
+      expect(workspace.wrapper.text()).toContain('Revision 2 · ACTIVE');
       workspace.wrapper.unmount();
       workspace = null;
       await backend.stop();
@@ -366,19 +488,21 @@ describe('isolated local backend smoke', () => {
       await waitFor(
         () =>
           useWorkspaceStore(workspace!.pinia).policy?.active?.settings
-            .target_retained_net_loss_usd === '2345.67',
+            .target_retained_net_loss_usd === exactRetainedLoss,
         'restarted backend persisted active policy',
       );
       expect(
         useWorkspaceStore(workspace.pinia).policy?.active?.settings.target_retained_net_loss_usd,
-      ).toBe('2345.67');
+      ).toBe(exactRetainedLoss);
       await waitFor(() => {
         const retainedLossInput = workspace!.wrapper
           .findAll('.settings-group input')
           .find((input) =>
             input.element.closest('label')?.textContent?.includes('Target retained net loss'),
           );
-        return (retainedLossInput?.element as HTMLInputElement | undefined)?.value === '2345.67';
+        return (
+          (retainedLossInput?.element as HTMLInputElement | undefined)?.value === exactRetainedLoss
+        );
       }, 'policy page reload of persisted target retained loss setting');
       expect(
         (
@@ -388,7 +512,172 @@ describe('isolated local backend smoke', () => {
               input.element.closest('label')?.textContent?.includes('Target retained net loss'),
             )?.element as HTMLInputElement | undefined
         )?.value,
-      ).toBe('2345.67');
+      ).toBe(exactRetainedLoss);
+
+      const decimalStore = useWorkspaceStore(workspace.pinia);
+      await waitFor(
+        () => decimalStore.policyEditor.state.initialized,
+        'restarted policy editor initialization',
+      );
+      const decimalEditor = decimalStore.policyEditor;
+      const decimalSleeve = decimalEditor.state.draft.sleeves.find(
+        (sleeve) => sleeve.parent_sleeve_key === null,
+      )!;
+      const decimalSleeveKey = decimalSleeve.sleeve_key;
+      decimalEditor.state.draft.settings.cash_reserve_usd = '0.00000001';
+      decimalSleeve.target_pct = '0.00000001';
+      decimalSleeve.drift_band_pp = '0.00000001234567890123456789';
+      expect(await decimalEditor.saveDraft()).toBe(true);
+      const exponentRevision = decimalEditor.state.lastSavedRevision!;
+      expect(exponentRevision.settings.cash_reserve_usd).toBe('1E-8');
+      expect(
+        exponentRevision.sleeves.find((sleeve) => sleeve.sleeve_key === decimalSleeveKey)
+          ?.target_pct,
+      ).toBe('1E-8');
+      expect(
+        exponentRevision.sleeves.find((sleeve) => sleeve.sleeve_key === decimalSleeveKey)
+          ?.drift_band_pp,
+      ).toBe('1.234567890123456789E-8');
+
+      workspace.wrapper.unmount();
+      workspace = null;
+      workspace = await mountWorkspace();
+      await visit(workspace, '/policy');
+      const reopenedStore = useWorkspaceStore(workspace.pinia);
+      await waitFor(
+        () => reopenedStore.policyEditor.state.sourceRevisionId === exponentRevision.id,
+        'reopened exponent-decimal policy revision',
+      );
+      await waitFor(
+        () => reopenedStore.portfolio?.status === 'ready',
+        'ready holdings for exact reassignment identity capture',
+      );
+      expect(reopenedStore.policyEditor.state.draft.settings.cash_reserve_usd).toBe('0.00000001');
+      expect(
+        reopenedStore.policyEditor.state.draft.sleeves.find(
+          (sleeve) => sleeve.sleeve_key === decimalSleeveKey,
+        )?.target_pct,
+      ).toBe('0.00000001');
+      expect(
+        reopenedStore.policyEditor.state.draft.sleeves.find(
+          (sleeve) => sleeve.sleeve_key === decimalSleeveKey,
+        )?.drift_band_pp,
+      ).toBe('0.00000001234567890123456789');
+      expect(reopenedStore.policyEditor.dirty).toBe(false);
+      reopenedStore.policyEditor.state.draft.settings.cash_reserve_usd =
+        '0.000000010000000000000001';
+      expect(await reopenedStore.policyEditor.saveDraft()).toBe(true);
+      expect(reopenedStore.policyEditor.state.lastSavedRevision?.settings.cash_reserve_usd).toBe(
+        '1.0000000000000001E-8',
+      );
+
+      const reassignmentEditor = reopenedStore.policyEditor;
+      const retiredSleeve = reassignmentEditor.state.draft.sleeves.find(
+        (sleeve) => sleeve.sleeve_key === 'direct_indexing',
+      )!;
+      const targetParent = reassignmentEditor.state.draft.sleeves.find(
+        (sleeve) => sleeve.sleeve_key === 'us_equities',
+      )!;
+      const heldTickers = reopenedStore
+        .portfolio!.positions.filter(
+          (position) =>
+            position.sleeve_key === retiredSleeve.sleeve_key ||
+            position.sub_sleeve_key === retiredSleeve.sleeve_key,
+        )
+        .map((position) => position.ticker);
+      expect(heldTickers).toEqual(expect.arrayContaining(['AAPL', 'VB']));
+      const targetA = reassignmentEditor.state.draft.sleeves.find(
+        (sleeve) => sleeve.sleeve_key === 'us_etf',
+      )!;
+      retiredSleeve.enabled = false;
+      reassignmentEditor.state.draft.sleeves.push({
+        ...targetA,
+        sleeve_key: 'race-target-b',
+        display_name: 'Reassignment target B',
+        sort_order: reassignmentEditor.state.draft.sleeves.length,
+        parent_sleeve_key: targetParent.sleeve_key,
+        target_pct: '0',
+        is_direct_index_container: false,
+        is_direct_index_sleeve: false,
+        is_transition_destination: false,
+        is_cash_sleeve: false,
+        enabled: true,
+      });
+      reassignmentEditor.state.draft.overrides.push({
+        ticker: 'AAPL',
+        sleeve_key: 'us_equities',
+        sub_sleeve_key: null,
+      });
+      reassignmentEditor.state.draft.overrides.push({
+        ticker: 'VTI',
+        sleeve_key: 'us_equities',
+        sub_sleeve_key: 'us_etf',
+      });
+      reassignmentEditor.state.draft.reassignments.direct_indexing = 'us_etf';
+      reassignmentEditor.state.draft.reassignmentHoldings.direct_indexing = heldTickers;
+
+      holdNextDraftWrite = true;
+      const reassignmentSave = reassignmentEditor.saveDraft();
+      await waitFor(() => reassignmentEditor.state.pendingSave, 'reassignment save pending');
+      reassignmentEditor.state.draft.reassignments.direct_indexing = 'race-target-b';
+      const releaseReassignmentWrite = releaseWrite.draft as (() => void) | null;
+      expect(releaseReassignmentWrite).not.toBeNull();
+      releaseReassignmentWrite?.();
+      releaseWrite.draft = null;
+      expect(await reassignmentSave).toBe(true);
+      const firstReassignmentRevision = reassignmentEditor.state.lastSavedRevision!;
+      expect(
+        firstReassignmentRevision.overrides.find((override) => override.ticker === 'AAPL'),
+      ).toEqual({ ticker: 'AAPL', sleeve_key: 'us_equities', sub_sleeve_key: null });
+      const generatedHeldTickers = heldTickers.filter((ticker) => ticker !== 'AAPL');
+      expect(
+        generatedHeldTickers.map((ticker) =>
+          firstReassignmentRevision.overrides.find((override) => override.ticker === ticker),
+        ),
+      ).toEqual(
+        generatedHeldTickers.map((ticker) => ({
+          ticker,
+          sleeve_key: 'us_equities',
+          sub_sleeve_key: 'us_etf',
+        })),
+      );
+      expect(
+        reassignmentEditor.state.draft.overrides.find((override) => override.ticker === 'AAPL'),
+      ).toEqual({ ticker: 'AAPL', sleeve_key: 'us_equities', sub_sleeve_key: null });
+      expect(
+        generatedHeldTickers.map((ticker) =>
+          reassignmentEditor.state.draft.overrides.find((override) => override.ticker === ticker),
+        ),
+      ).toEqual(
+        generatedHeldTickers.map((ticker) => ({
+          ticker,
+          sleeve_key: 'us_equities',
+          sub_sleeve_key: 'race-target-b',
+        })),
+      );
+      expect(
+        reassignmentEditor.state.draft.overrides.find((override) => override.ticker === 'VTI'),
+      ).toEqual({ ticker: 'VTI', sleeve_key: 'us_equities', sub_sleeve_key: 'us_etf' });
+
+      expect(await reassignmentEditor.saveDraft()).toBe(true);
+      const finalReassignmentRevision = reassignmentEditor.state.lastSavedRevision!;
+      expect(
+        finalReassignmentRevision.overrides.find((override) => override.ticker === 'AAPL'),
+      ).toEqual({ ticker: 'AAPL', sleeve_key: 'us_equities', sub_sleeve_key: null });
+      expect(
+        generatedHeldTickers.map((ticker) =>
+          finalReassignmentRevision.overrides.find((override) => override.ticker === ticker),
+        ),
+      ).toEqual(
+        generatedHeldTickers.map((ticker) => ({
+          ticker,
+          sleeve_key: 'us_equities',
+          sub_sleeve_key: 'race-target-b',
+        })),
+      );
+      expect(
+        finalReassignmentRevision.overrides.find((override) => override.ticker === 'VTI'),
+      ).toEqual({ ticker: 'VTI', sleeve_key: 'us_equities', sub_sleeve_key: 'us_etf' });
 
       await visit(workspace, '/');
       await waitFor(() => {
@@ -431,11 +720,17 @@ describe('isolated local backend smoke', () => {
       const firstRunId = firstRun!.run_id;
       await visit(workspace, '/activity');
       await waitFor(
-        () => workspace!.wrapper.findAll('button.reopen-button').length === 1,
+        () =>
+          workspace!.wrapper
+            .findAll('button.reopen-button')
+            .some((button) => button.element.closest('li')?.textContent?.includes(firstRunId)),
         'saved run event from Activity API',
       );
-      expect(workspace.wrapper.findAll('button.reopen-button')).toHaveLength(1);
-      await workspace.wrapper.get('button.reopen-button').trigger('click');
+      const firstRunReopenButton = workspace.wrapper
+        .findAll('button.reopen-button')
+        .find((button) => button.element.closest('li')?.textContent?.includes(firstRunId));
+      expect(firstRunReopenButton).toBeDefined();
+      await firstRunReopenButton!.trigger('click');
       await flushPromises();
       await waitFor(
         () => store.currentRunView === 'saved',
@@ -533,8 +828,66 @@ describe('isolated local backend smoke', () => {
       expect(csvExport).toContain(run!.run_id);
       expect(csvExport).toContain('DEMO-VB-LOT-1');
       expect(requests).toContain(`GET /api/v1/optimizer/runs/${run!.run_id}/export?format=json`);
+      const rejectionPanel = workspace.wrapper.get(
+        `[aria-label="Notes and rejection for ${groupId}"]`,
+      );
+      await rejectionPanel.get('input').setValue('Integration rejection reason');
+      const selectionRequestCount = requests.filter((request) =>
+        request.includes('/selection'),
+      ).length;
+      await rejectionPanel
+        .findAll('button')
+        .find((button) => button.text().includes('Reject group'))!
+        .trigger('click');
+      await flushPromises();
+      await waitFor(
+        () =>
+          store.currentRun?.groups.find((group) => group.group_id === groupId)?.rejected === true,
+        'atomic full-run annotation PATCH response',
+      );
+      expect(requests).toContain(
+        `PATCH /api/v1/optimizer/runs/${run!.run_id}/recommendations/${groupId}`,
+      );
+      expect(requests.filter((request) => request.includes('/selection'))).toHaveLength(
+        selectionRequestCount,
+      );
+      expect(store.currentRun?.groups.find((group) => group.group_id === groupId)).toMatchObject({
+        rejected: true,
+        selected: false,
+        rejection_reason: 'Integration rejection reason',
+      });
+      expect(store.currentRun?.orders_count).toBe(0);
+      expect(annotationBodies).toHaveLength(1);
+      expect(JSON.parse(annotationBodies[0]!)).toEqual({
+        rejected: true,
+        rejection_reason: 'Integration rejection reason',
+      });
+      const restorePanel = workspace.wrapper.get(
+        `[aria-label="Notes and rejection for ${groupId}"]`,
+      );
+      await restorePanel
+        .findAll('button')
+        .find((button) => button.text().includes('Restore rejected group'))!
+        .trigger('click');
+      await flushPromises();
+      await waitFor(() => {
+        const group = store.currentRun?.groups.find((item) => item.group_id === groupId);
+        return group?.rejected === false && group.rejection_reason === null;
+      }, 'real rejected-group restore PATCH response');
+      expect(annotationBodies).toHaveLength(2);
+      expect(JSON.parse(annotationBodies[1]!)).toEqual({ rejected: false });
+      expect(requests.filter((request) => request.includes('/selection'))).toHaveLength(
+        selectionRequestCount,
+      );
+      expect(store.currentRun?.groups.find((group) => group.group_id === groupId)).toMatchObject({
+        rejected: false,
+        selected: false,
+        rejection_reason: null,
+      });
       expect(requests).toContain(`GET /api/v1/optimizer/runs/${run!.run_id}/export?format=csv`);
     } finally {
+      releaseWrite.draft?.();
+      releaseWrite.activation?.();
       workspace?.wrapper.unmount();
       await backend?.stop();
       rmSync(tempDirectory, { recursive: true, force: true });

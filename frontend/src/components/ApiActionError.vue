@@ -1,15 +1,16 @@
 <template>
-  <div v-if="error" class="api-error" role="alert">
+  <QBanner v-if="error" class="api-error" rounded role="alert" aria-live="assertive">
     <strong>{{ title }}</strong>
-    <span
-      ><code>{{ error.code }}</code
-      >: {{ error.message }}</span
-    >
+    <span>
+      <code>{{ error.code }}</code
+      >: {{ error.message }}
+    </span>
     <small v-if="error.correlationId">Correlation ID: {{ error.correlationId }}</small>
-  </div>
+  </QBanner>
 </template>
 
 <script setup lang="ts">
+import { QBanner } from 'quasar';
 import type { ApiError } from '@/services/api';
 
 withDefaults(

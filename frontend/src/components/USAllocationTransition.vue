@@ -35,13 +35,13 @@
         <dl class="state-summary">
           <div>
             <dt>US sleeve value</dt>
-            <dd>{{ displayMoney(state.snapshot?.us_sleeve_value_usd) }}</dd>
+            <dd>{{ formatUsd(state.snapshot?.us_sleeve_value_usd) }}</dd>
           </div>
           <div>
             <dt>US sleeve share of portfolio</dt>
             <dd>
               {{
-                displayPercent(
+                formatPercent(
                   state.snapshot?.us_sleeve_whole_portfolio_pct ??
                     state.target?.us_sleeve_whole_portfolio_pct,
                 )
@@ -50,7 +50,7 @@
           </div>
           <div>
             <dt>Transition destination progress within US sleeve</dt>
-            <dd>{{ displayPercent(state.snapshot?.etf_progress_pct) }}</dd>
+            <dd>{{ formatPercent(state.snapshot?.etf_progress_pct) }}</dd>
           </div>
         </dl>
 
@@ -58,11 +58,11 @@
         <ul v-if="childKeys.length" class="component-list">
           <li v-for="childKey in childKeys" :key="childKey">
             <strong>{{ labels[childKey] ?? childKey }}</strong>
-            <span>{{ displayPercent(childWithinSleeve(state, childKey)) }} within US sleeve</span>
+            <span>{{ formatPercent(childWithinSleeve(state, childKey)) }} within US sleeve</span>
             <span
-              >{{ displayPercent(childWholePortfolio(state, childKey)) }} of whole portfolio</span
+              >{{ formatPercent(childWholePortfolio(state, childKey)) }} of whole portfolio</span
             >
-            <span>{{ displayMoney(childValue(state, childKey)) }}</span>
+            <span>{{ formatUsd(childValue(state, childKey)) }}</span>
           </li>
         </ul>
         <p v-else class="empty-state">No US sleeve component values were returned.</p>
@@ -73,6 +73,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import { formatPercent, formatUsd } from '@/utils/display-values';
 import type {
   TransitionSnapshotResponse,
   TransitionTargetResponse,
@@ -119,14 +120,6 @@ const childKeys = computed(() => {
     ]),
   ];
 });
-
-function displayMoney(value: string | null | undefined): string {
-  return value == null || value === '' ? 'Unavailable' : `${value} USD`;
-}
-
-function displayPercent(value: string | null | undefined): string {
-  return value == null || value === '' ? 'Unavailable' : `${value}%`;
-}
 
 function childWithinSleeve(state: TransitionState, childKey: string): string | null {
   return (

@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
-import type { OptimizerRecommendationsResponse, PortfolioNotSyncedResponse } from '../types/api';
+import type {
+  OptimizerRecommendationsResponse,
+  PolicyResponse,
+  PortfolioNotSyncedResponse,
+  PortfolioReadyResponse,
+} from '../types/api';
 import { useWorkspaceStore } from './workspace-store';
 
 function portfolioResponse(cash: string): PortfolioNotSyncedResponse {
@@ -18,6 +23,38 @@ function portfolioResponse(cash: string): PortfolioNotSyncedResponse {
       complete: false,
       started_at: null,
       completed_at: null,
+      last_error_code: null,
+      last_error_summary: null,
+    },
+    allocation: { current: null, proposed: null, target: null },
+    us_transition: null,
+  };
+}
+
+function readyPortfolio(
+  generation: number,
+  activePolicyRevisionId = 'policy-demo',
+): PortfolioReadyResponse {
+  return {
+    status: 'ready',
+    demo: true,
+    source: 'FakeBroker',
+    account: { display_name: 'Demo account', account_type: 'BROKERAGE', tax_treatment: null },
+    as_of: `2026-01-0${generation}T00:00:00Z`,
+    cash_usd: '0.00',
+    settled_buying_power_usd: '0.00',
+    positions_market_value_usd: '0.00',
+    portfolio_total_usd: '0.00',
+    position_count: 0,
+    positions: [],
+    active_policy_revision_id: activePolicyRevisionId,
+    unassigned_tickers: [],
+    coverage: {},
+    sync: {
+      generation,
+      complete: true,
+      started_at: null,
+      completed_at: `2026-01-0${generation}T00:00:00Z`,
       last_error_code: null,
       last_error_summary: null,
     },
@@ -79,6 +116,19 @@ function demoRun(runId: string, warnings: string[] = []): OptimizerRecommendatio
     constraints_satisfied: null,
     no_trade_reason: null,
     warnings,
+    frozen_display_context: {
+      available: true,
+      source: 'policy_revision',
+      policy_revision_id: 'policy-demo',
+      revision_number: 1,
+      created_at: '2026-01-01T00:00:00Z',
+      activated_at: '2026-01-01T00:00:00Z',
+      sleeves: [],
+      settings: { target_retained_net_loss_usd: '3000.00' },
+      allowed_securities: [],
+      overrides: [],
+      unavailable_reason: null,
+    },
     tax_profile_configured: false,
     groups: [],
     consolidated_legs: [],
@@ -179,7 +229,98 @@ afterEach(() => {
 });
 
 describe('workspace store', () => {
-  it('loads workspace data atomically and exposes per-action status', async () => {
+  it('deduplicates the shared initial load across route consumers', async () => {
+    const fetcher = installDefaultApi();
+    const store = useWorkspaceStore();
+
+    const first = store.ensureInitialWorkspace();
+    const second = store.ensureInitialWorkspace();
+
+    expect(store.initialWorkspacePending).toBe(true);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    await Promise.all([first, second]);
+    expect(store.initialWorkspacePending).toBe(false);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it('publishes a successful generation-2 portfolio and marks failed policy cache stale', async () => {
+    const fetcher = vi.fn<typeof fetch>((input) => {
+      const url = requestAddress(input);
+      if (url.pathname === '/api/v1/portfolio/sync')
+        return responsePromise({
+          generation: 2,
+          status: 'complete',
+          as_of: '2026-01-02T00:00:00Z',
+          coverage: {},
+          account: 'DEMO',
+          demo: true,
+        });
+      if (url.pathname === '/health')
+        return responsePromise({
+          status: 'ok',
+          schema_ready: true,
+          broker_mode: 'fake',
+          live_broker_enabled: false,
+          order_submission_enabled: false,
+        });
+      if (url.pathname === '/api/v1/portfolio') return responsePromise(readyPortfolio(2));
+      if (url.pathname === '/api/v1/policy')
+        return responsePromise(
+          {
+            code: 'policy_unavailable',
+            message: 'Policy read failed',
+            details: {},
+            correlation_id: 'policy-refresh-error',
+          },
+          503,
+        );
+      if (url.pathname === '/api/v1/lots')
+        return responsePromise({ items: [], total: 0, offset: 0, limit: 100 });
+      if (url.pathname === '/api/v1/wash-sales')
+        return responsePromise({
+          demo: true,
+          source: 'FakeBroker',
+          history: [],
+          acquisitions: [],
+          current_restrictions: [],
+          proposed_restrictions: [],
+          warnings: [],
+        });
+      if (url.pathname === '/api/v1/activity')
+        return responsePromise({ items: [], total: 0, offset: 0, limit: 100 });
+      return Promise.reject(new Error(`Unhandled fake route: ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const store = useWorkspaceStore();
+    const cachedPolicy = {
+      active: { id: 'policy-demo' },
+      drafts: [],
+      superseded: [],
+    } as unknown as PolicyResponse;
+    store.portfolio = readyPortfolio(1);
+    store.policy = cachedPolicy;
+
+    store.currentRun = demoRun('generation-1-run');
+    store.currentRunView = 'current';
+
+    await expect(store.syncPortfolio()).resolves.toMatchObject({ generation: 2 });
+
+    expect(store.portfolio?.status).toBe('ready');
+    expect(store.portfolio?.sync.generation).toBe(2);
+
+    expect(store.lastSync?.generation).toBe(2);
+    expect(store.currentRunView).toBe('stale');
+    expect(store.policy).toBe(cachedPolicy);
+
+    expect(store.resourceFreshness.portfolio.status).toBe('fresh');
+    expect(store.resourceFreshness.policy.status).toBe('stale');
+    expect(store.actionState.loadPolicy.error).toMatchObject({
+      code: 'policy_unavailable',
+      correlationId: 'policy-refresh-error',
+    });
+  });
+
+  it('refreshes resources independently and exposes per-action status', async () => {
     const fetcher = installDefaultApi();
     const store = useWorkspaceStore();
 
@@ -319,6 +460,144 @@ describe('workspace store', () => {
     expect(store.actionState.recalculateSelection.error?.code).toBe('invalid_selection');
   });
 
+  it('replaces annotated runs and matching summaries atomically after validating run IDs', async () => {
+    const initial = {
+      ...demoRun('annotated-run'),
+      orders_count: 2,
+      groups: [
+        {
+          group_id: 'group-1',
+          selected: true,
+          rejected: false,
+          note: 'keep this note',
+          rejection_reason: null,
+        },
+      ],
+      consolidated_legs: [{ leg_id: 'sell-1', selected: true }],
+    } as unknown as OptimizerRecommendationsResponse;
+    const updated = {
+      ...initial,
+      warnings: ['full response after rejection'],
+      orders_count: 0,
+      groups: [
+        {
+          group_id: 'group-1',
+          selected: false,
+          rejected: true,
+          note: 'keep this note',
+          rejection_reason: 'not suitable',
+        },
+      ],
+      consolidated_legs: [],
+    } as unknown as OptimizerRecommendationsResponse;
+    let response = updated;
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      const url = requestAddress(input);
+      if (url.pathname.endsWith('/recommendations/group-1') && init?.method === 'PATCH')
+        return responsePromise(response);
+      return Promise.reject(new Error(`Unhandled fake route: ${init?.method} ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const store = useWorkspaceStore();
+    store.currentRun = initial;
+    store.currentRunView = 'current';
+    store.currentRunSummary = { ...demoRun('annotated-run'), orders_count: 2 };
+
+    const result = await store.annotateGroup('annotated-run', 'group-1', {
+      rejected: true,
+      rejection_reason: 'not suitable',
+    });
+    expect(result).toEqual(updated);
+    expect(store.currentRun).toEqual(updated);
+    expect(store.currentRun?.groups[0]).toMatchObject({ selected: false, rejected: true });
+    expect(store.currentRunSummary).toMatchObject({
+      run_id: 'annotated-run',
+      orders_count: 0,
+      warnings: ['full response after rejection'],
+    });
+
+    const successfulRun = store.currentRun;
+    const successfulSummary = store.currentRunSummary;
+    response = { ...updated, run_id: 'different-run' };
+    await expect(
+      store.annotateGroup('annotated-run', 'group-1', { note: null }),
+    ).rejects.toMatchObject({ code: 'run_id_mismatch' });
+    expect(store.currentRun).toBe(successfulRun);
+    expect(store.currentRunSummary).toBe(successfulSummary);
+  });
+
+  it('serializes annotations and selection so authoritative group updates are not overwritten', async () => {
+    const group = (groupId: string) => ({
+      group_id: groupId,
+      selected: false,
+      rejected: false,
+      note: null,
+      rejection_reason: null,
+    });
+    const initial = {
+      ...demoRun('ordered-run'),
+      groups: [group('group-1'), group('group-2')],
+    } as unknown as OptimizerRecommendationsResponse;
+    const firstAnnotationResponse = deferred<Response>();
+    const requestOrder: string[] = [];
+    let serverRun = initial;
+    const patchGroup = (
+      run: OptimizerRecommendationsResponse,
+      groupId: string,
+      patch: Record<string, unknown>,
+    ) =>
+      ({
+        ...run,
+        groups: run.groups.map((item) =>
+          item.group_id === groupId ? { ...item, ...patch } : item,
+        ),
+      }) as OptimizerRecommendationsResponse;
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      const url = requestAddress(input);
+      if (url.pathname.endsWith('/recommendations/group-1') && init?.method === 'PATCH') {
+        requestOrder.push('PATCH group-1');
+        serverRun = patchGroup(serverRun, 'group-1', { note: 'confirmed one' });
+        return firstAnnotationResponse.promise;
+      }
+      if (url.pathname.endsWith('/recommendations/group-2') && init?.method === 'PATCH') {
+        requestOrder.push('PATCH group-2');
+        serverRun = patchGroup(serverRun, 'group-2', { note: 'confirmed two' });
+        return responsePromise(serverRun);
+      }
+      if (url.pathname.endsWith('/selection') && init?.method === 'POST') {
+        requestOrder.push('POST selection');
+        return responsePromise(serverRun);
+      }
+      return Promise.reject(new Error(`Unhandled fake route: ${init?.method} ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const store = useWorkspaceStore();
+    store.currentRun = initial;
+    store.currentRunView = 'current';
+
+    const firstAnnotation = store.annotateGroup('ordered-run', 'group-1', {
+      note: 'confirmed one',
+    });
+    const secondAnnotation = store.annotateGroup('ordered-run', 'group-2', {
+      note: 'confirmed two',
+    });
+    const selection = store.recalculateSelection({ selected_group_ids: ['group-2'] });
+    expect(store.reviewMutationPending).toBe(true);
+    await Promise.resolve();
+    expect(requestOrder).toEqual(['PATCH group-1']);
+
+    firstAnnotationResponse.resolve(jsonResponse(serverRun));
+    await firstAnnotation;
+    await Promise.all([secondAnnotation, selection]);
+
+    expect(requestOrder).toEqual(['PATCH group-1', 'PATCH group-2', 'POST selection']);
+    expect(store.currentRun?.groups.map((item) => item.note)).toEqual([
+      'confirmed one',
+      'confirmed two',
+    ]);
+    expect(store.reviewMutationPending).toBe(false);
+  });
+
   it('ignores late older run and selection completions after a newer view opens', async () => {
     const firstRunResponse = deferred<Response>();
     const oldSelectionResponse = deferred<Response>();
@@ -349,35 +628,177 @@ describe('workspace store', () => {
     expect(store.currentRun?.run_id).toBe('new-run');
 
     const oldSelection = store.recalculateSelection({ selected_group_ids: ['old'] });
+    await Promise.resolve();
+    expect(
+      fetcher.mock.calls.some(([input]) => requestAddress(input).pathname.endsWith('/selection')),
+    ).toBe(true);
     await store.openSavedRun('saved');
     oldSelectionResponse.resolve(jsonResponse(demoRun('new-run', ['late selection'])));
-    await oldSelection;
+    await expect(oldSelection).rejects.toMatchObject({ code: 'run_context_changed' });
 
     expect(store.currentRun?.run_id).toBe('saved');
     expect(store.currentRunView).toBe('saved');
+
+    expect(store.reviewMutationPending).toBe(false);
   });
 
-  it('marks proposed comparisons stale after policy changes', async () => {
+  it('invalidates a current comparison when the active policy revision changes', async () => {
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      const url = requestAddress(input);
+      if (url.pathname === '/api/v1/policy/policy-new/activate' && init?.method === 'POST')
+        return responsePromise({ id: 'policy-new', status: 'ACTIVE' });
+      if (url.pathname === '/health')
+        return responsePromise({
+          status: 'ok',
+          schema_ready: true,
+          broker_mode: 'fake',
+          live_broker_enabled: false,
+          order_submission_enabled: false,
+        });
+      if (url.pathname === '/api/v1/portfolio')
+        return responsePromise(readyPortfolio(1, 'policy-new'));
+      if (url.pathname === '/api/v1/policy')
+        return responsePromise({
+          active: { id: 'policy-new', status: 'ACTIVE', activation_errors: [] },
+          drafts: [],
+          superseded: [],
+        });
+      if (url.pathname === '/api/v1/lots')
+        return responsePromise({ items: [], total: 0, offset: 0, limit: 100 });
+      if (url.pathname === '/api/v1/wash-sales')
+        return responsePromise({
+          demo: true,
+          source: 'FakeBroker',
+          history: [],
+          acquisitions: [],
+          current_restrictions: [],
+          proposed_restrictions: [],
+          warnings: [],
+        });
+      if (url.pathname === '/api/v1/activity')
+        return responsePromise({ items: [], total: 0, offset: 0, limit: 100 });
+      return Promise.reject(new Error(`Unhandled fake route: ${init?.method} ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const store = useWorkspaceStore();
+    store.policy = {
+      active: { id: 'policy-demo', status: 'ACTIVE' },
+      drafts: [],
+      superseded: [],
+    } as unknown as PolicyResponse;
+    store.currentRun = demoRun('active-policy-run');
+    store.currentRunView = 'current';
+
+    await store.activatePolicy('policy-new');
+
+    expect(store.policy?.active?.id).toBe('policy-new');
+    expect(store.currentRunView).toBe('stale');
+    expect(store.proposedRunIsStale).toBe(true);
+  });
+  it('only invalidates a comparison when a sync changes its source generation', async () => {
+    let generation = 1;
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      const url = requestAddress(input);
+      if (url.pathname === '/api/v1/portfolio/sync')
+        return responsePromise({
+          generation,
+          status: 'complete',
+          as_of: `2026-01-0${generation}T00:00:00Z`,
+          coverage: {},
+          account: 'DEMO',
+          demo: true,
+        });
+      if (url.pathname === '/health')
+        return responsePromise({
+          status: 'ok',
+          schema_ready: true,
+          broker_mode: 'fake',
+          live_broker_enabled: false,
+          order_submission_enabled: false,
+        });
+      if (url.pathname === '/api/v1/portfolio') return responsePromise(readyPortfolio(generation));
+      if (url.pathname === '/api/v1/policy')
+        return responsePromise({ active: { id: 'policy-demo' }, drafts: [], superseded: [] });
+      if (url.pathname === '/api/v1/lots')
+        return responsePromise({ items: [], total: 0, offset: 0, limit: 100 });
+      if (url.pathname === '/api/v1/wash-sales')
+        return responsePromise({
+          demo: true,
+          source: 'FakeBroker',
+          history: [],
+          acquisitions: [],
+          current_restrictions: [],
+          proposed_restrictions: [],
+          warnings: [],
+        });
+      if (url.pathname === '/api/v1/activity')
+        return responsePromise({ items: [], total: 0, offset: 0, limit: 100 });
+      return Promise.reject(new Error(`Unhandled fake route: ${init?.method} ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const store = useWorkspaceStore();
+    store.currentRun = demoRun('source-run');
+    store.currentRunView = 'current';
+
+    await store.syncPortfolio();
+    expect(store.currentRunView).toBe('current');
+    generation = 2;
+    await store.syncPortfolio();
+
+    expect(store.lastSync?.generation).toBe(2);
+    expect(store.currentRunView).toBe('stale');
+  });
+
+  it('distinguishes an unknown active policy from a confirmed absence of an active revision', async () => {
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      const url = requestAddress(input);
+      if (url.pathname === '/api/v1/optimizer/runs' && init?.method === 'POST')
+        return responsePromise(demoRun('run-without-active-policy'), 201);
+      return Promise.reject(new Error(`Unhandled fake route: ${init?.method} ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const store = useWorkspaceStore();
+
+    store.observeActivePolicyRevision(null);
+    await store.runOptimizer();
+
+    expect(store.currentRun?.run_id).toBe('run-without-active-policy');
+    expect(store.currentRunView).toBe('stale');
+  });
+
+  it('keeps a run current when saving an inactive policy draft leaves the active revision unchanged', async () => {
     const fetcher = installDefaultApi();
+    const activePolicy = { id: 'policy-demo', status: 'ACTIVE' };
     fetcher.mockImplementation((input, init) => {
       const url = requestAddress(input);
       if (url.pathname === '/api/v1/optimizer/runs' && init?.method === 'POST') {
         return responsePromise(demoRun('policy-run'), 201);
       }
       if (url.pathname === '/api/v1/policy/drafts' && init?.method === 'POST') {
-        return responsePromise({ id: 'draft-2' }, 201);
+        return responsePromise({ id: 'draft-2', status: 'DRAFT' }, 201);
       }
       if (url.pathname === '/api/v1/policy') {
-        return responsePromise({ active: null, drafts: [{ id: 'draft-2' }], superseded: [] });
+        return responsePromise({
+          active: activePolicy,
+          drafts: [{ id: 'draft-2' }],
+          superseded: [],
+        });
       }
       return responsePromise({});
     });
     const store = useWorkspaceStore();
+    store.policy = {
+      active: activePolicy,
+      drafts: [],
+      superseded: [],
+    } as unknown as PolicyResponse;
     await store.runOptimizer();
+
     await store.savePolicyDraft({ settings: {}, sleeves: [] });
 
-    expect(store.currentRunView).toBe('stale');
-    expect(store.proposedRunIsStale).toBe(true);
+    expect(store.policy?.active?.id).toBe('policy-demo');
+    expect(store.currentRunView).toBe('current');
+    expect(store.proposedRunIsStale).toBe(false);
     expect(store.currentRun?.run_id).toBe('policy-run');
   });
 });

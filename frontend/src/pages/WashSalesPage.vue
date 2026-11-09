@@ -1,30 +1,31 @@
 <template>
   <section class="workspace-page" aria-labelledby="wash-title">
-    <header class="page-header">
-      <div>
-        <p class="eyebrow">Managed-account restrictions</p>
-        <h1 id="wash-title">Wash Sales</h1>
-        <p class="page-subtitle">
-          Transaction history and purchase restrictions returned by the local wash-sales API. This
-          page does not perform or imply wash-sale validation.
-        </p>
-      </div>
-      <button type="button" class="primary-button" :disabled="isLoading" @click="refresh">
-        {{ isLoading ? 'Loading…' : 'Refresh wash data' }}
-      </button>
-    </header>
+    <WorkspacePageHeader
+      eyebrow="Managed-account restrictions"
+      title="Wash Sales"
+      title-id="wash-title"
+      subtitle="Transaction history and purchase restrictions returned by the local wash-sales API. This page does not perform or imply wash-sale validation."
+    >
+      <template #actions>
+        <button type="button" class="primary-button" :disabled="isLoading" @click="refresh">
+          {{ isLoading ? 'Loading…' : 'Refresh wash data' }}
+        </button>
+      </template>
+    </WorkspacePageHeader>
 
-    <p class="demo-notice" role="status">
-      <strong>DEMO ONLY.</strong> Returned records are not live E*TRADE validation; no broker
-      connection, OAuth, preview, or trade submission is available.
-    </p>
+    <WorkspaceCapabilityNotice label="DEMO ONLY.">
+      Returned records are not live E*TRADE validation; no broker connection, OAuth, preview, or
+      trade submission is available.
+    </WorkspaceCapabilityNotice>
 
     <ApiActionError
       :error="store.actionState.loadWashSales.error"
       title="Wash-sale data could not be loaded"
     />
 
-    <form class="filter-panel" @submit.prevent>
+    <ResourceFreshnessNotice :resources="['washSales']" />
+
+    <WorkspaceFilterPanel label="Wash-sale filters" class="filter-panel">
       <label>
         <span>Filter records</span>
         <input v-model="search" type="search" placeholder="Ticker, source, trigger, or ID" />
@@ -39,7 +40,7 @@
           <option value="OTHER">OTHER</option>
         </select>
       </label>
-    </form>
+    </WorkspaceFilterPanel>
 
     <p
       v-if="store.actionState.loadWashSales.pending && !washSales"
@@ -48,15 +49,14 @@
     >
       Loading wash-sale history and restrictions from the local API…
     </p>
-    <section v-else-if="!washSales" class="empty-state" aria-live="polite">
-      <h2>No wash-sale data loaded</h2>
-      <p>
-        Retry to request the current API response. No history or restrictions have been inferred.
-      </p>
-      <button type="button" class="secondary-button" :disabled="isLoading" @click="refresh">
-        Retry loading wash data
-      </button>
-    </section>
+    <WorkspaceEmptyState v-else-if="!washSales" title="No wash-sale data loaded">
+      Retry to request the current API response. No history or restrictions have been inferred.
+      <template #action>
+        <button type="button" class="secondary-button" :disabled="isLoading" @click="refresh">
+          Retry loading wash data
+        </button>
+      </template>
+    </WorkspaceEmptyState>
     <template v-else>
       <section class="coverage-card" aria-labelledby="coverage-title">
         <div class="section-heading">
@@ -109,7 +109,11 @@
             </p>
           </div>
         </div>
-        <div v-if="filteredAcquisitions.length" class="table-scroll">
+        <WorkspaceTableFrame
+          v-if="filteredAcquisitions.length"
+          class="table-scroll"
+          label="Wash-sale acquisition rows"
+        >
           <table>
             <caption class="sr-only">
               Acquisition history with API-provided lookback dates
@@ -137,7 +141,7 @@
               </tr>
             </tbody>
           </table>
-        </div>
+        </WorkspaceTableFrame>
         <p v-else class="empty-note">
           {{
             washSales.acquisitions.length
@@ -147,7 +151,11 @@
         </p>
 
         <h3 class="subsection-title">All transaction history</h3>
-        <div v-if="filteredHistory.length" class="table-scroll">
+        <WorkspaceTableFrame
+          v-if="filteredHistory.length"
+          class="table-scroll"
+          label="Wash-sale transaction history"
+        >
           <table>
             <caption class="sr-only">
               Managed-account transaction history returned by the API
@@ -175,7 +183,7 @@
               </tr>
             </tbody>
           </table>
-        </div>
+        </WorkspaceTableFrame>
         <p v-else class="empty-note">
           {{
             washSales.history.length
@@ -195,7 +203,11 @@
             </p>
           </div>
         </div>
-        <div v-if="filteredRestrictions.length" class="table-scroll">
+        <WorkspaceTableFrame
+          v-if="filteredRestrictions.length"
+          class="table-scroll"
+          label="Wash-sale purchase restrictions"
+        >
           <table>
             <caption class="sr-only">
               Current and proposed purchase restrictions
@@ -225,7 +237,7 @@
               </tr>
             </tbody>
           </table>
-        </div>
+        </WorkspaceTableFrame>
         <p v-else class="empty-note">
           {{
             allRestrictions.length
@@ -241,6 +253,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import ApiActionError from '@/components/ApiActionError.vue';
+import WorkspacePageHeader from '@/components/WorkspacePageHeader.vue';
+import WorkspaceCapabilityNotice from '@/components/WorkspaceCapabilityNotice.vue';
+import WorkspaceEmptyState from '@/components/WorkspaceEmptyState.vue';
+import WorkspaceFilterPanel from '@/components/WorkspaceFilterPanel.vue';
+import WorkspaceTableFrame from '@/components/WorkspaceTableFrame.vue';
+
+import ResourceFreshnessNotice from '@/components/ResourceFreshnessNotice.vue';
 import { useWorkspaceStore } from '@/stores/workspace-store';
 import type { WashRestrictionResponse, WashTransactionResponse } from '@/types/api';
 
@@ -303,16 +322,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.demo-notice {
-  margin: 0;
-  padding: 0.8rem 1rem;
-  border: 1px solid #f2dcad;
-  border-radius: 0.65rem;
-  background: #fff7e8;
-  color: #765016;
-  font-size: 0.82rem;
-  line-height: 1.5;
-}
 .filter-panel,
 .coverage-card,
 .data-card,
@@ -483,7 +492,6 @@ tbody th {
   clip-path: inset(50%);
 }
 @media (max-width: 850px) {
-  .page-header,
   .section-heading {
     align-items: stretch;
     flex-direction: column;

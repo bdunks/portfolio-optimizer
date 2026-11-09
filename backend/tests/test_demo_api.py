@@ -821,7 +821,11 @@ def test_rejecting_group_preserves_other_groups_existing_sell_lot_subset(
             json={"rejected": True, "rejection_reason": "not selected"},
         )
         assert rejected.status_code == 200, rejected.text
-        after = client.get(f"/api/v1/optimizer/runs/{run['run_id']}/recommendations").json()
+        after = rejected.json()
+        assert after == client.get(f"/api/v1/optimizer/runs/{run['run_id']}/recommendations").json()
+        assert {"groups", "consolidated_legs", "cash_before_usd", "cash_after_usd", "portfolio_effects"} <= set(after)
+        assert after["estimated_realized_st_usd"] is not None
+        assert after["orders_count"] == 2
         after_groups = {group["group_id"]: group for group in after["groups"]}
         after_legs = {leg["leg_id"]: leg for leg in after["consolidated_legs"]}
         after_aapl = after_legs[aapl_sell_id]
@@ -948,6 +952,7 @@ def test_export_metadata_lot_attribution_notes_activity_and_disabled_future_rout
     export_body = json_export.json()
     assert export_body["metadata"]["solver_version"] == "DEMO"
     assert export_body["metadata"]["demo"] is True
+    assert export_body["metadata"]["frozen_display_context"] == export_body["run"]["frozen_display_context"]
     exported_lot_ids = {
         lot["broker_lot_id"]
         for leg in export_body["run"]["consolidated_legs"]
@@ -975,6 +980,9 @@ def test_export_metadata_lot_attribution_notes_activity_and_disabled_future_rout
         assert metadata_row[field] == str(exported_run[field])
     assert metadata_row["portfolio_effects_json"] == json.dumps(
         exported_run["portfolio_effects"], sort_keys=True, separators=(",", ":")
+    )
+    assert metadata_row["frozen_display_context_json"] == json.dumps(
+        exported_run["frozen_display_context"], sort_keys=True, separators=(",", ":")
     )
     assert exported_run["estimated_tax_benefit_usd"] is None
     assert metadata_row["estimated_tax_benefit_usd"] == ""
@@ -1021,12 +1029,15 @@ def test_export_metadata_lot_attribution_notes_activity_and_disabled_future_rout
         json={"note": "Reviewed offline", "rejected": True, "rejection_reason": "Demo only"},
     )
     assert annotation.status_code == 200, annotation.text
-    assert annotation.json()["note"] == "Reviewed offline"
-    assert annotation.json()["rejected"] is True
-    assert annotation.json()["selected"] is False
-    annotated = client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations").json()
+    annotation_body = annotation.json()
+    annotated_group = next(item for item in annotation_body["groups"] if item["group_id"] == group_id)
+    assert annotated_group["note"] == "Reviewed offline"
+    assert annotated_group["rejected"] is True
+    assert annotated_group["selected"] is False
+    assert annotation_body == client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations").json()
+    annotated = annotation_body
     annotated_legs = {leg["leg_id"]: leg for leg in annotated["consolidated_legs"]}
-    assert all(annotated_legs[leg_id]["shares"] == "0" for leg_id in annotation.json()["leg_ids"] if annotated_legs[leg_id]["side"] == "SELL")
+    assert all(annotated_legs[leg_id]["shares"] == "0" for leg_id in annotated_group["leg_ids"] if annotated_legs[leg_id]["side"] == "SELL")
     activity = client.get("/api/v1/activity?event_type=recommendation_annotation&status=complete")
     assert activity.status_code == 200
     assert activity.json()["total"] == 1
@@ -1056,3 +1067,247 @@ def test_export_metadata_lot_attribution_notes_activity_and_disabled_future_rout
     assert not hasattr(broker, "submit_approved_order")
     tables = set(inspect(client.app.state.engine).get_table_names())
     assert not {"order_record", "order_fill"} & tables
+
+
+
+def test_annotation_field_presence_clear_restore_and_reason_limits(
+    demo_app: tuple[FastAPI, TestClient, FakeBroker, Path],
+) -> None:
+    _, client, _, _ = demo_app
+    run = _create_run(client)
+    run_id = run["run_id"]
+    group_id = run["groups"][0]["group_id"]
+    endpoint = f"/api/v1/optimizer/runs/{run_id}/recommendations/{group_id}"
+    recommendations_url = f"/api/v1/optimizer/runs/{run_id}/recommendations"
+    original = client.get(recommendations_url).json()
+    original_group = original["groups"][0]
+    assert original_group["selected"] is True
+
+    too_long = client.patch(
+        endpoint,
+        json={"note": "must not be written", "rejected": True, "rejection_reason": "x" * 501},
+    )
+    assert too_long.status_code == 422
+    assert client.get(recommendations_url).json() == original
+
+    note = "n" * 2000
+    saved_note = client.patch(endpoint, json={"note": note})
+    assert saved_note.status_code == 200, saved_note.text
+    saved_group = saved_note.json()["groups"][0]
+    assert saved_group["note"] == note
+
+    rejected = client.patch(endpoint, json={"rejected": True})
+    assert rejected.status_code == 200, rejected.text
+    rejected_group = rejected.json()["groups"][0]
+    assert rejected_group["note"] == note
+    assert rejected_group["selected"] is False
+    assert rejected_group["rejected"] is True
+    assert rejected_group["rejection_reason"] is None
+    assert rejected.json()["consolidated_legs"]
+
+    reason = "r" * 500
+    with_reason = client.patch(endpoint, json={"rejected": True, "rejection_reason": reason})
+    assert with_reason.status_code == 200, with_reason.text
+    assert with_reason.json()["groups"][0]["rejection_reason"] == reason
+
+    restored = client.patch(endpoint, json={"rejected": False})
+    assert restored.status_code == 200, restored.text
+    restored_group = restored.json()["groups"][0]
+    assert restored_group["rejected"] is False
+    assert restored_group["rejection_reason"] is None
+    assert restored_group["selected"] is False
+    assert restored_group["note"] == note
+
+    cleared = client.patch(endpoint, json={"note": None})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["groups"][0]["note"] is None
+    assert cleared.json()["groups"][0]["selected"] is False
+
+
+def test_annotation_recalculation_failure_rolls_back_annotations_and_basket(
+    shared_replacement_app: tuple[FastAPI, TestClient, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, client, _ = shared_replacement_app
+    _configure_batch_policy(client, minimum_buy="0")
+    run = client.post("/api/v1/optimizer/runs", json={}).json()
+    run_id = run["run_id"]
+    recs = client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations").json()
+    aapl_group = next(group for group in recs["groups"] if "AAPL" in group["rationale"])
+    msft_group = next(group for group in recs["groups"] if "MSFT" in group["rationale"])
+    selection = client.post(
+        f"/api/v1/optimizer/runs/{run_id}/selection",
+        json={
+            "selected_group_ids": [aapl_group["group_id"], msft_group["group_id"]],
+            "selected_sell_lots": {aapl_group["group_id"]: ["DEMO-AAPL-SHARED-1"]},
+        },
+    )
+    assert selection.status_code == 200, selection.text
+    annotation_url = f"/api/v1/optimizer/runs/{run_id}/recommendations/{msft_group['group_id']}"
+    note = client.patch(annotation_url, json={"note": "preserve me"})
+    assert note.status_code == 200, note.text
+    before = client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations").json()
+
+    def fail_recalculation(*args: object, **kwargs: object) -> None:
+        raise demo_optimizer.AppError("test_recalculation_failure", "Forced recalculation failure", status_code=422)
+
+    monkeypatch.setattr(demo_optimizer, "_recalculate_selection", fail_recalculation)
+    failed = client.patch(
+        annotation_url,
+        json={"note": "must roll back", "rejected": True, "rejection_reason": "not selected"},
+    )
+    assert failed.status_code == 422
+    assert client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations").json() == before
+
+
+
+def test_frozen_run_display_context_survives_renamed_disabled_and_removed_sleeves_after_restart(
+    tmp_path: Path, split_lot_snapshot: BrokerSnapshot
+) -> None:
+    database_path = tmp_path / "frozen-display-context.sqlite3"
+    database_url = f"sqlite:///{database_path}"
+    app = create_app(database_url=database_url, broker=FakeBroker(split_lot_snapshot), seed_demo_data=True)
+    with TestClient(app, base_url="http://localhost") as client:
+        active = client.get("/api/v1/policy").json()["active"]
+        run = _create_run(client)
+        run_id = run["run_id"]
+        original_context = run["frozen_display_context"]
+        assert original_context["available"] is True
+        assert original_context["source"] == "frozen_input_bundle"
+        original_sleeves = {row["sleeve_key"]: row for row in original_context["sleeves"]}
+        assert original_sleeves["us_equities"]["display_name"] == "DEMO US Equities"
+        assert original_sleeves["us_etf"]["parent_sleeve_key"] == "us_equities"
+        assert original_sleeves["us_etf"]["is_transition_destination"] is True
+        original_retained_loss_target = original_context["settings"]["target_retained_net_loss_usd"]
+
+        renamed_payload = {
+            "source_revision_id": active["id"],
+            "settings": active["settings"],
+            "sleeves": active["sleeves"],
+            "allowed_securities": active["allowed_securities"],
+            "overrides": active["overrides"],
+            "reassignments": {},
+        }
+        renamed_payload["settings"]["target_retained_net_loss_usd"] = "9876.54"
+        next(row for row in renamed_payload["sleeves"] if row["sleeve_key"] == "us_equities")[
+            "display_name"
+        ] = "Current US sleeve name"
+        renamed_draft = client.post("/api/v1/policy/drafts", json=renamed_payload)
+        assert renamed_draft.status_code == 201, renamed_draft.text
+        renamed_activation = client.post(f"/api/v1/policy/{renamed_draft.json()['id']}/activate")
+        assert renamed_activation.status_code == 200, renamed_activation.text
+
+        active = client.get("/api/v1/policy").json()["active"]
+        disabled_payload = {
+            "source_revision_id": active["id"],
+            "settings": active["settings"],
+            "sleeves": active["sleeves"],
+            "allowed_securities": active["allowed_securities"],
+            "overrides": active["overrides"],
+            "reassignments": {},
+        }
+        disabled_sleeve = next(row for row in disabled_payload["sleeves"] if row["sleeve_key"] == "us_etf")
+        disabled_sleeve["enabled"] = False
+        disabled_sleeve["is_transition_destination"] = False
+        for candidate in disabled_payload["allowed_securities"]:
+            if candidate["sleeve_key"] == "us_equities" and candidate["sub_sleeve_key"] == "us_etf":
+                candidate["sub_sleeve_key"] = None
+        disabled_draft = client.post("/api/v1/policy/drafts", json=disabled_payload)
+        assert disabled_draft.status_code == 201, disabled_draft.text
+        disabled_activation = client.post(f"/api/v1/policy/{disabled_draft.json()['id']}/activate")
+        assert disabled_activation.status_code == 200, disabled_activation.text
+        disabled_active = client.get("/api/v1/policy").json()["active"]
+        assert next(row for row in disabled_active["sleeves"] if row["sleeve_key"] == "us_etf")["enabled"] is False
+
+        removed_payload = {
+            "source_revision_id": disabled_active["id"],
+            "settings": disabled_active["settings"],
+            "sleeves": [row for row in disabled_active["sleeves"] if row["sleeve_key"] != "us_etf"],
+            "allowed_securities": disabled_active["allowed_securities"],
+            "overrides": disabled_active["overrides"],
+            "reassignments": {},
+        }
+        removed_draft = client.post("/api/v1/policy/drafts", json=removed_payload)
+        assert removed_draft.status_code == 201, removed_draft.text
+        removed_activation = client.post(f"/api/v1/policy/{removed_draft.json()['id']}/activate")
+        assert removed_activation.status_code == 200, removed_activation.text
+        latest_active = client.get("/api/v1/policy").json()["active"]
+        assert "us_etf" not in {row["sleeve_key"] for row in latest_active["sleeves"]}
+        assert next(row for row in latest_active["sleeves"] if row["sleeve_key"] == "us_equities")[
+            "display_name"
+        ] == "Current US sleeve name"
+        assert latest_active["settings"]["target_retained_net_loss_usd"] == "9876.54"
+
+        before_summary = client.get(f"/api/v1/optimizer/runs/{run_id}").json()
+        before_recommendations = client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations").json()
+        assert before_summary["frozen_display_context"] == original_context
+
+    app.state.engine.dispose()
+    restarted = create_app(database_url=database_url, broker=FakeBroker(), seed_demo_data=False)
+    try:
+        with TestClient(restarted, base_url="http://localhost") as client:
+            summary = client.get(f"/api/v1/optimizer/runs/{run_id}").json()
+            recommendations = client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations").json()
+            assert summary == before_summary
+            assert recommendations == before_recommendations
+            context = summary["frozen_display_context"]
+            assert context["source"] == "frozen_input_bundle"
+            assert context["settings"]["target_retained_net_loss_usd"] == original_retained_loss_target
+            sleeves = {row["sleeve_key"]: row for row in context["sleeves"]}
+            assert sleeves["us_equities"]["display_name"] == "DEMO US Equities"
+            assert sleeves["us_etf"]["enabled"] is True
+            assert sleeves["us_etf"]["is_transition_destination"] is True
+
+            exported = client.get(f"/api/v1/optimizer/runs/{run_id}/export?format=json").json()
+            assert exported["metadata"]["frozen_display_context"] == context
+            assert exported["run"]["frozen_display_context"] == context
+            csv_response = client.get(f"/api/v1/optimizer/runs/{run_id}/export?format=csv")
+            metadata_row = next(csv.DictReader(io.StringIO(csv_response.text)))
+            assert json.loads(metadata_row["frozen_display_context_json"]) == context
+    finally:
+        restarted.state.engine.dispose()
+
+
+def test_missing_frozen_policy_context_uses_only_exact_revision_or_reports_unavailable(
+    demo_app: tuple[FastAPI, TestClient, FakeBroker, Path],
+) -> None:
+    app, client, _, _ = demo_app
+    run = _create_run(client)
+    run_id = run["run_id"]
+    original_context = run["frozen_display_context"]
+    original_name = next(row["display_name"] for row in original_context["sleeves"] if row["sleeve_key"] == "us_equities")
+
+    with app.state.session_factory.begin() as session:
+        persisted = session.get(OptimizerRun, run_id)
+        assert persisted is not None
+        persisted.frozen_input_bundle = {"legacy": True}
+    with app.state.session_factory() as session:
+        persisted = session.get(OptimizerRun, run_id)
+        assert persisted is not None
+        unavailable = demo_optimizer.run_summary(persisted)["frozen_display_context"]
+    assert unavailable["available"] is False
+    assert unavailable["source"] is None
+    assert unavailable["sleeves"] is None
+
+    active = client.get("/api/v1/policy").json()["active"]
+    payload = {
+        "source_revision_id": active["id"],
+        "settings": active["settings"],
+        "sleeves": active["sleeves"],
+        "allowed_securities": active["allowed_securities"],
+        "overrides": active["overrides"],
+        "reassignments": {},
+    }
+    next(row for row in payload["sleeves"] if row["sleeve_key"] == "us_equities")["display_name"] = "New active label"
+    draft = client.post("/api/v1/policy/drafts", json=payload)
+    assert draft.status_code == 201, draft.text
+    activated = client.post(f"/api/v1/policy/{draft.json()['id']}/activate")
+    assert activated.status_code == 200, activated.text
+
+    reopened = client.get(f"/api/v1/optimizer/runs/{run_id}").json()
+    exact_revision_context = reopened["frozen_display_context"]
+    assert exact_revision_context["available"] is True
+    assert exact_revision_context["source"] == "policy_revision"
+    assert exact_revision_context["policy_revision_id"] == run["policy_revision_id"]
+    old_sleeve = next(row for row in exact_revision_context["sleeves"] if row["sleeve_key"] == "us_equities")
+    assert old_sleeve["display_name"] == original_name
+    assert old_sleeve["display_name"] != "New active label"

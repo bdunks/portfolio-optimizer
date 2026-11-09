@@ -381,6 +381,151 @@
         "title": "EtradeAuthStatusResponse",
         "type": "object"
       },
+      "FrozenRunDisplayContextResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "activated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activated At"
+          },
+          "allowed_securities": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RunPolicyAllowedSecurityResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Securities"
+          },
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "overrides": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RunPolicyOverrideResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overrides"
+          },
+          "policy_revision_id": {
+            "title": "Policy Revision Id",
+            "type": "string"
+          },
+          "revision_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision Number"
+          },
+          "settings": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JSONValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settings"
+          },
+          "sleeves": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RunPolicySleeveResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sleeves"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "frozen_input_bundle",
+                  "policy_revision"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          }
+        },
+        "required": [
+          "available",
+          "source",
+          "policy_revision_id",
+          "revision_number",
+          "created_at",
+          "activated_at",
+          "sleeves",
+          "settings",
+          "allowed_securities",
+          "overrides",
+          "unavailable_reason"
+        ],
+        "title": "FrozenRunDisplayContextResponse",
+        "type": "object"
+      },
       "GroupImpactResponse": {
         "additionalProperties": false,
         "properties": {
@@ -751,6 +896,9 @@
             "title": "Demo",
             "type": "boolean"
           },
+          "frozen_display_context": {
+            "$ref": "#/components/schemas/FrozenRunDisplayContextResponse"
+          },
           "input_fingerprint": {
             "anyOf": [
               {
@@ -821,7 +969,8 @@
           "actionable",
           "input_fingerprint",
           "source_checksum",
-          "warnings"
+          "warnings",
+          "frozen_display_context"
         ],
         "title": "OptimizerExportMetadataResponse",
         "type": "object"
@@ -903,6 +1052,9 @@
           "estimated_tax_benefit_usd": {
             "title": "Estimated Tax Benefit Usd",
             "type": "null"
+          },
+          "frozen_display_context": {
+            "$ref": "#/components/schemas/FrozenRunDisplayContextResponse"
           },
           "groups": {
             "items": {
@@ -1043,6 +1195,7 @@
           "no_trade_reason",
           "warnings",
           "tax_profile_configured",
+          "frozen_display_context",
           "groups",
           "consolidated_legs"
         ],
@@ -1184,6 +1337,9 @@
             "title": "Estimated Tax Benefit Usd",
             "type": "null"
           },
+          "frozen_display_context": {
+            "$ref": "#/components/schemas/FrozenRunDisplayContextResponse"
+          },
           "input_fingerprint": {
             "anyOf": [
               {
@@ -1315,7 +1471,8 @@
           "constraints_satisfied",
           "no_trade_reason",
           "warnings",
-          "tax_profile_configured"
+          "tax_profile_configured",
+          "frozen_display_context"
         ],
         "title": "OptimizerRunResponse",
         "type": "object"
@@ -2407,6 +2564,7 @@
                 "type": "null"
               }
             ],
+            "description": "Optional note (maximum 2000 characters); omitted leaves it unchanged and explicit null clears it.",
             "title": "Note"
           },
           "rejected": {
@@ -2418,6 +2576,7 @@
                 "type": "null"
               }
             ],
+            "description": "Set rejection state; restoring with false clears the reason and does not reselect the group.",
             "title": "Rejected"
           },
           "rejection_reason": {
@@ -2430,6 +2589,7 @@
                 "type": "null"
               }
             ],
+            "description": "Optional rejection reason (maximum 500 characters); may be changed only with rejected=true.",
             "title": "Rejection Reason"
           }
         },
@@ -2638,6 +2798,180 @@
           "details"
         ],
         "title": "RecommendationLegResponse",
+        "type": "object"
+      },
+      "RunPolicyAllowedSecurityResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "exposure_suitability": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exposure Suitability"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
+          },
+          "replacement_set_id": {
+            "title": "Replacement Set Id",
+            "type": "string"
+          },
+          "sleeve_key": {
+            "title": "Sleeve Key",
+            "type": "string"
+          },
+          "sub_sleeve_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sub Sleeve Key"
+          },
+          "ticker": {
+            "title": "Ticker",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticker",
+          "sleeve_key",
+          "sub_sleeve_key",
+          "replacement_set_id",
+          "priority",
+          "enabled",
+          "exposure_suitability"
+        ],
+        "title": "RunPolicyAllowedSecurityResponse",
+        "type": "object"
+      },
+      "RunPolicyOverrideResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "sleeve_key": {
+            "title": "Sleeve Key",
+            "type": "string"
+          },
+          "sub_sleeve_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sub Sleeve Key"
+          },
+          "ticker": {
+            "title": "Ticker",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticker",
+          "sleeve_key",
+          "sub_sleeve_key"
+        ],
+        "title": "RunPolicyOverrideResponse",
+        "type": "object"
+      },
+      "RunPolicySleeveResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "drift_band_pp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drift Band Pp"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "is_cash_sleeve": {
+            "title": "Is Cash Sleeve",
+            "type": "boolean"
+          },
+          "is_direct_index_container": {
+            "title": "Is Direct Index Container",
+            "type": "boolean"
+          },
+          "is_direct_index_sleeve": {
+            "title": "Is Direct Index Sleeve",
+            "type": "boolean"
+          },
+          "is_transition_destination": {
+            "title": "Is Transition Destination",
+            "type": "boolean"
+          },
+          "parent_sleeve_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Sleeve Key"
+          },
+          "sleeve_key": {
+            "title": "Sleeve Key",
+            "type": "string"
+          },
+          "sort_order": {
+            "title": "Sort Order",
+            "type": "integer"
+          },
+          "target_pct": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Pct"
+          }
+        },
+        "required": [
+          "sleeve_key",
+          "display_name",
+          "sort_order",
+          "parent_sleeve_key",
+          "target_pct",
+          "drift_band_pp",
+          "enabled",
+          "is_direct_index_container",
+          "is_direct_index_sleeve",
+          "is_transition_destination",
+          "is_cash_sleeve"
+        ],
+        "title": "RunPolicySleeveResponse",
         "type": "object"
       },
       "SelectedLotResponse": {
@@ -4326,7 +4660,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RecommendationGroupResponse"
+                  "$ref": "#/components/schemas/OptimizerRecommendationsResponse"
                 }
               }
             },

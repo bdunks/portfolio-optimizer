@@ -1,5 +1,7 @@
 # OS & Editor
 .DS_Store
+node_modules/
+/test-results/
 .thumbs.db
 .vscode/
 .idea/

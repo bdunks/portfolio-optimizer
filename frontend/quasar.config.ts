@@ -3,6 +3,8 @@
 
 import { defineConfig } from '#q-app';
 
+const apiTarget = process.env.PORTFOLIO_API_TARGET ?? 'http://127.0.0.1:8000';
+
 export default defineConfig((/* ctx */) => {
   return {
     // https://v2.quasar.dev/quasar-cli-vite/prefetch-feature
@@ -81,13 +83,13 @@ export default defineConfig((/* ctx */) => {
     devServer: {
       // vueDevtools: true,
       // https: true,
-      open: true, // opens browser window automatically
+      open: process.env.PORTFOLIO_E2E !== '1', // opens browser window automatically
       host: '127.0.0.1',
       port: 9000,
       strictPort: true,
       proxy: {
-        '/api/v1': { target: 'http://127.0.0.1:8000', changeOrigin: false },
-        '/health': { target: 'http://127.0.0.1:8000', changeOrigin: false },
+        '/api/v1': { target: apiTarget, changeOrigin: false },
+        '/health': { target: apiTarget, changeOrigin: false },
       },
     },
 

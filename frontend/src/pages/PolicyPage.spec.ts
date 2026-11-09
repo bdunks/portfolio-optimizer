@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { flushPromises, mount } from '@vue/test-utils';
+import { flushPromises } from '@vue/test-utils';
+import { mountWorkspacePageWithQuasar } from '@/test-utils/quasar-mount';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import type {
@@ -245,8 +246,8 @@ describe('PolicyPage', () => {
       );
     });
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(PolicyPage, {
-      global: { plugins: [createPinia()], stubs: { QPage: { template: '<div><slot /></div>' } } },
+    const wrapper = mountWorkspacePageWithQuasar(PolicyPage, {
+      global: { plugins: [createPinia()] },
     });
     await flushPromises();
 
@@ -378,8 +379,8 @@ describe('PolicyPage', () => {
       );
     });
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(PolicyPage, {
-      global: { plugins: [createPinia()], stubs: { QPage: { template: '<div><slot /></div>' } } },
+    const wrapper = mountWorkspacePageWithQuasar(PolicyPage, {
+      global: { plugins: [createPinia()] },
     });
     await flushPromises();
 
@@ -441,8 +442,8 @@ describe('PolicyPage', () => {
     });
     vi.stubGlobal('fetch', fetcher);
     const mountPage = () =>
-      mount(PolicyPage, {
-        global: { plugins: [createPinia()], stubs: { QPage: { template: '<div><slot /></div>' } } },
+      mountWorkspacePageWithQuasar(PolicyPage, {
+        global: { plugins: [createPinia()] },
       });
     const firstMount = mountPage();
     await flushPromises();
@@ -502,8 +503,8 @@ describe('PolicyPage', () => {
       return Promise.resolve(jsonResponse({}));
     });
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(PolicyPage, {
-      global: { plugins: [createPinia()], stubs: { QPage: { template: '<div><slot /></div>' } } },
+    const wrapper = mountWorkspacePageWithQuasar(PolicyPage, {
+      global: { plugins: [createPinia()] },
     });
     await flushPromises();
     const activate = wrapper
@@ -556,8 +557,8 @@ describe('PolicyPage', () => {
       return Promise.reject(new Error(`Unhandled local API request: ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(PolicyPage, {
-      global: { plugins: [createPinia()], stubs: { QPage: { template: '<div><slot /></div>' } } },
+    const wrapper = mountWorkspacePageWithQuasar(PolicyPage, {
+      global: { plugins: [createPinia()] },
     });
     await flushPromises();
 
@@ -589,8 +590,8 @@ describe('PolicyPage', () => {
     vi.stubGlobal('fetch', fetcher);
     const pinia = createPinia();
     const mountPage = () =>
-      mount(PolicyPage, {
-        global: { plugins: [pinia], stubs: { QPage: { template: '<div><slot /></div>' } } },
+      mountWorkspacePageWithQuasar(PolicyPage, {
+        global: { plugins: [pinia] },
       });
     const first = mountPage();
     await flushPromises();

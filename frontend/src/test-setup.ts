@@ -1,4 +1,11 @@
-import { config } from '@vue/test-utils';
-import { Quasar } from 'quasar';
+import { installQuasarForTests } from '@/test-utils/quasar-mount';
 
-config.global.plugins.push([Quasar, { config: {} }]);
+installQuasarForTests();
+
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = class implements ResizeObserver {
+    disconnect(): void {}
+    observe(): void {}
+    unobserve(): void {}
+  };
+}

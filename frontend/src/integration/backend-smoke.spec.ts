@@ -1,31 +1,20 @@
-import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { createPinia } from 'pinia';
-import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
+import { flushPromises, type VueWrapper } from '@vue/test-utils';
+import { mountWithQuasar } from '@/test-utils/quasar-mount';
+import {
+  availableLoopbackPort,
+  startIsolatedBackend,
+  type IsolatedBackendProcess as BackendProcess,
+} from '@/test-utils/isolated-backend';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import App from '@/App.vue';
 import routes from '@/router/routes';
 import { useWorkspaceStore } from '@/stores/workspace-store';
 import type { OptimizerRecommendationsResponse } from '@/types/api';
-
-const backendDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '../../../backend');
-const buttonStub = {
-  props: ['label', 'disable', 'loading'],
-  template: '<button :disabled="disable"><slot>{{ label }}</slot></button>',
-};
-
-type BackendProcess = {
-  child: ChildProcess;
-  exit: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
-  baseUrl: string;
-  logs: () => string;
-  stop: () => Promise<void>;
-};
 
 type MountedWorkspace = {
   pinia: ReturnType<typeof createPinia>;
@@ -37,132 +26,13 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 }
 
-async function availableLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolveListen, rejectListen) => {
-    server.once('error', rejectListen);
-    server.listen(0, '127.0.0.1', resolveListen);
-  });
-  const address = server.address();
-  if (!address || typeof address === 'string')
-    throw new Error('Could not allocate a loopback port');
-  await new Promise<void>((resolveClose, rejectClose) =>
-    server.close((error) => (error ? rejectClose(error) : resolveClose())),
-  );
-  return address.port;
-}
-
-async function startBackend(
-  databasePath: string,
-  port: number,
-  seedDemoData: boolean,
-): Promise<BackendProcess> {
-  if (!databasePath.startsWith(tmpdir()))
-    throw new Error('Refusing to use a database outside the test temp directory');
-  const databaseUrl = `sqlite:///${databasePath}`;
-  const child = spawn(
-    'uv',
-    ['run', '--offline', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(port)],
-    {
-      cwd: backendDirectory,
-      detached: process.platform !== 'win32',
-      env: {
-        PATH: process.env.PATH ?? '',
-        HOME: process.env.HOME ?? tmpdir(),
-        UV_NO_PROGRESS: '1',
-        PYTHONUNBUFFERED: '1',
-        PORTFOLIO_DATABASE_URL: databaseUrl,
-        PORTFOLIO_DEMO_SEED: seedDemoData ? '1' : '0',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    },
-  );
-  let output = '';
-  const capture = (chunk: Buffer): void => {
-    output = `${output}${chunk.toString()}`.slice(-12000);
-  };
-  child.stdout?.on('data', capture);
-  child.stderr?.on('data', capture);
-  const spawnError: { current: Error | null } = { current: null };
-  child.on('error', (error) => {
-    spawnError.current = error;
-  });
-  const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolveExit) => {
-      child.once('exit', (code, signal) => resolveExit({ code, signal }));
-    },
-  );
-  const baseUrl = `http://127.0.0.1:${port}`;
-  const processHandle: BackendProcess = {
-    child,
-    exit,
-    baseUrl,
-    logs: () => output,
-    stop: async () => {
-      if (child.exitCode === null && child.signalCode === null && child.pid !== undefined) {
-        try {
-          process.kill(process.platform === 'win32' ? child.pid : -child.pid, 'SIGTERM');
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') child.kill('SIGTERM');
-        }
-        if (child.exitCode === null && child.signalCode === null) {
-          let timeout: ReturnType<typeof setTimeout> | undefined;
-          await Promise.race([
-            exit,
-            new Promise<void>((resolveTimeout) => {
-              timeout = setTimeout(resolveTimeout, 5000);
-            }),
-          ]);
-          if (timeout) clearTimeout(timeout);
-        }
-        if (child.exitCode === null && child.signalCode === null) {
-          try {
-            process.kill(process.platform === 'win32' ? child.pid : -child.pid, 'SIGKILL');
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'ESRCH') child.kill('SIGKILL');
-          }
-          let timeout: ReturnType<typeof setTimeout> | undefined;
-          await Promise.race([
-            exit,
-            new Promise<void>((resolveTimeout) => {
-              timeout = setTimeout(resolveTimeout, 5000);
-            }),
-          ]);
-          if (timeout) clearTimeout(timeout);
-        }
-      }
-      expect(child.exitCode !== null || child.signalCode !== null, 'backend child was reaped').toBe(
-        true,
-      );
-    },
-  };
-
-  const readyBy = Date.now() + 30_000;
-  while (Date.now() < readyBy) {
-    if (spawnError.current) break;
-    if (child.exitCode !== null || child.signalCode !== null) break;
-    try {
-      const response = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(1000) });
-      if (response.ok && (await response.json()).schema_ready === true) return processHandle;
-    } catch {
-      // The local server is still starting; retry only this loopback health request.
-    }
-    await delay(150);
-  }
-
-  await processHandle.stop();
-  throw new Error(
-    `Isolated demo backend did not become ready${spawnError.current ? `: ${spawnError.current.message}` : ''}.\n${output}`,
-  );
-}
-
 async function mountWorkspace(): Promise<MountedWorkspace> {
   const pinia = createPinia();
   const router = createRouter({ history: createMemoryHistory(), routes });
   await router.push('/');
   await router.isReady();
-  const wrapper = mount(App, {
-    global: { plugins: [pinia, router], stubs: { QBtn: buttonStub } },
+  const wrapper = mountWithQuasar(App, {
+    global: { plugins: [pinia, router] },
   });
   await flushPromises();
   return { pinia, router, wrapper };
@@ -241,7 +111,7 @@ describe('isolated local backend smoke', () => {
     let holdNextActivationWrite = false;
 
     try {
-      backend = await startBackend(databasePath, port, true);
+      backend = await startIsolatedBackend(databasePath, port, true);
       let backendBase = backend.baseUrl;
       const networkFetch = globalThis.fetch.bind(globalThis);
       vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -488,7 +358,7 @@ describe('isolated local backend smoke', () => {
       workspace = null;
       await backend.stop();
       backend = null;
-      backend = await startBackend(databasePath, port, false);
+      backend = await startIsolatedBackend(databasePath, port, false);
       backendBase = backend.baseUrl;
       workspace = await mountWorkspace();
       await visit(workspace, '/policy');

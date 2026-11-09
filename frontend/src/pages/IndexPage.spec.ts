@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { flushPromises, mount } from '@vue/test-utils';
+import { flushPromises } from '@vue/test-utils';
+import { mountWorkspacePageWithQuasar } from '@/test-utils/quasar-mount';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
@@ -153,7 +154,9 @@ describe('IndexPage', () => {
     } as never;
     store.policy = { active: null, drafts: [], superseded: [] };
     const router = createRouter({ history: createMemoryHistory(), routes: [] });
-    const wrapper = mount(IndexPage, { global: { plugins: [pinia, router] } });
+    const wrapper = mountWorkspacePageWithQuasar(IndexPage, {
+      global: { plugins: [pinia, router] },
+    });
 
     expect(wrapper.get('.workspace-page').classes()).toContain('overview-page');
     expect(wrapper.get('h1').text()).toBe('Overview');
@@ -213,7 +216,9 @@ describe('IndexPage', () => {
     } as never;
     store.currentRunView = 'current';
     const router = createRouter({ history: createMemoryHistory(), routes: [] });
-    const wrapper = mount(IndexPage, { global: { plugins: [pinia, router] } });
+    const wrapper = mountWorkspacePageWithQuasar(IndexPage, {
+      global: { plugins: [pinia, router] },
+    });
 
     expect(wrapper.text()).toContain('No current matching recommendation run');
 
@@ -290,7 +295,9 @@ describe('IndexPage', () => {
     } as never;
     store.currentRunView = 'saved';
     const router = createRouter({ history: createMemoryHistory(), routes: [] });
-    const wrapper = mount(IndexPage, { global: { plugins: [pinia, router] } });
+    const wrapper = mountWorkspacePageWithQuasar(IndexPage, {
+      global: { plugins: [pinia, router] },
+    });
 
     const historical = wrapper.get('[aria-label="Overview frozen run context"]');
     expect(historical.text()).toContain('Historical US Equity');
@@ -306,7 +313,9 @@ describe('IndexPage', () => {
     const store = useWorkspaceStore();
     seedMismatchedPortfolioAndPolicy(store);
     const router = createRouter({ history: createMemoryHistory(), routes: [] });
-    const wrapper = mount(IndexPage, { global: { plugins: [pinia, router] } });
+    const wrapper = mountWorkspacePageWithQuasar(IndexPage, {
+      global: { plugins: [pinia, router] },
+    });
 
     expect(wrapper.text()).toContain(
       'Portfolio effects use policy revision portfolio-revision-a; the active policy is active-policy-b.',
@@ -331,7 +340,9 @@ describe('IndexPage', () => {
     );
     await expect(store.loadPolicy()).rejects.toThrow('policy transport failed');
     const router = createRouter({ history: createMemoryHistory(), routes: [] });
-    const wrapper = mount(IndexPage, { global: { plugins: [pinia, router] } });
+    const wrapper = mountWorkspacePageWithQuasar(IndexPage, {
+      global: { plugins: [pinia, router] },
+    });
 
     expect(wrapper.text()).toContain('cached data is being shown');
     expect(wrapper.text()).toContain('Portfolio effects use policy revision portfolio-revision-a');
@@ -350,7 +361,9 @@ describe('IndexPage', () => {
     store.currentRun = currentRunFixture() as never;
     store.currentRunView = 'current';
     const router = createRouter({ history: createMemoryHistory(), routes: [] });
-    const wrapper = mount(IndexPage, { global: { plugins: [pinia, router] } });
+    const wrapper = mountWorkspacePageWithQuasar(IndexPage, {
+      global: { plugins: [pinia, router] },
+    });
     const response = deferred<Response>();
     vi.stubGlobal(
       'fetch',
@@ -362,7 +375,9 @@ describe('IndexPage', () => {
     expect(store.reviewMutationPending).toBe(true);
     wrapper.unmount();
 
-    const remounted = mount(IndexPage, { global: { plugins: [pinia, router] } });
+    const remounted = mountWorkspacePageWithQuasar(IndexPage, {
+      global: { plugins: [pinia, router] },
+    });
     await flushPromises();
     expect(remounted.text()).toContain('awaiting API confirmation');
     expect(remounted.text()).not.toContain('-5.00');
@@ -388,7 +403,9 @@ describe('IndexPage', () => {
     store.currentRun = previousRun as never;
     store.currentRunView = 'current';
     const router = createRouter({ history: createMemoryHistory(), routes: [] });
-    const wrapper = mount(IndexPage, { global: { plugins: [pinia, router] } });
+    const wrapper = mountWorkspacePageWithQuasar(IndexPage, {
+      global: { plugins: [pinia, router] },
+    });
     const response = deferred<Response>();
     vi.stubGlobal(
       'fetch',
@@ -402,7 +419,9 @@ describe('IndexPage', () => {
     expect(store.reviewMutationPending).toBe(true);
     wrapper.unmount();
 
-    const remounted = mount(IndexPage, { global: { plugins: [pinia, router] } });
+    const remounted = mountWorkspacePageWithQuasar(IndexPage, {
+      global: { plugins: [pinia, router] },
+    });
     await flushPromises();
     expect(remounted.text()).toContain('awaiting API confirmation');
     expect(remounted.find('.overview-metrics').exists()).toBe(false);

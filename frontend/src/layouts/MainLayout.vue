@@ -1,6 +1,8 @@
 <template>
   <q-layout view="lHh Lpr lFf" class="workspace-layout">
-    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <a class="skip-link" href="#main-content" @click.prevent="focusMainContent">
+      Skip to main content
+    </a>
     <q-header class="workspace-header" elevated>
       <q-toolbar>
         <q-btn
@@ -72,7 +74,7 @@
           trading.</span
         >
       </q-banner>
-      <main id="main-content" class="workspace-main" tabindex="-1">
+      <main id="main-content" ref="mainContent" class="workspace-main" tabindex="-1">
         <router-view />
       </main>
     </q-page-container>
@@ -86,6 +88,12 @@ import { workspaceLinks } from '@/navigation/workspace-navigation';
 
 const route = useRoute();
 const drawerOpen = ref(false);
+
+const mainContent = ref<HTMLElement | null>(null);
+
+function focusMainContent(): void {
+  mainContent.value?.focus();
+}
 
 function toggleDrawer(): void {
   drawerOpen.value = !drawerOpen.value;

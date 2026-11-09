@@ -42,7 +42,8 @@
       "sort_order": 0,
       "parent_sleeve_key": "us_equities",
       "target_pct": "0",
-      "drift_band_pp": "5"
+      "drift_band_pp": "5",
+      "is_transition_destination": true
     },
     {
       "sleeve_key": "direct_indexing",

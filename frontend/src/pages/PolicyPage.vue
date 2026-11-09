@@ -119,7 +119,9 @@
           <p class="section-subtitle">
             Top-level targets and every populated nested allocation must total exactly 100%. Drift
             bands use percentage points. No tolerance, implicit cash sleeve, or normalization is
-            applied.
+            applied. Transition progress uses an explicitly designated destination sub-sleeve and
+            all descendants regardless of security type; it remains unavailable when no destination
+            is configured.
           </p>
         </div>
         <button type="button" class="secondary-button" @click="addSleeve">+ Add sleeve</button>
@@ -236,6 +238,15 @@
                 <label
                   ><input v-model="sleeve.is_direct_index_sleeve" type="checkbox" /> Direct-index
                   sleeve</label
+                >
+                <label
+                  ><input
+                    type="checkbox"
+                    aria-label="Transition destination sub-sleeve"
+                    :checked="sleeve.is_transition_destination"
+                    @change="setTransitionDestination(sleeve, $event)"
+                  />
+                  Transition destination sub-sleeve</label
                 >
                 <label><input v-model="sleeve.is_cash_sleeve" type="checkbox" /> Cash sleeve</label>
               </td>
@@ -1368,6 +1379,7 @@ function addSleeve(): void {
     drift_band_pp: '',
     is_direct_index_container: false,
     is_direct_index_sleeve: false,
+    is_transition_destination: false,
     is_cash_sleeve: false,
     enabled: true,
   });
@@ -1394,6 +1406,12 @@ function setDirectIndexContainer(sleeve: EditableSleeve, event: Event): void {
   const enabled = (event.target as HTMLInputElement).checked;
   for (const candidate of sleeves.value) candidate.is_direct_index_container = false;
   sleeve.is_direct_index_container = enabled;
+}
+
+function setTransitionDestination(sleeve: EditableSleeve, event: Event): void {
+  const enabled = (event.target as HTMLInputElement).checked;
+  for (const candidate of sleeves.value) candidate.is_transition_destination = false;
+  sleeve.is_transition_destination = enabled;
 }
 
 function childrenOf(key: string): EditableSleeve[] {

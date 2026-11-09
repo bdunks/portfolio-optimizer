@@ -6,7 +6,7 @@ import io
 import json
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
-from decimal import ROUND_DOWN, Decimal
+from decimal import Decimal
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -28,13 +28,10 @@ from app.db.models import (
     Security,
     SyncState,
 )
-from app.domain.allocation import assignment_path, resolve_cash, resolve_holding
 from app.domain.decimal_math import (
-    exact_difference,
     exact_percent_product,
     exact_product,
     exact_sum,
-    percentage,
     whole_share_floor,
 )
 from app.domain.financial_inputs import (
@@ -42,35 +39,28 @@ from app.domain.financial_inputs import (
     LotInput,
     financial_inputs_from_provenance,
 )
-from app.domain.trade_dates import classify_holding_period, resolve_proposed_trade_date
+from app.domain.portfolio_accounting import (
+    BasketValidationError,
+    ConsolidatedLeg,
+    LotAllocation,
+    evaluate_portfolio,
+)
+from app.domain.trade_dates import resolve_proposed_trade_date
 from app.schemas import OptimizerRunInput, OptimizerSelectionInput
+from app.services.demo_candidates import _candidate_groups, _datetime_iso, _decimal
 from app.services.errors import AppError
 from app.services.financial_input_loader import load_financial_inputs
-from app.services.policy import accumulate_sleeve_value, validate_policy_revision
+from app.services.policy import validate_policy_revision
+from app.services.portfolio_presentation import present_portfolio_evaluation
 
 DEMO_WARNING = "real_optimizer_unavailable"
 DEMO_WASH_WARNING = "wash_sale_validation_deferred_demo"
 DEMO_RISK_WARNING = "risk_tracking_validation_not_run_demo"
 
 
-def _decimal(value: object) -> Decimal:
-    if isinstance(value, Decimal):
-        return value
-    return Decimal(str(value))
-
-
-def _datetime_iso(value: datetime) -> str:
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=UTC)
-    return value.astimezone(UTC).isoformat()
-
-
-
-
 def _fingerprint(value: object) -> str:
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str).encode()
     return hashlib.sha256(encoded).hexdigest()
-
 
 
 
@@ -107,8 +97,13 @@ def _frozen_input(
             status_code=422,
             details={"incomplete_sections": missing},
         )
-    if account.cash_usd < 0 or account.settled_buying_power_usd < 0:
-        raise AppError("invalid_current_balance", "Current account balances cannot be negative", status_code=422)
+    if (
+        not account.cash_usd.is_finite()
+        or not account.settled_buying_power_usd.is_finite()
+        or account.cash_usd < 0
+        or account.settled_buying_power_usd < 0
+    ):
+        raise AppError("invalid_current_balance", "Current account balances must be finite and nonnegative", status_code=422)
 
     inputs = load_financial_inputs(session, account, sync_state, policy, proposed_trade_date)
     quotes_by_ticker = {quote.ticker: quote for quote in inputs.quotes}
@@ -164,192 +159,6 @@ def _frozen_input(
 
 
 
-def _candidate_groups(inputs: FinancialInputs, batch: dict[str, object]) -> list[dict[str, object]]:
-    policy = inputs.policy.allocation
-    settings = inputs.policy.settings
-    quotes = {row.ticker: row for row in inputs.quotes}
-    positions = {row.ticker: row for row in inputs.positions}
-    lots_by_ticker: dict[str, list[LotInput]] = {}
-    for lot in inputs.lots:
-        lots_by_ticker.setdefault(lot.ticker, []).append(lot)
-    portfolio_total = exact_sum(
-        [row.market_value_usd for row in inputs.positions] + [inputs.account.cash_usd]
-    )
-    max_sell_tickers = int(batch["max_sell_tickers_per_batch"])
-    max_sell_lots = int(batch["max_sell_lots_per_batch"])
-    max_total_orders = int(batch["max_total_orders_per_batch"])
-    max_turnover = _decimal(settings.get("max_batch_turnover_pct", Decimal(0)))
-    minimum_buy = _decimal(settings.get("min_buy_order_notional_usd", Decimal(0)))
-    reserve = _decimal(settings.get("cash_reserve_usd", Decimal(0)))
-    cash = inputs.account.cash_usd
-    if cash < reserve:
-        raise AppError("cash_reserve_unavailable", "Current cash is below the configured reserve", status_code=422)
-
-    candidates: list[dict[str, object]] = []
-    for ticker, position in positions.items():
-        source_quote = quotes.get(ticker)
-        if source_quote is None or source_quote.last_usd is None:
-            continue
-        source_price = source_quote.last_usd
-        source_lots: list[dict[str, object]] = []
-        total_loss = Decimal(0)
-        for lot in lots_by_ticker.get(ticker, []):
-            if lot.quality_flags:
-                continue
-            whole_shares = lot.available_shares.to_integral_value(rounding=ROUND_DOWN)
-            if whole_shares <= 0 or lot.adjusted_unit_basis_usd <= source_price:
-                continue
-            loss = exact_product(
-                exact_difference(source_price, lot.adjusted_unit_basis_usd), whole_shares
-            )
-            if loss >= 0:
-                continue
-            source_lots.append(
-                {
-                    "ticker": lot.ticker,
-                    "broker_lot_id": lot.broker_lot_id,
-                    "acquired_date": lot.acquired_date,
-                    "shares": str(lot.shares),
-                    "available_shares": str(lot.available_shares),
-                    "adjusted_unit_basis_usd": str(lot.adjusted_unit_basis_usd),
-                    "quality_flags": list(lot.quality_flags),
-                    "proposed_shares": str(whole_shares),
-                }
-            )
-            total_loss = exact_sum((total_loss, loss))
-        if not source_lots:
-            continue
-
-        source_path = assignment_path(
-            policy, position.assignment.sleeve_key, position.assignment.sub_sleeve_key
-        )
-        if not source_path:
-            continue
-        source_scope = source_path[0]
-        allowed = sorted(
-            (
-                row
-                for row in policy.allowed_securities
-                if row.enabled
-                and row.ticker != ticker
-                and (configured_path := assignment_path(policy, row.sleeve_key, row.sub_sleeve_key))
-                and configured_path[0] == source_scope
-            ),
-            key=lambda row: (row.priority, row.ticker),
-        )
-        replacement: dict[str, object] | None = None
-        for row in allowed:
-            quote = quotes.get(row.ticker)
-            security = inputs.security_for(row.ticker)
-            if (
-                quote is None
-                or quote.last_usd is None
-                or quote.quality != "good"
-                or quote.sync_generation != inputs.source_generation
-                or security is None
-            ):
-                continue
-            replacement_resolution = resolve_holding(policy, security.identity)
-            if replacement_resolution.assignment is None:
-                continue
-            price = quote.last_usd
-            if price > 0:
-                replacement = {
-                    "ticker": row.ticker,
-                    "sleeve_key": replacement_resolution.assignment.sleeve_key,
-                    "sub_sleeve_key": replacement_resolution.assignment.sub_sleeve_key,
-                    "price": str(price),
-                    "quote": {
-                        "as_of": _datetime_iso(quote.as_of),
-                        "source": quote.source,
-                        "quality": quote.quality,
-                        "sync_generation": quote.sync_generation,
-                    },
-                }
-                break
-        if replacement is None:
-            continue
-
-        proceeds = exact_sum(
-            exact_product(source_price, _decimal(lot["proposed_shares"])) for lot in source_lots
-        )
-        if proceeds > exact_percent_product(portfolio_total, max_turnover):
-            continue
-        if len(source_lots) > max_sell_lots or max_sell_tickers < 1 or max_total_orders < 2:
-            continue
-        candidates.append(
-            {
-                "ticker": ticker,
-                "asset_type": position.asset_type,
-                "source_price": str(source_price),
-                "source_quote": {
-                    "as_of": _datetime_iso(source_quote.as_of),
-                    "source": source_quote.source,
-                },
-                "sleeve_key": position.assignment.sleeve_key,
-                "sub_sleeve_key": position.assignment.sub_sleeve_key,
-                "sell_lots": source_lots,
-                "replacement": replacement,
-                "total_loss": str(total_loss),
-                "proceeds": str(proceeds),
-            }
-        )
-
-    candidates.sort(key=lambda row: (_decimal(row["total_loss"]).copy_abs().copy_negate(), str(row["ticker"])))
-    result: list[dict[str, object]] = []
-    used_lots = 0
-    used_turnover = Decimal(0)
-    turnover_limit = exact_percent_product(portfolio_total, max_turnover)
-    for row in candidates:
-        source_lots = row["sell_lots"]
-        assert isinstance(source_lots, list)
-        proposed = [*result, row]
-        sell_tickers = {str(item["ticker"]) for item in proposed}
-        if len(sell_tickers) > max_sell_tickers or used_lots + len(source_lots) > max_sell_lots:
-            continue
-        proceeds = _decimal(row["proceeds"])
-        if exact_sum((used_turnover, proceeds)) > turnover_limit:
-            continue
-        proceeds_by_target: dict[str, Decimal] = {}
-        target_prices: dict[str, Decimal] = {}
-        for item in proposed:
-            replacement_item = item["replacement"]
-            assert isinstance(replacement_item, dict)
-            target = str(replacement_item["ticker"])
-            proceeds_by_target[target] = exact_sum(
-                (proceeds_by_target.get(target, Decimal(0)), _decimal(item["proceeds"]))
-            )
-            target_prices[target] = _decimal(replacement_item["price"])
-        buy_tickers = {
-            target
-            for target, pooled_proceeds in proceeds_by_target.items()
-            if whole_share_floor(pooled_proceeds, target_prices[target]) > 0
-        }
-        if len(sell_tickers) + len(buy_tickers) > max_total_orders:
-            continue
-        result.append(row)
-        used_lots += len(source_lots)
-        used_turnover = exact_sum((used_turnover, proceeds))
-
-    # The minimum is a BUY-order rule: apply it to the pooled order, never one group at a time.
-    pooled: dict[str, tuple[Decimal, Decimal]] = {}
-    for row in result:
-        replacement_item = row["replacement"]
-        assert isinstance(replacement_item, dict)
-        target = str(replacement_item["ticker"])
-        proceeds, price = pooled.get(target, (Decimal(0), _decimal(replacement_item["price"])))
-        pooled[target] = (exact_sum((proceeds, _decimal(row["proceeds"]))), price)
-    excluded = {
-        target
-        for target, (proceeds, price) in pooled.items()
-        if whole_share_floor(proceeds, price) <= 0
-        or exact_product(whole_share_floor(proceeds, price), price) < minimum_buy
-    }
-    return [
-        row
-        for row in result
-        if str(row["replacement"]["ticker"]) not in excluded  # type: ignore[index]
-    ]
 
 
 
@@ -368,24 +177,7 @@ def _add_demo_group(session: Session, run: OptimizerRun, rank: int, data: dict[s
     lots = data["sell_lots"]
     assert isinstance(lots, list)
     shares = exact_sum(_decimal(lot["proposed_shares"]) for lot in lots)
-    realized_by_term = {"ST": Decimal(0), "LT": Decimal(0)}
-    as_of = run.proposed_trade_date
-    if as_of is None:
-        raise AppError("run_trade_date_missing", "Saved run has no proposed trade-date provenance", status_code=409)
-    for lot in lots:
-        acquired = lot["acquired_date"]
-        if not isinstance(acquired, date):
-            acquired = date.fromisoformat(str(acquired))
-        term = classify_holding_period(acquired, as_of)
-        realized_by_term[term] = exact_sum(
-            (
-                realized_by_term[term],
-                exact_product(
-                    exact_difference(source_price, _decimal(lot["adjusted_unit_basis_usd"])),
-                    _decimal(lot["proposed_shares"]),
-                ),
-            )
-        )
+    # Recalculation below fills realized tax fields from the shared accounting result.
     group = RecommendationGroup(
         id=group_id,
         run_id=run.id,
@@ -412,8 +204,8 @@ def _add_demo_group(session: Session, run: OptimizerRun, rank: int, data: dict[s
             side="SELL",
             shares=shares,
             estimated_unit_price_usd=source_price,
-            net_st_realized_usd=realized_by_term["ST"],
-            net_lt_realized_usd=realized_by_term["LT"],
+            net_st_realized_usd=Decimal(0),
+            net_lt_realized_usd=Decimal(0),
             sequence=1,
             details={
                 "quote_as_of": source_quote["as_of"],
@@ -451,10 +243,9 @@ def _add_demo_group(session: Session, run: OptimizerRun, rank: int, data: dict[s
         acquired = lot["acquired_date"]
         if not isinstance(acquired, date):
             acquired = date.fromisoformat(str(acquired))
-        term = classify_holding_period(acquired, as_of)
-        realized = exact_product(
-            exact_difference(source_price, _decimal(lot["adjusted_unit_basis_usd"])), proposed_shares
-        )
+        # Recalculation replaces these placeholders with date-classified lot effects.
+        term = "ST"
+        realized = Decimal(0)
         session.add(
             RecommendationSelectedLot(
                 leg_id=sell_leg_id,
@@ -808,11 +599,7 @@ def _recalculate_selection(
 
     actions: list[dict[str, object]] = []
     buy_pools: dict[str, dict[str, object]] = {}
-    total_proceeds = Decimal(0)
-    total_buy_cost = Decimal(0)
-    total_st = Decimal(0)
-    total_lt = Decimal(0)
-    selected_lot_count = 0
+
     selected_tickers: set[str] = set()
     for group in groups:
         legs = _group_legs(session, group.id)
@@ -849,27 +636,17 @@ def _recalculate_selection(
         source_price = sell_leg.estimated_unit_price_usd
         selected_rows = [row for row in lot_rows if row.broker_lot_id in requested_ids]
         proceeds = Decimal(0)
-        realized_st = Decimal(0)
-        realized_lt = Decimal(0)
         shares_sold = Decimal(0)
         for row in selected_rows:
             proceeds = exact_sum((proceeds, exact_product(source_price, row.shares)))
             shares_sold = exact_sum((shares_sold, row.shares))
-            if row.st_lt_term == "ST":
-                realized_st = exact_sum((realized_st, row.realized_pl_usd))
-            else:
-                realized_lt = exact_sum((realized_lt, row.realized_pl_usd))
-
         selected = group.id in selected_group_ids
         group.selected = selected
         for row in lot_rows:
             row.selected = selected and row.broker_lot_id in requested_ids
         if selected:
             selected_tickers.add(source_security.ticker)
-            selected_lot_count += len(selected_rows)
-            total_proceeds = exact_sum((total_proceeds, proceeds))
-            total_st = exact_sum((total_st, realized_st))
-            total_lt = exact_sum((total_lt, realized_lt))
+
             pool = buy_pools.setdefault(
                 buy_leg.id,
                 {"leg": buy_leg, "proceeds": Decimal(0), "sell_leg_ids": [], "group_ids": []},
@@ -879,8 +656,8 @@ def _recalculate_selection(
             pool["group_ids"].append(group.id)  # type: ignore[union-attr]
 
         sell_leg.shares = shares_sold if selected else Decimal(0)
-        sell_leg.net_st_realized_usd = realized_st if selected else Decimal(0)
-        sell_leg.net_lt_realized_usd = realized_lt if selected else Decimal(0)
+        sell_leg.net_st_realized_usd = Decimal(0)
+        sell_leg.net_lt_realized_usd = Decimal(0)
         actions.append(
             {
                 "group": group,
@@ -899,9 +676,10 @@ def _recalculate_selection(
                 "buy_shares": Decimal(0),
                 "buy_cost": Decimal(0),
                 "apply_buy": False,
-                "realized_st": realized_st if selected else Decimal(0),
-                "realized_lt": realized_lt if selected else Decimal(0),
+                "realized_st": Decimal(0),
+                "realized_lt": Decimal(0),
                 "selected": selected,
+                "selected_rows": selected_rows if selected else [],
             }
         )
 
@@ -913,7 +691,7 @@ def _recalculate_selection(
         .distinct()
     ).all()
     minimum = _decimal(run.batch_settings.get("min_buy_order_notional_usd", "0"))
-    active_buy_count = 0
+
     for buy_leg in all_buy_legs:
         pool = buy_pools.get(buy_leg.id)
         if pool is None:
@@ -943,10 +721,9 @@ def _recalculate_selection(
         buy_leg.shares = buy_shares
         details = dict(buy_leg.details)
         details.pop("depends_on_leg_id", None)
-        details["depends_on_leg_ids"] = list(pool["sell_leg_ids"])
+        details["depends_on_leg_ids"] = list(dict.fromkeys(str(item) for item in pool["sell_leg_ids"]))
         buy_leg.details = details
-        total_buy_cost = exact_sum((total_buy_cost, buy_cost))
-        active_buy_count += 1
+
         first_group = group_ids[0]
         for action in actions:
             if action["selected"] and action["buy_leg"].id == buy_leg.id:
@@ -955,19 +732,86 @@ def _recalculate_selection(
                 action["apply_buy"] = action["group"].id == first_group
 
     settings = inputs.policy.settings
-    cash = inputs.account.cash_usd
-    cash_after = exact_sum((cash, total_proceeds, total_buy_cost.copy_negate()))
-    reserve = _decimal(settings.get("cash_reserve_usd", Decimal(0)))
-    if cash_after < reserve:
-        raise AppError("selected_basket_infeasible", "Selected basket would breach the configured cash reserve", status_code=422)
     batch = run.batch_settings
     max_tickers = int(batch["max_sell_tickers_per_batch"])
     max_lots = int(batch["max_sell_lots_per_batch"])
     max_orders = int(batch["max_total_orders_per_batch"])
     max_turnover = _decimal(settings.get("max_batch_turnover_pct", Decimal(0)))
-    portfolio_total = exact_sum([row.market_value_usd for row in inputs.positions] + [cash])
-    turnover_limit = exact_percent_product(portfolio_total, max_turnover)
-    actual_orders = len(selected_tickers) + active_buy_count
+
+    consolidated_legs: list[ConsolidatedLeg] = []
+    for action in actions:
+        if not action["selected"]:
+            continue
+        sell_leg = action["sell_leg"]
+        selected_rows = action["selected_rows"]
+        assert isinstance(sell_leg, RecommendationLeg)
+        assert isinstance(selected_rows, list)
+        consolidated_legs.append(
+            ConsolidatedLeg(
+                leg_id=sell_leg.id,
+                side="SELL",
+                ticker=str(action["source_ticker"]),
+                shares=_decimal(action["shares_sold"]),
+                estimated_unit_price_usd=sell_leg.estimated_unit_price_usd,
+                selected_lots=tuple(LotAllocation(row.broker_lot_id, row.shares) for row in selected_rows),
+                sequence=sell_leg.sequence,
+                group_ids=(str(action["group"].id),),
+            )
+        )
+    for buy_leg in all_buy_legs:
+        pool = buy_pools.get(buy_leg.id)
+        if pool is None or buy_leg.shares <= 0:
+            continue
+        buy_security = session.get(Security, buy_leg.security_id)
+        if buy_security is None:
+            raise AppError("stale_run_security", "A saved replacement security is unavailable", status_code=409)
+        consolidated_legs.append(
+            ConsolidatedLeg(
+                leg_id=buy_leg.id,
+                side="BUY",
+                ticker=buy_security.ticker,
+                shares=buy_leg.shares,
+                estimated_unit_price_usd=buy_leg.estimated_unit_price_usd,
+                depends_on_leg_ids=tuple(dict.fromkeys(str(item) for item in pool["sell_leg_ids"])),
+                sequence=buy_leg.sequence,
+                group_ids=tuple(dict.fromkeys(str(item) for item in pool["group_ids"])),
+            )
+        )
+    try:
+        evaluation = evaluate_portfolio(inputs, consolidated_legs)
+    except BasketValidationError as exc:
+        raise AppError(
+            "selected_basket_infeasible",
+            exc.message,
+            status_code=422,
+            details={"reason": exc.code},
+        ) from exc
+
+    lot_effects = {effect.broker_lot_id: effect for effect in evaluation.lot_effects}
+    total_st = evaluation.realized_st_usd
+    total_lt = evaluation.realized_lt_usd
+    for action in actions:
+        if not action["selected"]:
+            continue
+        sell_leg = action["sell_leg"]
+        selected_rows = action["selected_rows"]
+        effects_for_group = [lot_effects[row.broker_lot_id] for row in selected_rows]
+        realized_st = exact_sum(effect.realized_pl_usd for effect in effects_for_group if effect.term == "ST")
+        realized_lt = exact_sum(effect.realized_pl_usd for effect in effects_for_group if effect.term == "LT")
+        action["realized_st"] = realized_st
+        action["realized_lt"] = realized_lt
+        sell_leg.net_st_realized_usd = realized_st
+        sell_leg.net_lt_realized_usd = realized_lt
+        for row in selected_rows:
+            effect = lot_effects[row.broker_lot_id]
+            row.st_lt_term = effect.term
+            row.realized_pl_usd = effect.realized_pl_usd
+
+    selected_lot_count = evaluation.selected_lots_count
+    cash = inputs.account.cash_usd
+    cash_after = evaluation.proposed.cash_usd
+    actual_orders = len(consolidated_legs)
+    turnover_limit = exact_percent_product(evaluation.current.portfolio_total_usd, max_turnover)
     if len(selected_tickers) > max_tickers or selected_lot_count > max_lots or actual_orders > max_orders:
         raise AppError(
             "selected_basket_infeasible",
@@ -975,15 +819,18 @@ def _recalculate_selection(
             status_code=422,
             details={"sell_tickers": len(selected_tickers), "sell_lots": selected_lot_count, "orders": actual_orders},
         )
-    if total_proceeds > turnover_limit:
+    if evaluation.sell_proceeds_usd > turnover_limit:
         raise AppError(
             "selected_basket_infeasible",
             "Selected basket exceeds the configured demo turnover limit",
             status_code=422,
-            details={"sell_proceeds_usd": str(total_proceeds), "turnover_limit_usd": str(turnover_limit)},
+            details={"sell_proceeds_usd": str(evaluation.sell_proceeds_usd), "turnover_limit_usd": str(turnover_limit)},
         )
 
-    effects = _account_effects(inputs, actions)
+    effects = present_portfolio_evaluation(
+        evaluation, transition_label="DEMO only; values include the full account and cash"
+    )
+
     for action in actions:
         group = action["group"]
         group.impact = {
@@ -1014,7 +861,7 @@ def _recalculate_selection(
         "estimated_tax_benefit_usd": None,
         "estimated_tax_benefit_status": tax_status,
         "lots_sold_count": selected_lot_count,
-        "positions_exited_count": _positions_exited(inputs, actions),
+        "positions_exited_count": sum(effect.position_exited for effect in evaluation.position_effects),
         "orders_count": actual_orders,
         "cash_before_usd": str(cash),
         "cash_after_usd": str(cash_after),
@@ -1024,175 +871,6 @@ def _recalculate_selection(
     }
 
 
-def _positions_exited(inputs: FinancialInputs, actions: list[dict[str, object]]) -> int:
-    positions = {row.ticker: row.shares for row in inputs.positions}
-    sold: dict[str, Decimal] = {}
-    for action in actions:
-        if action["selected"]:
-            ticker = str(action["source_ticker"])
-            sold[ticker] = exact_sum((sold.get(ticker, Decimal(0)), _decimal(action["shares_sold"])))
-    return sum(1 for ticker, shares in sold.items() if shares >= positions.get(ticker, Decimal(0)))
-
-def _account_effects(inputs: FinancialInputs, actions: list[dict[str, object]]) -> dict[str, object]:
-    allocation = inputs.policy.allocation
-    sleeves_by_key = {row.key: row for row in allocation.sleeves if row.enabled}
-    top_sleeves = [row for row in sleeves_by_key.values() if row.parent_key is None]
-    child_sleeves = [row for row in sleeves_by_key.values() if row.parent_key is not None]
-    container = next((row for row in top_sleeves if row.direct_index_container), None)
-    current_values: dict[str, Decimal] = {}
-    for row in inputs.positions:
-        path = assignment_path(
-            allocation, row.assignment.sleeve_key, row.assignment.sub_sleeve_key
-        ) or ()
-        accumulate_sleeve_value(current_values, path, row.market_value_usd)
-
-    cash = inputs.account.cash_usd
-    cash_assignment = resolve_cash(allocation).assignment
-    cash_path = (
-        assignment_path(allocation, cash_assignment.sleeve_key, cash_assignment.sub_sleeve_key) or ()
-        if cash_assignment is not None
-        else ()
-    )
-    if cash_path:
-        accumulate_sleeve_value(current_values, cash_path, cash)
-
-    proposed_values = dict(current_values)
-    direct_children = {
-        child.key
-        for child in child_sleeves
-        if container is not None
-        and child.parent_key == container.key
-        and child.direct_index_sleeve
-    }
-
-    def is_transition_etf(asset_type: object, path: tuple[str, ...]) -> bool:
-        return bool(
-            container is not None
-            and asset_type == "ETF"
-            and container.key in path
-            and not direct_children.intersection(path)
-        )
-
-    current_etf_value = Decimal(0)
-    for row in inputs.positions:
-        path = assignment_path(
-            allocation, row.assignment.sleeve_key, row.assignment.sub_sleeve_key
-        ) or ()
-        if is_transition_etf(row.asset_type, path):
-            current_etf_value = exact_sum((current_etf_value, row.market_value_usd))
-    proposed_etf_value = current_etf_value
-
-    total_sell = Decimal(0)
-    total_buy = Decimal(0)
-    for action in actions:
-        if not action["selected"]:
-            continue
-        proceeds = _decimal(action["proceeds"])
-        buy_cost = _decimal(action["buy_cost"]) if action["apply_buy"] else Decimal(0)
-        source_path = assignment_path(
-            allocation,
-            str(action["source_sleeve_key"]),
-            str(action["source_sub_sleeve_key"])
-            if action["source_sub_sleeve_key"] is not None
-            else None,
-        ) or ()
-        target_path = assignment_path(
-            allocation,
-            str(action["target_sleeve_key"]),
-            str(action["target_sub_sleeve_key"])
-            if action["target_sub_sleeve_key"] is not None
-            else None,
-        ) or ()
-        accumulate_sleeve_value(proposed_values, source_path, proceeds.copy_negate())
-        accumulate_sleeve_value(proposed_values, target_path, buy_cost)
-        if is_transition_etf(action["source_asset_type"], source_path):
-            proposed_etf_value = exact_difference(proposed_etf_value, proceeds)
-        if is_transition_etf(action["target_asset_type"], target_path):
-            proposed_etf_value = exact_sum((proposed_etf_value, buy_cost))
-        total_sell = exact_sum((total_sell, proceeds))
-        total_buy = exact_sum((total_buy, buy_cost))
-
-    cash_after = exact_sum((cash, total_sell, total_buy.copy_negate()))
-    if cash_path:
-        accumulate_sleeve_value(proposed_values, cash_path, exact_difference(cash_after, cash))
-
-    portfolio_total = exact_sum([row.market_value_usd for row in inputs.positions] + [cash])
-    current_top = {
-        row.key: percentage(current_values.get(row.key, Decimal(0)), portfolio_total)
-        for row in top_sleeves
-    }
-    proposed_top = {
-        row.key: percentage(proposed_values.get(row.key, Decimal(0)), portfolio_total)
-        for row in top_sleeves
-    }
-    target_top = {
-        row.key: str(row.target_pct) if row.target_pct is not None else "0"
-        for row in top_sleeves
-    }
-    allocation_view: dict[str, object] = {
-        "current": {
-            "total_portfolio_usd": str(portfolio_total),
-            "sleeve_weights_pct": {key: str(value) for key, value in current_top.items()},
-        },
-        "proposed": {
-            "total_portfolio_usd": str(portfolio_total),
-            "sleeve_weights_pct": {key: str(value) for key, value in proposed_top.items()},
-        },
-        "target": {"sleeve_weights_pct": target_top},
-    }
-    transition = None
-    if container is not None:
-        children = [row for row in child_sleeves if row.parent_key == container.key]
-        us_current = current_values.get(container.key, Decimal(0))
-        us_proposed = proposed_values.get(container.key, Decimal(0))
-
-        def child_values(values: dict[str, Decimal], total: Decimal) -> dict[str, dict[str, str]]:
-            return {
-                child.key: {
-                    "value_usd": str(values.get(child.key, Decimal(0))),
-                    "within_us_sleeve_pct": str(
-                        percentage(values.get(child.key, Decimal(0)), total)
-                    ),
-                    "whole_portfolio_pct": str(
-                        percentage(values.get(child.key, Decimal(0)), portfolio_total)
-                    ),
-                }
-                for child in children
-            }
-
-        target_children = {
-            child.key: {
-                "within_us_sleeve_pct": str(child.target_pct) if child.target_pct is not None else "0",
-                "whole_portfolio_pct": str(
-                    exact_percent_product(container.target_pct or Decimal(0), child.target_pct or Decimal(0))
-                ),
-            }
-            for child in children
-        }
-        transition = {
-            "sleeve_key": container.key,
-            "label": "DEMO only; values include the full account and cash",
-            "current": {
-                "us_sleeve_value_usd": str(us_current),
-                "us_sleeve_whole_portfolio_pct": str(percentage(us_current, portfolio_total)),
-                "etf_progress_pct": str(percentage(current_etf_value, us_current)),
-                "children": child_values(current_values, us_current),
-            },
-            "proposed_basket": {
-                "us_sleeve_value_usd": str(us_proposed),
-                "us_sleeve_whole_portfolio_pct": str(percentage(us_proposed, portfolio_total)),
-                "etf_progress_pct": str(percentage(proposed_etf_value, us_proposed)),
-                "children": child_values(proposed_values, us_proposed),
-            },
-            "target": {
-                "us_sleeve_whole_portfolio_pct": str(container.target_pct or Decimal(0)),
-                "children": target_children,
-            },
-        }
-    return {
-        "allocation": allocation_view,
-        "us_transition": transition,
-    }
 
 def apply_selection(
     session: Session,
@@ -1288,6 +966,39 @@ def _add_activity(session: Session, correlation_id: str, event_type: str, detail
     )
 
 
+def _presentation_portfolio_effects(value: object) -> object:
+    """Mark progress unavailable for persisted effects predating explicit destinations."""
+    if not isinstance(value, dict):
+        return value
+    transition = value.get("us_transition")
+    if not isinstance(transition, dict) or "transition_destination_sleeve_key" in transition:
+        return value
+
+    presented_transition = dict(transition)
+    presented_transition["transition_destination_sleeve_key"] = None
+    for key in ("current", "proposed_basket"):
+        snapshot = transition.get(key)
+        if isinstance(snapshot, dict):
+            presented_snapshot = dict(snapshot)
+            presented_snapshot["etf_progress_pct"] = None
+            presented_transition[key] = presented_snapshot
+    presented = dict(value)
+    presented["us_transition"] = presented_transition
+    return presented
+
+
+def _presentation_group_impact(value: object) -> object:
+    if not isinstance(value, dict):
+        return value
+    effects = value.get("portfolio_effects")
+    presented_effects = _presentation_portfolio_effects(effects)
+    if presented_effects is effects:
+        return value
+    presented = dict(value)
+    presented["portfolio_effects"] = presented_effects
+    return presented
+
+
 def run_summary(run: OptimizerRun) -> dict[str, object]:
     metrics = run.metrics
     bundle = run.frozen_input_bundle
@@ -1316,7 +1027,7 @@ def run_summary(run: OptimizerRun) -> dict[str, object]:
         "orders_count": metrics.get("orders_count", 0),
         "cash_before_usd": metrics.get("cash_before_usd"),
         "cash_after_usd": metrics.get("cash_after_usd"),
-        "portfolio_effects": metrics.get("portfolio_effects"),
+        "portfolio_effects": _presentation_portfolio_effects(metrics.get("portfolio_effects")),
         "constraints_satisfied": None,
         "no_trade_reason": metrics.get("no_trade_reason"),
         "warnings": list(run.warnings),
@@ -1384,7 +1095,7 @@ def _group_dict(session: Session, group: RecommendationGroup) -> dict[str, objec
         "sleeve_key": group.sleeve_key,
         "rationale": group.rationale,
         "estimated_benefit_usd": None,
-        "impact": group.impact,
+        "impact": _presentation_group_impact(group.impact),
         "dependencies": group.dependencies,
         "selected": group.selected,
         "rejected": group.rejected,

@@ -332,6 +332,7 @@ export type PolicySleeveResponse = {
   "drift_band_pp": string;
   "is_direct_index_container": boolean;
   "is_direct_index_sleeve": boolean;
+  "is_transition_destination": boolean;
   "is_cash_sleeve": boolean;
   "enabled": boolean;
 };
@@ -457,6 +458,7 @@ export type SleeveInput = {
   "drift_band_pp"?: string;
   "is_direct_index_container"?: boolean;
   "is_direct_index_sleeve"?: boolean;
+  "is_transition_destination"?: boolean;
   "is_cash_sleeve"?: boolean;
   "enabled"?: boolean;
 };
@@ -488,7 +490,7 @@ export type TransitionChildResponse = {
 export type TransitionSnapshotResponse = {
   "us_sleeve_value_usd": string;
   "us_sleeve_whole_portfolio_pct": string;
-  "etf_progress_pct": string;
+  "etf_progress_pct": string | null;
   "children": Record<string, TransitionChildResponse>;
 };
 
@@ -504,6 +506,7 @@ export type TransitionTargetResponse = {
 
 export type USTransitionResponse = {
   "sleeve_key": string;
+  "transition_destination_sleeve_key": string | null;
   "label": string;
   "current": TransitionSnapshotResponse;
   "proposed_basket": TransitionSnapshotResponse;

@@ -308,6 +308,7 @@ class PolicySleeve(Base):
     drift_band_pp: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
     is_direct_index_container: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_direct_index_sleeve: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_transition_destination: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_cash_sleeve: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 

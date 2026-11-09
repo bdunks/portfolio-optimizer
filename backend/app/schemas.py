@@ -143,6 +143,7 @@ class SleeveInput(StrictModel):
     drift_band_pp: ExactDecimal = Decimal(0)
     is_direct_index_container: bool = False
     is_direct_index_sleeve: bool = False
+    is_transition_destination: bool = False
     is_cash_sleeve: bool = False
     enabled: bool = True
 
@@ -334,7 +335,7 @@ class TransitionChildResponse(StrictModel):
 class TransitionSnapshotResponse(StrictModel):
     us_sleeve_value_usd: str
     us_sleeve_whole_portfolio_pct: str
-    etf_progress_pct: str
+    etf_progress_pct: str | None
     children: dict[str, TransitionChildResponse]
 
 
@@ -350,6 +351,7 @@ class TransitionTargetResponse(StrictModel):
 
 class USTransitionResponse(StrictModel):
     sleeve_key: str
+    transition_destination_sleeve_key: str | None
     label: str
     current: TransitionSnapshotResponse
     proposed_basket: TransitionSnapshotResponse
@@ -469,6 +471,7 @@ class PolicySleeveResponse(StrictModel):
     drift_band_pp: str
     is_direct_index_container: bool
     is_direct_index_sleeve: bool
+    is_transition_destination: bool
     is_cash_sleeve: bool
     enabled: bool
 

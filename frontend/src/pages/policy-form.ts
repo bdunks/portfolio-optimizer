@@ -66,6 +66,7 @@ export function editableSleevesFromRevision(
     drift_band_pp: sleeve.drift_band_pp,
     is_direct_index_container: sleeve.is_direct_index_container,
     is_direct_index_sleeve: sleeve.is_direct_index_sleeve,
+    is_transition_destination: sleeve.is_transition_destination,
     is_cash_sleeve: sleeve.is_cash_sleeve,
     enabled: sleeve.enabled,
   }));

@@ -16,6 +16,15 @@
       from the portfolio API; historical or stale runs are not overlaid.
     </p>
 
+    <p
+      v-if="transition && transition.transition_destination_sleeve_key === null"
+      class="comparison-note"
+      role="status"
+    >
+      No transition destination is designated in this policy; progress is unavailable and no ETF or
+      ticker is inferred.
+    </p>
+
     <p v-if="!transition" class="empty-state">
       US transition data is unavailable from the portfolio API.
     </p>
@@ -40,7 +49,7 @@
             </dd>
           </div>
           <div>
-            <dt>ETF progress within US sleeve</dt>
+            <dt>Transition destination progress within US sleeve</dt>
             <dd>{{ displayPercent(state.snapshot?.etf_progress_pct) }}</dd>
           </div>
         </dl>

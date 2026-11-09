@@ -37,17 +37,14 @@ from app.db.models import (
 from app.db.session import create_database_engine, make_session_factory
 from app.domain.allocation import (
     SecurityIdentity,
-    assignment_path,
-    resolve_cash,
     resolve_holding,
 )
 from app.domain.decimal_math import (
     exact_difference,
-    exact_percent_product,
     exact_product,
-    exact_sum,
     percentage,
 )
+from app.domain.portfolio_accounting import evaluate_portfolio
 from app.domain.trade_dates import classify_holding_period, resolve_proposed_trade_date
 from app.schemas import (
     ActivityPageResponse,
@@ -82,12 +79,12 @@ from app.services.demo_optimizer import (
 from app.services.errors import AppError
 from app.services.financial_input_loader import load_allocation_policy, load_financial_inputs
 from app.services.policy import (
-    accumulate_sleeve_value,
     activate_policy,
     create_policy_draft,
     policy_to_dict,
     validate_policy_revision,
 )
+from app.services.portfolio_presentation import present_portfolio_evaluation
 from app.services.sync import sync_portfolio
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -373,27 +370,16 @@ def create_app(
         )
         positions = inputs.positions
         quotes_by_ticker = {row.ticker: row for row in inputs.quotes}
-        portfolio_policy = inputs.policy.allocation
-        sleeves = portfolio_policy.sleeves
-        enabled_top = [row for row in sleeves if row.enabled and row.parent_key is None]
-        total_positions = exact_sum(row.market_value_usd for row in positions)
-        portfolio_total = exact_sum((total_positions, account.cash_usd))
+
+        evaluation = evaluate_portfolio(inputs, allow_unassigned_current_positions=True)
+        portfolio_total = evaluation.current.portfolio_total_usd
+        total_positions = exact_difference(portfolio_total, account.cash_usd)
         position_rows: list[dict[str, Any]] = []
-        sleeve_values: dict[str, Decimal] = {}
-        paths_by_ticker: dict[str, tuple[str, ...]] = {}
         unresolved: list[str] = []
         for position in positions:
             quote = quotes_by_ticker.get(position.ticker)
             assignment = position.assignment
-            path = (
-                assignment_path(portfolio_policy, assignment.sleeve_key, assignment.sub_sleeve_key)
-                if assignment is not None
-                else None
-            )
-            if path is not None:
-                paths_by_ticker[position.ticker] = path
-                accumulate_sleeve_value(sleeve_values, path, position.market_value_usd)
-            else:
+            if assignment is None:
                 unresolved.append(position.ticker)
             position_rows.append(
                 {
@@ -409,90 +395,15 @@ def create_app(
                 }
             )
 
-        cash_resolution = resolve_cash(portfolio_policy)
-        cash_assignment = cash_resolution.assignment
-        if cash_assignment is not None and account.cash_usd:
-            cash_path = assignment_path(
-                portfolio_policy, cash_assignment.sleeve_key, cash_assignment.sub_sleeve_key
-            )
-            if cash_path is not None:
-                accumulate_sleeve_value(sleeve_values, cash_path, account.cash_usd)
-
-        allocation: dict[str, Any] = {"current": None, "proposed": None, "target": None}
-        us_transition = None
+        allocation: Any = {"current": None, "proposed": None, "target": None}
+        us_transition: Any = None
         if active_policy:
-            current_weights = {
-                sleeve.key: _percent(sleeve_values.get(sleeve.key, Decimal(0)), portfolio_total)
-                for sleeve in enabled_top
-            }
-            target_weights = {
-                sleeve.key: str(sleeve.target_pct) if sleeve.target_pct is not None else "0"
-                for sleeve in enabled_top
-            }
-            allocation["current"] = {
-                "total_portfolio_usd": str(portfolio_total),
-                "sleeve_weights_pct": current_weights,
-            }
-            allocation["proposed"] = allocation["current"]
-            allocation["target"] = {"sleeve_weights_pct": target_weights}
-            container = next((sleeve for sleeve in enabled_top if sleeve.direct_index_container), None)
-            if container is not None:
-                children = [
-                    sleeve
-                    for sleeve in sleeves
-                    if sleeve.enabled and sleeve.parent_key == container.key
-                ]
-                us_value = sleeve_values.get(container.key, Decimal(0))
-                current_children = {
-                    child.key: {
-                        "value_usd": str(sleeve_values.get(child.key, Decimal(0))),
-                        "within_us_sleeve_pct": _percent(sleeve_values.get(child.key, Decimal(0)), us_value),
-                        "whole_portfolio_pct": _percent(sleeve_values.get(child.key, Decimal(0)), portfolio_total),
-                    }
-                    for child in children
-                }
-                target_children = {
-                    child.key: {
-                        "within_us_sleeve_pct": str(child.target_pct) if child.target_pct is not None else "0",
-                        "whole_portfolio_pct": str(
-                            exact_percent_product(
-                                container.target_pct or Decimal(0), child.target_pct or Decimal(0)
-                            )
-                        ),
-                    }
-                    for child in children
-                }
-                direct_child_keys = {child.key for child in children if child.direct_index_sleeve}
-                etf_value = Decimal(0)
-                for position in positions:
-                    path = paths_by_ticker.get(position.ticker, ())
-                    if (
-                        position.asset_type == "ETF"
-                        and container.key in path
-                        and not direct_child_keys.intersection(path)
-                    ):
-                        etf_value = exact_sum((etf_value, position.market_value_usd))
-                us_transition = {
-                    "sleeve_key": container.key,
-                    "label": "Percentages are shown both within the US sleeve and across the whole portfolio",
-                    "current": {
-                        "us_sleeve_value_usd": str(us_value),
-                        "us_sleeve_whole_portfolio_pct": _percent(us_value, portfolio_total),
-                        "etf_progress_pct": _percent(etf_value, us_value),
-                        "children": current_children,
-                    },
-                    "proposed_basket": {
-                        "us_sleeve_value_usd": str(us_value),
-                        "us_sleeve_whole_portfolio_pct": _percent(us_value, portfolio_total),
-                        "etf_progress_pct": _percent(etf_value, us_value),
-                        "children": current_children,
-                    },
-                    "target": {
-                        "us_sleeve_whole_portfolio_pct": str(container.target_pct or Decimal(0)),
-                        "children": target_children,
-                    },
-                }
-
+            presentation = present_portfolio_evaluation(
+                evaluation,
+                transition_label="Percentages are shown both within the US sleeve and across the whole portfolio",
+            )
+            allocation = presentation["allocation"]
+            us_transition = presentation["us_transition"]
         return {
             "status": "ready",
             "demo": account.source.upper() in {"DEMO", "FAKE"},

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import MutableMapping
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import uuid4
@@ -16,7 +15,11 @@ from app.db.models import (
     PolicySleeve,
     Security,
 )
-from app.domain.allocation import SecurityIdentity, resolve_holding
+from app.domain.allocation import (
+    SecurityIdentity,
+    resolve_holding,
+    resolve_transition_destination,
+)
 from app.domain.decimal_math import exact_sum
 from app.schemas import PolicyDraftInput, PolicySettingsInput, SleeveInput
 from app.services.errors import AppError
@@ -36,12 +39,6 @@ def _sleeves_by_key(session: Session, revision_id: str) -> dict[str, PolicySleev
 
 
 
-def accumulate_sleeve_value(
-    values: MutableMapping[str, Decimal], path: tuple[str, ...], amount: Decimal
-) -> None:
-    """Add a resolved holding/trade amount once to each sleeve ancestor."""
-    for key in path:
-        values[key] = exact_sum((values.get(key, Decimal(0)), amount))
 
 
 
@@ -162,6 +159,7 @@ def create_policy_draft(session: Session, payload: PolicyDraftInput) -> PolicyRe
                 drift_band_pp=item.drift_band_pp,
                 is_direct_index_container=item.is_direct_index_container,
                 is_direct_index_sleeve=item.is_direct_index_sleeve,
+                is_transition_destination=item.is_transition_destination,
                 is_cash_sleeve=item.is_cash_sleeve,
                 enabled=item.enabled,
             )
@@ -363,6 +361,29 @@ def validate_policy_revision(session: Session, revision: PolicyRevision) -> list
         select(CurrentPosition.security_id, Security.ticker, Security.asset_type, Security.is_completion_etf)
         .join(Security, Security.id == CurrentPosition.security_id)
     ).all()
+    destination_resolution = resolve_transition_destination(allocation)
+    if destination_resolution.reason is not None:
+        destination_messages = {
+            "multiple_transition_destinations": "Only one enabled transition destination sleeve is allowed",
+            "transition_destination_requires_unique_direct_index_container": (
+                "An enabled transition destination requires exactly one enabled direct-indexing container"
+            ),
+            "transition_destination_has_invalid_container_ancestry": (
+                "The direct-indexing container must have valid enabled ancestry"
+            ),
+            "transition_destination_outside_direct_index_container": (
+                "The transition destination must be a strict descendant of the direct-indexing container"
+            ),
+            "transition_destination_overlaps_direct_index_branch": (
+                "The transition destination cannot overlap the legacy direct-indexing branch"
+            ),
+        }
+        errors.append(
+            {
+                "code": destination_resolution.reason,
+                "message": destination_messages[destination_resolution.reason],
+            }
+        )
     for _, ticker, asset_type, is_completion_etf in held_securities:
         resolution = resolve_holding(
             allocation,
@@ -444,6 +465,7 @@ def policy_to_dict(session: Session, revision: PolicyRevision) -> dict[str, obje
                 "drift_band_pp": str(s.drift_band_pp),
                 "is_direct_index_container": s.is_direct_index_container,
                 "is_direct_index_sleeve": s.is_direct_index_sleeve,
+                "is_transition_destination": s.is_transition_destination,
                 "is_cash_sleeve": s.is_cash_sleeve,
                 "enabled": s.enabled,
             }

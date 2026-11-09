@@ -56,6 +56,7 @@ const activeRevision: PolicyRevisionResponse = {
       drift_band_pp: '2.2500',
       is_direct_index_container: true,
       is_direct_index_sleeve: false,
+      is_transition_destination: false,
       is_cash_sleeve: false,
       enabled: true,
     },
@@ -152,6 +153,7 @@ function revisionFromPayload(payload: PolicyDraftInput): PolicyRevisionResponse 
       drift_band_pp: sleeve.drift_band_pp ?? '',
       is_direct_index_container: sleeve.is_direct_index_container ?? false,
       is_direct_index_sleeve: sleeve.is_direct_index_sleeve ?? false,
+      is_transition_destination: sleeve.is_transition_destination ?? false,
       is_cash_sleeve: sleeve.is_cash_sleeve ?? false,
       enabled: sleeve.enabled ?? true,
     })),
@@ -252,6 +254,10 @@ describe('PolicyPage', () => {
     expect(wrapper.text()).toContain('Allocation Policy');
     expect(wrapper.text()).toContain('ST/LT tax rates use fraction units');
     const target = wrapper.find('input[aria-label="Target percent"]');
+    const transitionDestination = wrapper.find(
+      'input[aria-label="Transition destination sub-sleeve"]',
+    );
+    await transitionDestination.setValue(true);
     await target.setValue('99.9999999999999999');
     expect((wrapper.get('button.primary-button').element as HTMLButtonElement).disabled).toBe(
       false,
@@ -269,6 +275,7 @@ describe('PolicyPage', () => {
 
     const savedPayload = draftPayloads[0];
     expect(savedPayload?.source_revision_id).toBe('revision-active-synthetic');
+    expect(savedPayload?.sleeves[0]?.is_transition_destination).toBe(true);
     expect(savedPayload?.sleeves[0]?.target_pct).toBe('99.9999999999999999');
     expect(savedPayload?.settings.short_term_tax_rate).toBe('0.2500');
     expect(savedPayload?.settings.long_term_tax_rate).toBeNull();

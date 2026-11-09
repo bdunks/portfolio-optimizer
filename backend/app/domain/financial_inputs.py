@@ -149,6 +149,7 @@ class PolicyInput:
                     "enabled": row.enabled,
                     "is_direct_index_container": row.direct_index_container,
                     "is_direct_index_sleeve": row.direct_index_sleeve,
+                    "is_transition_destination": row.transition_destination,
                     "is_cash_sleeve": row.cash_sleeve,
                 }
                 for row in self.allocation.sleeves
@@ -382,6 +383,7 @@ def financial_inputs_from_provenance(
             enabled=bool(row["enabled"]),
             direct_index_container=bool(row.get("is_direct_index_container", False)),
             direct_index_sleeve=bool(row.get("is_direct_index_sleeve", False)),
+            transition_destination=bool(row.get("is_transition_destination", False)),
             cash_sleeve=bool(row.get("is_cash_sleeve", False)),
             display_name=str(row.get("display_name", "")),
             sort_order=int(row.get("sort_order", 0)),

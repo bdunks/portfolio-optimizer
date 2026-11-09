@@ -40,12 +40,12 @@ The illustrative US total-market sleeve is 45% of total portfolio value, with th
 
 | Child of US sleeve | Example current, within sleeve | Example target, within sleeve | Assets |
 |---|---:|---:|---|
-| Broad-market ETFs | 0% | 100% | VTI, ITOT |
+| New / transition destination | 0% | 100% | VTI, ITOT (illustrative candidates only) |
 | Direct indexing | 100% | 0% | Individual equities approximating S&P 500 plus VB/VXF completion |
 
 The illustrative direct-index mix was ~95% individual stocks and ~5% VB/VXF. **Actual lots, weights and values always come from E*TRADE.** Measure the combined sleeve against a total-US-market benchmark comparable to VTI/ITOT, rather than S&P 500 alone. Account for VB/VXF overlap when evaluating actual size/sector exposure.
 
-Display all three structures side-by-side in the UI: **current**, **post-selected-trades (proposed basket)**, and **configured policy target**, labeling whether percentages mean *of whole portfolio* or *within US sleeve*. ETF transition progress = value assigned to the US sleeve in VTI/ITOT ÷ total US-sleeve value; separately show expected progress after the recommended basket. Consolidation is a preference, **not** a liquidation deadline.
+Display all three structures side-by-side in the UI: **current**, **post-selected-trades (proposed basket)**, and **configured policy target**, labeling whether percentages mean *of whole portfolio* or *within US sleeve*. Transition progress = value assigned to the explicitly designated New / transition-destination sub-sleeve and all its descendants ÷ total US-sleeve value, irrespective of underlying ticker or asset type. The designation must be an enabled strict descendant of the unique US direct-indexing container and must not overlap its legacy direct-indexing branch. If no destination is designated, progress is explicitly unavailable; never infer one from ETF membership, names, or sibling exclusion. Consolidation is a preference, **not** a liquidation deadline.
 
 ### 2.2 Editable tax, batching and trading settings
 
@@ -78,7 +78,7 @@ Users may add, remove, reorder, enable/disable and prioritize ETF candidates in 
 
 | Screen | Required behavior |
 |---|---|
-| **Overview** | Current as-of/sync/coverage status; KPIs for tax benefit, realized ST/LT, post-trade risk, position/lot count and ETF progress; hierarchical US transition (**current**, **proposed basket**, and **target**); current/target/post-trade allocation breakdown; Run Optimizer / Review Trades. |
+| **Overview** | Current as-of/sync/coverage status; KPIs for tax benefit, realized ST/LT, post-trade risk, position/lot count and transition-destination progress; hierarchical US transition (**current**, **proposed basket**, and **target**); current/target/post-trade allocation breakdown; Run Optimizer / Review Trades. |
 | **Recommendations** | Priority-ranked, expandable small-batch trade groups with exact sell lots and linked buys; filter/sort by sleeve, action, tax term, expected benefit, warnings and group type; choose a group subset (with automatic re-solve of consolidated replacement ETF buys), review group dependencies and current-vs-proposed effects. |
 | **Tax Lots** | Search/filter/sort/group security → lot rows; broker lot ID, acquired date, remaining/available shares, adjusted basis, current price, unrealized dollar/% P/L, ST/LT status, small-lot/cleanup indicator, sleeve and data-quality/restriction flags; mark lots selected for trades. |
 | **Allocation Policy** | Full sleeve CRUD (`+ Add Sleeve`, rename, reorder, disable, delete with holding reassignment), exact-100% targets, drift bands, approved ETF pair/triplet sets, US ETF/direct-index target, persistent Tax & Batch Settings, retained TLH targets, gain budgets and risk constraints; draft/save/activate with validation. |

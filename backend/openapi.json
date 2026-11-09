@@ -1998,6 +1998,10 @@
             "title": "Is Direct Index Sleeve",
             "type": "boolean"
           },
+          "is_transition_destination": {
+            "title": "Is Transition Destination",
+            "type": "boolean"
+          },
           "parent_sleeve_key": {
             "anyOf": [
               {
@@ -2031,6 +2035,7 @@
           "drift_band_pp",
           "is_direct_index_container",
           "is_direct_index_sleeve",
+          "is_transition_destination",
           "is_cash_sleeve",
           "enabled"
         ],
@@ -2718,6 +2723,11 @@
             "title": "Is Direct Index Sleeve",
             "type": "boolean"
           },
+          "is_transition_destination": {
+            "default": false,
+            "title": "Is Transition Destination",
+            "type": "boolean"
+          },
           "parent_sleeve_key": {
             "anyOf": [
               {
@@ -2897,8 +2907,15 @@
             "type": "object"
           },
           "etf_progress_pct": {
-            "title": "Etf Progress Pct",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Etf Progress Pct"
           },
           "us_sleeve_value_usd": {
             "title": "Us Sleeve Value Usd",
@@ -2978,10 +2995,22 @@
           },
           "target": {
             "$ref": "#/components/schemas/TransitionTargetResponse"
+          },
+          "transition_destination_sleeve_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transition Destination Sleeve Key"
           }
         },
         "required": [
           "sleeve_key",
+          "transition_destination_sleeve_key",
           "label",
           "current",
           "proposed_basket",

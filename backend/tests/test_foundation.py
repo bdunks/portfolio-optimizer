@@ -54,6 +54,10 @@ def test_fresh_upgrade_reupgrade_restart_demo_and_no_order_tables(tmp_path: Path
             assert client.get("/api/v1/lots").json()["total"] == 2
             assert client.get("/api/v1/policy").json()["active"]["status"] == "ACTIVE"
             columns = {column["name"] for column in inspect(app.state.engine).get_columns("policy_revision")}
+            sleeve_columns = {column["name"] for column in inspect(app.state.engine).get_columns("policy_sleeve")}
+            assert "is_transition_destination" in sleeve_columns
+            demo_sleeves = client.get("/api/v1/policy").json()["active"]["sleeves"]
+            assert next(row for row in demo_sleeves if row["sleeve_key"] == "us_etf")["is_transition_destination"] is True
             assert "settings" not in columns
             assert {"short_term_tax_rate", "max_sell_lots_per_batch", "allow_gain_sales"} <= columns
             tables = set(inspect(app.state.engine).get_table_names())
@@ -142,6 +146,55 @@ def test_invalid_draft_saves_but_cannot_activate(seeded_client: tuple[FastAPI, T
     drafts = client.get("/api/v1/policy").json()["drafts"]
     assert any(revision["id"] == saved.json()["id"] for revision in drafts)
 
+
+
+def test_transition_destination_policy_is_explicit_and_unconfigured_progress_is_nullable(
+    seeded_client: tuple[FastAPI, TestClient]
+) -> None:
+    _, client = seeded_client
+    active = client.get("/api/v1/policy").json()["active"]
+    assert active is not None
+    destination = next(sleeve for sleeve in active["sleeves"] if sleeve["sleeve_key"] == "us_etf")
+    assert destination["is_transition_destination"] is True
+
+    payload = _draft_payload(client)
+    for sleeve in payload["sleeves"]:
+        sleeve["is_transition_destination"] = False
+    saved = client.post("/api/v1/policy/drafts", json=payload)
+    assert saved.status_code == 201, saved.text
+    assert all(not sleeve["is_transition_destination"] for sleeve in saved.json()["sleeves"])
+    activated = client.post(f"/api/v1/policy/{saved.json()['id']}/activate")
+    assert activated.status_code == 200, activated.text
+
+    transition = client.get("/api/v1/portfolio").json()["us_transition"]
+    assert transition["transition_destination_sleeve_key"] is None
+    assert transition["current"]["etf_progress_pct"] is None
+    assert transition["proposed_basket"]["etf_progress_pct"] is None
+
+
+@pytest.mark.parametrize(
+    ("destination_keys", "expected_code"),
+    [
+        (("us_etf", "international"), "multiple_transition_destinations"),
+        (("us_equities",), "transition_destination_outside_direct_index_container"),
+        (("direct_indexing",), "transition_destination_overlaps_direct_index_branch"),
+        (("international",), "transition_destination_outside_direct_index_container"),
+    ],
+)
+def test_invalid_transition_destination_designations_are_rejected(
+    seeded_client: tuple[FastAPI, TestClient], destination_keys: tuple[str, ...], expected_code: str
+) -> None:
+    _, client = seeded_client
+    payload = _draft_payload(client)
+    for sleeve in payload["sleeves"]:
+        sleeve["is_transition_destination"] = sleeve["sleeve_key"] in destination_keys
+
+    saved = client.post("/api/v1/policy/drafts", json=payload)
+    assert saved.status_code == 201, saved.text
+    assert any(error["code"] == expected_code for error in saved.json()["activation_errors"])
+    activated = client.post(f"/api/v1/policy/{saved.json()['id']}/activate")
+    assert activated.status_code == 422
+    assert activated.json()["code"] == "policy_invalid"
 
 @pytest.mark.parametrize("remove_sleeve", [False, True])
 def test_held_sleeve_disable_or_delete_requires_explicit_reassignment(

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from decimal import Decimal
+
+from app.domain.decimal_math import exact_sum, percentage
 
 
 @dataclass(frozen=True, slots=True)
@@ -11,6 +14,7 @@ class AllocationSleeve:
     enabled: bool
     direct_index_container: bool = False
     direct_index_sleeve: bool = False
+    transition_destination: bool = False
     cash_sleeve: bool = False
     display_name: str = ""
     sort_order: int = 0
@@ -42,6 +46,19 @@ class AllocationPolicy:
     allowed_securities: tuple[AllowedSecurity, ...]
     overrides: tuple[SecurityOverride, ...]
 
+
+@dataclass(frozen=True, slots=True)
+class TransitionDestinationResolution:
+    container: AllocationSleeve | None
+    destination: AllocationSleeve | None
+    reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class TransitionProgress:
+    container_key: str | None
+    destination_sleeve_key: str | None
+    progress_pct: Decimal | None
 
 @dataclass(frozen=True, slots=True)
 class SecurityIdentity:
@@ -89,6 +106,77 @@ def assignment_path(
     ):
         return None
     return tuple(path)
+
+
+def accumulate_sleeve_value(
+    values: MutableMapping[str, Decimal], path: tuple[str, ...], amount: Decimal
+) -> None:
+    """Add a holding or trade amount once to each enabled sleeve ancestor."""
+    for key in path:
+        values[key] = exact_sum((values.get(key, Decimal(0)), amount))
+
+
+def resolve_transition_destination(policy: AllocationPolicy) -> TransitionDestinationResolution:
+    """Resolve the explicitly designated transition subtree, without asset-type inference."""
+    enabled = [sleeve for sleeve in policy.sleeves if sleeve.enabled]
+    containers = [sleeve for sleeve in enabled if sleeve.direct_index_container]
+    destinations = [sleeve for sleeve in enabled if sleeve.transition_destination]
+    if len(destinations) > 1:
+        return TransitionDestinationResolution(None, None, "multiple_transition_destinations")
+    if not destinations:
+        return TransitionDestinationResolution(containers[0] if len(containers) == 1 else None, None, None)
+    if len(containers) != 1:
+        return TransitionDestinationResolution(
+            None, destinations[0], "transition_destination_requires_unique_direct_index_container"
+        )
+
+    container = containers[0]
+    destination = destinations[0]
+    container_path = assignment_path(policy, container.key)
+    destination_path = assignment_path(policy, destination.key)
+    if container_path is None:
+        return TransitionDestinationResolution(
+            container, destination, "transition_destination_has_invalid_container_ancestry"
+        )
+    if (
+        destination.key == container.key
+        or destination_path is None
+        or container.key not in destination_path
+    ):
+        return TransitionDestinationResolution(
+            container, destination, "transition_destination_outside_direct_index_container"
+        )
+
+    for legacy_root in (sleeve for sleeve in enabled if sleeve.direct_index_sleeve):
+        legacy_path = assignment_path(policy, legacy_root.key)
+        if legacy_path is None or container.key not in legacy_path:
+            continue
+        if legacy_root.key in destination_path or destination.key in legacy_path:
+            return TransitionDestinationResolution(
+                container, destination, "transition_destination_overlaps_direct_index_branch"
+            )
+    return TransitionDestinationResolution(container, destination, None)
+
+
+def transition_progress(
+    policy: AllocationPolicy, sleeve_values: Mapping[str, Decimal]
+) -> TransitionProgress:
+    """Compute destination-subtree value as a percentage of the direct-index container."""
+    resolution = resolve_transition_destination(policy)
+    if resolution.reason is not None:
+        raise ValueError(resolution.reason)
+    if resolution.container is None or resolution.destination is None:
+        return TransitionProgress(
+            resolution.container.key if resolution.container is not None else None, None, None
+        )
+    return TransitionProgress(
+        resolution.container.key,
+        resolution.destination.key,
+        percentage(
+            sleeve_values.get(resolution.destination.key, Decimal(0)),
+            sleeve_values.get(resolution.container.key, Decimal(0)),
+        ),
+    )
 
 
 def _validated_assignment(

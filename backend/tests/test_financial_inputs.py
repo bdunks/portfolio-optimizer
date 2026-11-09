@@ -220,10 +220,20 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
             inputs.to_provenance(), proposed_trade_date=DEMO_PROPOSED_TRADE_DATE
         )
         assert restored == inputs
+        frozen_sleeves = inputs.to_provenance()["policy"]["sleeves"]
+        assert isinstance(frozen_sleeves, list)
+        assert any(row.get("is_transition_destination") is True for row in frozen_sleeves if isinstance(row, dict))
         assert isinstance(restored.account.cash_usd, Decimal)
         assert isinstance(restored.positions[0].as_of, datetime)
         assert isinstance(restored.lots[0].acquired_date, date)
         legacy_bundle = inputs.to_provenance()
+        legacy_policy = legacy_bundle["policy"]
+        assert isinstance(legacy_policy, dict)
+        legacy_sleeves = legacy_policy["sleeves"]
+        assert isinstance(legacy_sleeves, list)
+        for row in legacy_sleeves:
+            assert isinstance(row, dict)
+            row.pop("is_transition_destination", None)
         legacy_bundle["schema"] = "demo-run-input-v1"
         legacy_bundle.pop("proposed_trade_date")
         legacy_bundle.pop("securities")
@@ -238,6 +248,7 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
         assert len(legacy_restored.lots) == 2500
         assert {lot.sync_generation for lot in legacy_restored.lots} == {inputs.source_generation}
         assert all("sync_generation" not in legacy_lot for legacy_lot in legacy_lots)
+        assert all(not sleeve.transition_destination for sleeve in legacy_restored.policy.allocation.sleeves)
         current_bundle_missing_lot_generation = inputs.to_provenance()
         current_bundle_missing_lot_generation["lots"][0].pop("sync_generation")
         with pytest.raises(TypeError, match="frozen lot has no sync_generation"):

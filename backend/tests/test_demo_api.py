@@ -4,6 +4,7 @@ import csv
 import io
 import json
 from collections.abc import Iterator
+from copy import deepcopy
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -19,9 +20,11 @@ from sqlalchemy.engine import Connection
 
 from app.broker.fake import FakeBroker
 from app.db.models import (
+    CurrentPosition,
     CurrentQuote,
     CurrentTaxLot,
     OptimizerRun,
+    PolicyRevision,
     RecommendationGroup,
     RecommendationGroupLeg,
     RecommendationLeg,
@@ -63,6 +66,46 @@ def demo_app(tmp_path: Path, split_lot_snapshot: BrokerSnapshot) -> Iterator[tup
     app = create_app(database_url=f"sqlite:///{database_path}", broker=broker, seed_demo_data=True)
     with TestClient(app, base_url="http://localhost") as client:
         yield app, client, broker, database_path
+
+def test_portfolio_preserves_unresolved_holding_display(demo_app: tuple[FastAPI, TestClient, FakeBroker, Path]) -> None:
+    app, client, _, _ = demo_app
+    with app.state.session_factory() as session, session.begin():
+        position = session.query(CurrentPosition).first()
+        assert position is not None
+        security = session.get(Security, position.security_id)
+        assert security is not None
+        security.ticker = "UNASSIGNED-ROUTE"
+        security.asset_type = "ETF"
+        security.is_completion_etf = False
+
+    response = client.get("/api/v1/portfolio")
+    assert response.status_code == 200, response.text
+    portfolio = response.json()
+    unresolved = next(row for row in portfolio["positions"] if row["ticker"] == "UNASSIGNED-ROUTE")
+    assert unresolved["sleeve_key"] is None
+    assert portfolio["unassigned_tickers"] == ["UNASSIGNED-ROUTE"]
+    assert Decimal(portfolio["portfolio_total_usd"]) == sum(
+        (Decimal(row["market_value_usd"]) for row in portfolio["positions"]),
+        Decimal(portfolio["cash_usd"]),
+    )
+
+
+def test_portfolio_without_active_policy_returns_unassigned_current_state(
+    demo_app: tuple[FastAPI, TestClient, FakeBroker, Path],
+) -> None:
+    app, client, _, _ = demo_app
+    with app.state.session_factory() as session, session.begin():
+        updated = session.query(PolicyRevision).filter_by(status="ACTIVE").update({"status": "SUPERSEDED"})
+        assert updated == 1
+
+    response = client.get("/api/v1/portfolio")
+    assert response.status_code == 200, response.text
+    portfolio = response.json()
+    assert portfolio["active_policy_revision_id"] is None
+    assert portfolio["unassigned_tickers"] == sorted(row["ticker"] for row in portfolio["positions"])
+    assert portfolio["allocation"]["current"] is None
+    assert portfolio["us_transition"] is None
+
 
 
 
@@ -185,6 +228,14 @@ def _create_run(client: TestClient, proposed_trade_date: str | None = None) -> d
     assert "real_optimizer_unavailable" in payload["warnings"]
     return payload
 
+def _assert_historical_progress_unavailable(effects: dict[str, object]) -> None:
+    transition = effects["us_transition"]
+    assert transition["transition_destination_sleeve_key"] is None
+    assert transition["current"]["etf_progress_pct"] is None
+    assert transition["proposed_basket"]["etf_progress_pct"] is None
+
+
+
 
 
 
@@ -206,6 +257,21 @@ def test_populated_v1_run_migrates_reopens_and_reselects_without_rewriting_bundl
             persisted = session.get(OptimizerRun, run_id)
             assert persisted is not None
             legacy_bundle = json.loads(json.dumps(persisted.frozen_input_bundle))
+            historical_metrics = deepcopy(persisted.metrics)
+            group = session.query(RecommendationGroup).filter_by(run_id=run_id).first()
+            assert group is not None
+            historical_group_impact = deepcopy(group.impact)
+
+        for effects in (
+            historical_metrics["portfolio_effects"],
+            historical_group_impact["portfolio_effects"],
+        ):
+            transition = effects["us_transition"]
+            assert transition["current"]["etf_progress_pct"] is not None
+            assert transition["proposed_basket"]["etf_progress_pct"] is not None
+            transition.pop("transition_destination_sleeve_key")
+        expected_metrics = deepcopy(historical_metrics)
+        expected_group_impact = deepcopy(historical_group_impact)
 
         legacy_bundle["schema"] = "demo-run-input-v1"
         legacy_bundle.pop("proposed_trade_date")
@@ -220,12 +286,21 @@ def test_populated_v1_run_migrates_reopens_and_reselects_without_rewriting_bundl
         with app.state.session_factory.begin() as session:
             persisted = session.get(OptimizerRun, run_id)
             assert persisted is not None
+            persisted.metrics = historical_metrics
+            group = session.query(RecommendationGroup).filter_by(run_id=run_id).first()
+            assert group is not None
+            group.impact = historical_group_impact
             persisted.frozen_input_bundle = legacy_bundle
             persisted.input_fingerprint = fingerprint
         before_summary = client.get(f"/api/v1/optimizer/runs/{run_id}").json()
         before_recommendations = client.get(
             f"/api/v1/optimizer/runs/{run_id}/recommendations"
         ).json()
+        _assert_historical_progress_unavailable(before_summary["portfolio_effects"])
+        _assert_historical_progress_unavailable(before_recommendations["portfolio_effects"])
+        _assert_historical_progress_unavailable(
+            before_recommendations["groups"][0]["impact"]["portfolio_effects"]
+        )
         preserved_tables = (
             "optimizer_run",
             "recommendation_group",
@@ -269,6 +344,25 @@ def test_populated_v1_run_migrates_reopens_and_reselects_without_rewriting_bundl
         recommendations = client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations")
         assert recommendations.status_code == 200, recommendations.text
         assert recommendations.json() == before_recommendations
+        _assert_historical_progress_unavailable(recommendations.json()["portfolio_effects"])
+        _assert_historical_progress_unavailable(
+            recommendations.json()["groups"][0]["impact"]["portfolio_effects"]
+        )
+        exported = client.get(f"/api/v1/optimizer/runs/{run_id}/export?format=json")
+        assert exported.status_code == 200, exported.text
+        exported_run = exported.json()["run"]
+        _assert_historical_progress_unavailable(exported_run["portfolio_effects"])
+        _assert_historical_progress_unavailable(
+            exported_run["groups"][0]["impact"]["portfolio_effects"]
+        )
+        with restarted.state.session_factory() as session:
+            persisted = session.get(OptimizerRun, run_id)
+            assert persisted is not None
+            assert persisted.metrics == expected_metrics
+            assert persisted.frozen_input_bundle == expected_bundle
+            persisted_group = session.query(RecommendationGroup).filter_by(run_id=run_id).first()
+            assert persisted_group is not None
+            assert persisted_group.impact == expected_group_impact
         with restarted.state.engine.connect() as connection:
             upgraded_tables = {
                 table: _sqlite_table_snapshot(connection, table) for table in preserved_tables
@@ -412,6 +506,14 @@ def test_demo_run_persistence_selection_arithmetic_and_restart(
     assert Decimal(no_trade.json()["estimated_realized_lt_usd"]) == Decimal(0)
     assert no_trade.json()["groups"][0]["selected"] is False
 
+    current_portfolio = client.get("/api/v1/portfolio").json()
+    assert no_trade.json()["proposed_trade_date"] == "2026-11-05"
+    empty_effects = no_trade.json()["groups"][0]["impact"]["portfolio_effects"]
+    assert empty_effects["allocation"]["current"] == current_portfolio["allocation"]["current"]
+    assert empty_effects["allocation"]["proposed"] == current_portfolio["allocation"]["current"]
+    assert empty_effects["us_transition"]["current"] == current_portfolio["us_transition"]["current"]
+    assert empty_effects["us_transition"]["proposed_basket"] == current_portfolio["us_transition"]["current"]
+    assert no_trade.json()["cash_after_usd"] == current_portfolio["cash_usd"]
     assert broker.fetch_count == 1
     app.state.engine.dispose()
     restarted = create_app(
@@ -431,11 +533,57 @@ def test_demo_run_persistence_selection_arithmetic_and_restart(
         reopened_sell_id, reopened_buy_id = reopened_groups[0]["leg_ids"]
         assert reopened_legs[reopened_buy_id]["shares"] == "0"
         assert reopened_legs[reopened_sell_id]["selected_lots"][0]["broker_lot_id"].startswith("DEMO-VB-LOT-")
+        reopened_no_trade = second_client.post(
+            f"/api/v1/optimizer/runs/{run_id}/selection",
+            json={"selected_group_ids": [], "selected_sell_lots": {}},
+        )
+        assert reopened_no_trade.status_code == 200, reopened_no_trade.text
+        reopened_effects = reopened_no_trade.json()["groups"][0]["impact"]["portfolio_effects"]
+        assert reopened_effects["allocation"]["current"] == current_portfolio["allocation"]["current"]
+        assert reopened_effects["allocation"]["proposed"] == current_portfolio["allocation"]["current"]
+        assert reopened_effects["us_transition"]["proposed_basket"] == current_portfolio["us_transition"]["current"]
+        assert reopened_no_trade.json()["proposed_trade_date"] == "2026-11-05"
         assert {"note", "rejected", "rejection_reason"} <= {
             column["name"] for column in inspect(restarted.state.engine).get_columns("recommendation_group")
         }
     restarted.state.engine.dispose()
     del app
+
+
+def test_demo_selection_reports_full_position_exit_from_shared_evaluator(tmp_path: Path) -> None:
+    original = FakeBroker.demo_snapshot()
+    vb_position = next(row for row in original.positions if row.ticker == "VB")
+    vb_lot = next(row for row in original.lots if row.ticker == "VB")
+    snapshot = original.model_copy(
+        update={
+            "positions": [vb_position.model_copy(update={"shares": Decimal(1), "market_value_usd": Decimal(200)})],
+            "lots": [vb_lot.model_copy(update={"shares": Decimal(1), "available_shares": Decimal(1)})],
+            "cash_usd": Decimal(850),
+            "settled_buying_power_usd": Decimal(850),
+        }
+    )
+    database_path = tmp_path / "full-position-exit.sqlite3"
+    app = create_app(
+        database_url=f"sqlite:///{database_path}",
+        broker=FakeBroker(snapshot),
+        seed_demo_data=True,
+    )
+    with TestClient(app, base_url="http://localhost") as client:
+        _configure_batch_policy(client, minimum_buy="0")
+        run = client.post("/api/v1/optimizer/runs", json={}).json()
+        assert run["positions_exited_count"] == 1
+        recs = client.get(f"/api/v1/optimizer/runs/{run['run_id']}/recommendations").json()
+        group = recs["groups"][0]
+        selected = client.post(
+            f"/api/v1/optimizer/runs/{run['run_id']}/selection",
+            json={"selected_group_ids": [group["group_id"]]},
+        )
+        assert selected.status_code == 200, selected.text
+        assert selected.json()["positions_exited_count"] == 1
+        sell = next(leg for leg in selected.json()["consolidated_legs"] if leg["side"] == "SELL")
+        assert sell["shares"] == "1"
+        assert sell["selected_lots"][0]["broker_lot_id"] == vb_lot.broker_lot_id
+    app.state.engine.dispose()
 
 
 def test_shared_replacement_buy_pools_proceeds_and_counts_consolidated_orders(

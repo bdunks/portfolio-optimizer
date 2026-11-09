@@ -7,6 +7,7 @@ import type { USTransitionResponse } from '@/types/api';
 // Synthetic typed response for component presentation tests; not account or product demo data.
 const transition = {
   sleeve_key: 'test-us-sleeve',
+  transition_destination_sleeve_key: 'fund',
   label: 'Synthetic US sleeve',
   current: {
     us_sleeve_value_usd: '101.0100',
@@ -63,12 +64,28 @@ describe('USAllocationTransition', () => {
     expect(wrapper.get('[data-state="target"]').text()).toContain('Policy target');
     expect(wrapper.text()).toContain('Within US sleeve + whole portfolio');
     expect(wrapper.get('[data-state="current"]').text()).toContain(
-      'ETF progress within US sleeve11.1100%',
+      'Transition destination progress within US sleeve11.1100%',
     );
     expect(wrapper.get('[data-state="current"]').text()).toContain('12.1200% within US sleeve');
     expect(wrapper.get('[data-state="proposed"]').text()).toContain('13.1300% within US sleeve');
     expect(wrapper.text()).toContain('6.0600% of whole portfolio');
     expect(wrapper.get('[data-state="target"]').text()).toContain('20.2000% within US sleeve');
+  });
+
+  it('shows unavailable destination progress without inferring a security set', () => {
+    const unconfigured: USTransitionResponse = {
+      ...transition,
+      transition_destination_sleeve_key: null,
+      current: { ...transition.current, etf_progress_pct: null },
+      proposed_basket: { ...transition.proposed_basket, etf_progress_pct: null },
+    };
+    const wrapper = mount(USAllocationTransition, { props: { transition: unconfigured } });
+
+    expect(wrapper.text()).toContain('No transition destination is designated in this policy');
+    expect(wrapper.get('[data-state="current"]').text()).toContain(
+      'Transition destination progress within US sleeveUnavailable',
+    );
+    expect(wrapper.text()).not.toContain('11.1100%');
   });
 
   it('states missing transition data as unavailable instead of substituting zero', () => {

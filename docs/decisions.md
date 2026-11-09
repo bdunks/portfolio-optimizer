@@ -39,3 +39,18 @@ The owner selected a canonical run-level collection of consolidated legs with gr
 Live defaults use the current calendar date in `America/New_York`; weekends and holidays are not advanced. A caller-supplied date takes precedence. Deterministic DEMO runs default to fixture date `2026-11-05`, independent of wall-clock and source timestamps, and also accept an explicit date.
 
 A saved run retains its proposed trade date separately from account, quote, and run-creation timestamps. Reopening and selection re-solving use that stored assumption; a later preview or submission must revalidate the intended execution date. No Phase 5 preview or submission behavior is implemented. The trade-date migration copies an explicit date from saved provenance, or for legacy `demo-run-input-v1` runs derives the date from that run's frozen account `as_of` timestamp because the prior DEMO classifier used that date. If immutable provenance cannot establish the date, it remains null and reopening must report it as unavailable rather than substitute today's date.
+
+
+## G. US transition destination sleeve — owner clarification
+
+The transition tracks the explicitly designated New sub-sleeve within the US direct-indexing container, not particular securities. Its progress numerator is the value assigned to the designated sleeve plus every nested descendant, regardless of ticker or asset type; values in other sibling sub-sleeves do not count. The denominator is the enabled direct-index container value.
+
+The `is_transition_destination` role is singular when enabled, must be a strict descendant of the unique enabled direct-index container, and cannot overlap the legacy `is_direct_index_sleeve` branch. A policy with no enabled designation is explicitly unconfigured: progress is unavailable (`null`), never inferred from ETF membership, names, or sibling exclusion. This supersedes the VTI/ITOT-only wording in the illustrative examples and any ETF-membership test expectation.
+
+Do not infer or backfill this role from ticker names or old frozen run inputs. Existing saved policy revisions remain unconfigured through migration unless a future owner-approved, defensible migration identifies an authoritative designation; the packaged DEMO policy explicitly designates its New sleeve.
+
+## H. Shared accounting and future Pass 2 boundary
+
+For t-0059, current portfolio presentation and DEMO initial/subset effects share the pure Decimal `evaluate_portfolio` core; the core consumes frozen typed inputs and canonical legs, not a web request, database session, broker, or solver totals. Deterministic DEMO candidate generation is separate from reusable leg construction, subset orchestration, persistence, and response presentation.
+
+The future bounded Pass 2 worker must receive immutable inputs and a deadline, then return a rounded candidate basket and solver metadata without writing saved results. The request owner independently evaluates the rounded legs from source inputs, checks constraints and staleness/deadline, and alone publishes a valid result. Subset selection re-solves and re-rounds the selected lots before that validation. This boundary documents an extension point; it does not claim a production solver, wash/risk validation, broker order handling, or worker process is implemented.

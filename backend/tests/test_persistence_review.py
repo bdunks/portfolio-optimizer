@@ -178,6 +178,9 @@ def test_startup_migration_preserves_legacy_policy_dependents_and_foreign_keys(t
     # This is the protected engine path used during application startup.
     upgrade_database(engine)
     with engine.connect() as connection:
+        assert connection.scalar(
+            text("SELECT is_transition_destination FROM policy_sleeve WHERE policy_revision_id = 'policy-1'")
+        ) in (0, False)
         assert connection.execute(text("PRAGMA foreign_key_check")).all() == []
         for table in (
             "account",
@@ -537,7 +540,7 @@ def test_alembic_cli_uses_private_protected_engine_and_environment_url(tmp_path:
             assert connection.scalar(text("PRAGMA journal_mode")).lower() == "wal"
             assert connection.scalar(text("PRAGMA busy_timeout")) == 5000
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-                "0007_optimizer_run_trade_date"
+                "0008_transition_destination"
             )
     finally:
         engine.dispose()

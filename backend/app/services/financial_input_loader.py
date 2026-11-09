@@ -75,6 +75,7 @@ def load_allocation_policy(session: Session, revision_id: str) -> AllocationPoli
                 enabled=row.enabled,
                 direct_index_container=row.is_direct_index_container,
                 direct_index_sleeve=row.is_direct_index_sleeve,
+                transition_destination=row.is_transition_destination,
                 cash_sleeve=row.is_cash_sleeve,
                 display_name=row.display_name,
                 sort_order=row.sort_order,

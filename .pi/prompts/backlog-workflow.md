@@ -6,7 +6,6 @@ argument-hint: "[task IDs or stopping point]"
 Execute approved Ready backlog work sequentially, within any supplied scope. Invoking this prompt authorizes implementation and verified backlog completion, not Draft promotion or live trading.
 
 ### Workflow
-- Read `AGENTS.md`, `README.md`, the authoritative specifications, and `docs/decisions.md`. Preserve existing work and the recorded offline acceptance boundaries; use FakeBroker/fake transport only, with live writes disabled.
 - Follow `.pi/prompts/execution-workflow.md` for implementation, delegation, fresh review, and validation. The parent selects and completes backlog work; workers and reviewers do not select tasks, complete them, or redelegate.
 - From the repository root, use `backlog task next --json` for eligible work and its task, milestone, and project context. To resume a specified task, use `backlog task show <id> --json` and verify its state, prerequisites, and checkout before continuing.
 - Execute each task through review and its done-when checks. Phase acceptance requires independent integration verification against the applicable specification gates, not only worker reports. Never mark partial or failing work Done.

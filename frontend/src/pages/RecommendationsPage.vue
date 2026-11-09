@@ -15,6 +15,8 @@
           no-caps
           type="button"
           class="primary-button"
+          color="primary"
+          size="sm"
           :disable="!canRunOptimizer"
           @click="runOptimizer"
         >
@@ -67,10 +69,12 @@
           />
         </label>
         <q-btn
-          unelevated
           no-caps
           type="submit"
           class="secondary-button"
+          outline
+          color="primary"
+          size="sm"
           :disable="
             !savedRunId ||
             store.actionState.openSavedRun.pending ||
@@ -341,15 +345,34 @@
               dense
               hide-bottom-space
               v-model.number="topN"
+              :disable="!canChangeSelection"
               type="number"
               min="1"
               :max="currentRunGroupCount"
             />
           </label>
-          <q-btn unelevated no-caps type="button" class="secondary-button" @click="selectTopGroups">
+          <q-btn
+            no-caps
+            type="button"
+            class="secondary-button"
+            outline
+            color="primary"
+            size="sm"
+            :disable="!canChangeSelection"
+            @click="selectTopGroups"
+          >
             Select top N and re-solve
           </q-btn>
-          <q-btn unelevated no-caps type="button" class="secondary-button" @click="clearSelection">
+          <q-btn
+            no-caps
+            type="button"
+            class="secondary-button"
+            outline
+            color="primary"
+            size="sm"
+            :disable="!canChangeSelection"
+            @click="clearSelection"
+          >
             Clear selected groups and re-solve
           </q-btn>
           <span v-if="!canChangeSelection" class="read-only-note">
@@ -438,20 +461,24 @@
           </p>
         </div>
         <q-btn
-          unelevated
           no-caps
           type="button"
           class="secondary-button"
+          outline
+          color="primary"
+          size="sm"
           :disable="store.actionState.exportRun.pending"
           @click="exportRun('csv')"
         >
           Export CSV
         </q-btn>
         <q-btn
-          unelevated
           no-caps
           type="button"
           class="secondary-button"
+          outline
+          color="primary"
+          size="sm"
           :disable="store.actionState.exportRun.pending"
           @click="exportRun('json')"
         >
@@ -951,10 +978,6 @@ label {
 .filter-panel label {
   flex: 1 1 9rem;
 }
-.filter-panel select {
-  min-width: 0;
-  width: 100%;
-}
 .selection-tools {
   border: 1px solid #dce6eb;
   border-radius: 0.65rem;
@@ -966,12 +989,6 @@ label {
 }
 .top-n-control {
   max-width: 13rem;
-}
-.top-n-control input {
-  min-width: 5rem;
-}
-.selection-tools:disabled {
-  opacity: 0.7;
 }
 .group-list {
   display: grid;
@@ -1009,9 +1026,6 @@ label {
   }
   .saved-run-form label {
     flex: 1 1 100%;
-  }
-  .saved-run-form input {
-    width: 100%;
   }
 }
 </style>

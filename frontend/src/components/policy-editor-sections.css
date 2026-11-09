@@ -5,46 +5,6 @@
   font-size: 0.82rem;
 }
 
-.primary-button,
-.secondary-button,
-.danger-button,
-.text-button,
-.icon-button {
-  border: 1px solid transparent;
-  border-radius: 0.5rem;
-  font: inherit;
-  font-size: 0.78rem;
-  font-weight: 750;
-  cursor: pointer;
-}
-.primary-button {
-  background: #087f7d;
-  color: #fff;
-}
-.secondary-button {
-  border-color: #bdcfd8;
-  background: #fff;
-  color: #29475a;
-}
-.danger-button {
-  border-color: #e5c7c5;
-  background: #fff5f4;
-  color: #954541;
-}
-.text-button {
-  background: transparent;
-  color: #087f7d;
-}
-.icon-button {
-  border-color: #dce6eb;
-  background: #fff;
-  color: #31576c;
-}
-button:disabled {
-  opacity: 0.52;
-  cursor: not-allowed;
-}
-
 .notice-card,
 .validation-card,
 .success-card,
@@ -199,9 +159,6 @@ button:disabled {
 .empty-cell {
   color: #718691;
   text-align: center;
-}
-.small-button {
-  font-size: 0.68rem;
 }
 .delete-panel h3 {
   color: #10263d;

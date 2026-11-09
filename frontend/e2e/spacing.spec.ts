@@ -22,7 +22,7 @@ test('Quasar spacing defaults survive the application cascade', async ({ page, s
           reference.style.fontSize = computed.fontSize;
           reference.style.position = 'fixed';
           reference.style.visibility = 'hidden';
-          document.body.append(reference);
+          element.parentElement!.append(reference);
           const defaults = getComputedStyle(reference);
           for (const property of [
             'paddingTop',
@@ -34,6 +34,27 @@ test('Quasar spacing defaults survive the application cascade', async ({ page, s
               failures.push(
                 `${element.className}: ${property} ${computed[property]} != ${defaults[property]}`,
               );
+            }
+          }
+          if (element.matches('.workspace-page .q-btn')) {
+            reference.className = [...element.classList]
+              .filter((name) => /^(q-|bg-|text-)/.test(name) || name === 'disabled')
+              .join(' ');
+            reference.toggleAttribute('disabled', element.hasAttribute('disabled'));
+            for (const property of [
+              'backgroundColor',
+              'color',
+              'borderWidth',
+              'borderRadius',
+              'fontWeight',
+              'opacity',
+              'cursor',
+            ] as const) {
+              if (computed[property] !== defaults[property]) {
+                failures.push(
+                  `${element.className}: ${property} ${computed[property]} != ${defaults[property]}`,
+                );
+              }
             }
           }
           reference.remove();

@@ -537,6 +537,12 @@ describe('RecommendationsPage', () => {
     await flushPromises();
 
     expect(wrapper.get('.provenance-banner').text()).toContain('Stale/unverified run · read-only');
+    const selectionTools = wrapper.get('.selection-tools');
+    expect(selectionTools.get('.q-input').classes()).toContain('q-field--disabled');
+    for (const button of selectionTools.findAll('button')) {
+      expect((button.element as HTMLButtonElement).disabled).toBe(true);
+      expect(button.classes()).toContain('disabled');
+    }
     expect(wrapper.get('.effects-panel').text()).toContain(
       'Current portfolio API values with active-policy labels',
     );

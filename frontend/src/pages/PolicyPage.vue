@@ -12,10 +12,12 @@
     >
       <template #actions>
         <q-btn
-          unelevated
           no-caps
           type="button"
           class="secondary-button"
+          outline
+          color="primary"
+          size="sm"
           :disable="loading"
           @click="refreshPolicy"
         >
@@ -26,16 +28,20 @@
           no-caps
           type="button"
           class="primary-button"
+          color="primary"
+          size="sm"
           :disable="!canSave"
           @click="saveDraft"
         >
           {{ saving ? 'Saving…' : 'Save new draft revision' }}
         </q-btn>
         <q-btn
-          unelevated
           no-caps
           type="button"
           class="secondary-button"
+          outline
+          color="primary"
+          size="sm"
           :disable="!canActivate"
           @click="activateSaved"
         >
@@ -111,10 +117,12 @@
           <code>{{ sourceRevisionId ?? 'None — creating the first policy revision' }}</code>
         </div>
         <q-btn
-          unelevated
           no-caps
           type="button"
           class="text-button"
+          flat
+          color="primary"
+          size="sm"
           :disable="loading"
           @click="refreshPolicy"
         >
@@ -135,26 +143,32 @@
             no-caps
             type="button"
             class="primary-button"
+            color="primary"
+            size="sm"
             :disable="!canSave"
             @click="saveAndLoadRevision"
           >
             Save edits and load
           </q-btn>
           <q-btn
-            unelevated
             no-caps
             type="button"
             class="secondary-button"
+            outline
+            color="primary"
+            size="sm"
             :disable="saving || activating"
             @click="cancelRevisionChange"
           >
             Keep editing
           </q-btn>
           <q-btn
-            unelevated
             no-caps
             type="button"
             class="danger-button"
+            outline
+            color="negative"
+            size="sm"
             :disable="saving || activating"
             @click="discardAndLoadRevision"
           >

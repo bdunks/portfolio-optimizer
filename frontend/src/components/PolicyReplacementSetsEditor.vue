@@ -9,7 +9,15 @@
           assumption, not a wash-sale guarantee or automated exposure-equivalence check.
         </p>
       </div>
-      <q-btn unelevated no-caps type="button" class="secondary-button" @click="addSecurity">
+      <q-btn
+        no-caps
+        type="button"
+        class="secondary-button"
+        outline
+        color="primary"
+        size="sm"
+        @click="addSecurity"
+      >
         + Add ETF candidate
       </q-btn>
     </div>
@@ -36,10 +44,13 @@
             <td class="q-pa-sm">
               <div class="order-tools row no-wrap q-gutter-xs q-mb-xs">
                 <q-btn
-                  unelevated
                   no-caps
                   type="button"
                   class="icon-button"
+                  outline
+                  color="primary"
+                  dense
+                  size="sm"
                   :aria-label="`Move ${security.ticker || 'candidate'} up`"
                   :disable="!canMoveSecurity(index, -1)"
                   @click="moveSecurity(index, -1)"
@@ -47,10 +58,13 @@
                   ↑
                 </q-btn>
                 <q-btn
-                  unelevated
                   no-caps
                   type="button"
                   class="icon-button"
+                  outline
+                  color="primary"
+                  dense
+                  size="sm"
                   :aria-label="`Move ${security.ticker || 'candidate'} down`"
                   :disable="!canMoveSecurity(index, 1)"
                   @click="moveSecurity(index, 1)"
@@ -170,10 +184,12 @@
             </td>
             <td class="q-pa-sm">
               <q-btn
-                unelevated
                 no-caps
                 type="button"
                 class="danger-button small-button"
+                outline
+                color="negative"
+                size="0.68rem"
                 :aria-label="`Remove ${security.ticker || 'ETF candidate'}`"
                 @click="removeSecurity(index)"
               >

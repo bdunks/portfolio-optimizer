@@ -12,6 +12,8 @@
           no-caps
           type="button"
           class="primary-button"
+          color="primary"
+          size="sm"
           :disable="isLoading"
           @click="refreshLots"
         >
@@ -129,17 +131,27 @@
         />
       </label>
       <q-btn
-        unelevated
         no-caps
         type="button"
         class="icon-button"
+        outline
+        color="primary"
+        size="sm"
         :disable="isLoading"
         :aria-label="sortDirection === 'asc' ? 'Sort ascending' : 'Sort descending'"
         @click="toggleSortDirection"
       >
         {{ sortDirection === 'asc' ? 'Ascending' : 'Descending' }}
       </q-btn>
-      <q-btn unelevated no-caps type="submit" class="secondary-button" :disable="isLoading">
+      <q-btn
+        no-caps
+        type="submit"
+        class="secondary-button"
+        outline
+        color="primary"
+        size="sm"
+        :disable="isLoading"
+      >
         Apply API filters
       </q-btn>
     </WorkspaceFilterPanel>
@@ -155,10 +167,12 @@
       Load the current API page to see broker-reported lots.
       <template #action>
         <q-btn
-          unelevated
           no-caps
           type="button"
           class="secondary-button"
+          outline
+          color="primary"
+          size="sm"
           :disable="isLoading"
           @click="refreshLots"
         >
@@ -374,10 +388,12 @@
         <li v-for="entry in store.lotReviewIntent" :key="entry.broker_lot_id">
           {{ entry.ticker }} · {{ entry.broker_lot_id }} · generation {{ entry.source_generation }}
           <q-btn
-            unelevated
             no-caps
             type="button"
             class="text-button"
+            flat
+            color="primary"
+            size="sm"
             :disable="store.reviewMutationPending"
             @click="removeRequestedLot(entry)"
           >
@@ -394,10 +410,12 @@
       </p>
       <div class="intent-actions">
         <q-btn
-          unelevated
           no-caps
           type="button"
           class="secondary-button"
+          outline
+          color="primary"
+          size="sm"
           :disable="!canChangeLotIntent"
           @click="clearRequestedLots"
         >
@@ -408,6 +426,8 @@
           no-caps
           type="button"
           class="primary-button"
+          color="primary"
+          size="sm"
           :disable="!canApplyLotIntent"
           @click="applyRequestedLots"
         >
@@ -657,21 +677,6 @@ onMounted(() => {
   font-size: 0.75rem;
   font-weight: 700;
 }
-.primary-button {
-  border-color: #067777;
-  background: #087f7d;
-  color: white;
-}
-.secondary-button,
-.icon-button {
-  border-color: #bfd0d8;
-  background: #f7fafb;
-}
-.text-button {
-  border: 0;
-  color: #087f7d;
-  text-decoration: underline;
-}
 .results-heading {
   color: #526c7c;
   font-size: 0.76rem;
@@ -770,8 +775,7 @@ tbody th {
     align-items: stretch;
     flex-direction: column;
   }
-  .filter-panel label,
-  .filter-panel input[type='search'] {
+  .filter-panel label {
     width: 100%;
   }
   .sort-control {

@@ -11,7 +11,14 @@
           configured.
         </p>
       </div>
-      <q-btn unelevated no-caps type="button" class="secondary-button" @click="addSleeve"
+      <q-btn
+        no-caps
+        type="button"
+        class="secondary-button"
+        outline
+        color="primary"
+        size="sm"
+        @click="addSleeve"
         >+ Add sleeve</q-btn
       >
     </div>
@@ -58,10 +65,13 @@
             <td class="q-pa-sm">
               <div class="order-tools row no-wrap q-gutter-xs q-mb-xs">
                 <q-btn
-                  unelevated
                   no-caps
                   type="button"
                   class="icon-button"
+                  outline
+                  color="primary"
+                  dense
+                  size="sm"
                   :aria-label="`Move ${sleeve.display_name || 'sleeve'} up`"
                   :disable="!canMoveSleeve(index, -1)"
                   @click="moveSleeve(index, -1)"
@@ -69,10 +79,13 @@
                   ↑
                 </q-btn>
                 <q-btn
-                  unelevated
                   no-caps
                   type="button"
                   class="icon-button"
+                  outline
+                  color="primary"
+                  dense
+                  size="sm"
                   :aria-label="`Move ${sleeve.display_name || 'sleeve'} down`"
                   :disable="!canMoveSleeve(index, 1)"
                   @click="moveSleeve(index, 1)"
@@ -218,10 +231,12 @@
             </td>
             <td class="q-pa-sm">
               <q-btn
-                unelevated
                 no-caps
                 type="button"
                 class="danger-button small-button"
+                outline
+                color="negative"
+                size="0.68rem"
                 @click="beginDeleteSleeve(sleeve.sleeve_key)"
               >
                 Delete
@@ -303,10 +318,25 @@
         {{ deleteError }}
       </p>
       <div class="button-row row q-gutter-sm items-center">
-        <q-btn unelevated no-caps type="button" class="danger-button" @click="confirmDeleteSleeve">
+        <q-btn
+          no-caps
+          type="button"
+          class="danger-button"
+          outline
+          color="negative"
+          size="sm"
+          @click="confirmDeleteSleeve"
+        >
           Confirm delete
         </q-btn>
-        <q-btn unelevated no-caps type="button" class="text-button" @click="cancelDeleteSleeve"
+        <q-btn
+          no-caps
+          type="button"
+          class="text-button"
+          flat
+          color="primary"
+          size="sm"
+          @click="cancelDeleteSleeve"
           >Cancel</q-btn
         >
       </div>

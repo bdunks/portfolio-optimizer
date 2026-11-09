@@ -12,6 +12,8 @@
           no-caps
           type="button"
           class="primary-button"
+          color="primary"
+          size="sm"
           :disable="isLoading"
           @click="refresh"
         >
@@ -79,10 +81,12 @@
       Retry to request the current API response. No history or restrictions have been inferred.
       <template #action>
         <q-btn
-          unelevated
           no-caps
           type="button"
           class="secondary-button"
+          outline
+          color="primary"
+          size="sm"
           :disable="isLoading"
           @click="refresh"
         >
@@ -377,15 +381,6 @@ onMounted(() => {
   color: #466779;
   font-size: 0.75rem;
   font-weight: 700;
-}
-.primary-button {
-  border-color: #067777;
-  background: #087f7d;
-  color: white;
-}
-.secondary-button {
-  border-color: #bfd0d8;
-  background: #f7fafb;
 }
 .coverage-card,
 .data-card {

@@ -165,10 +165,12 @@
           />
         </label>
         <q-btn
-          unelevated
           no-caps
           type="button"
           class="text-button"
+          flat
+          color="primary"
+          size="sm"
           :disable="pending || !canChangeSelection"
           @click="emit('saveNote', { groupId: group.group_id, note: noteDraft })"
         >
@@ -189,11 +191,13 @@
           />
         </label>
         <q-btn
-          unelevated
           no-caps
           v-if="!group.rejected"
           type="button"
           class="secondary-button"
+          outline
+          color="primary"
+          size="sm"
           :disable="
             pending ||
             !canChangeSelection ||
@@ -205,11 +209,13 @@
           Reject group (does not approve any order)
         </q-btn>
         <q-btn
-          unelevated
           no-caps
           v-else
           type="button"
           class="secondary-button"
+          outline
+          color="primary"
+          size="sm"
           :disable="pending || !canChangeSelection"
           @click="emit('restoreGroup', { groupId: group.group_id })"
         >

@@ -1,9 +1,9 @@
 <template>
-  <section class="target-panel" :aria-labelledby="`${sectionId}-title`">
-    <div class="section-heading">
+  <section class="target-panel q-pa-md" :aria-labelledby="`${sectionId}-title`">
+    <div class="section-heading items-center row justify-between q-gutter-md q-mb-md">
       <div>
-        <h2 :id="`${sectionId}-title`">Sleeves and allocation targets</h2>
-        <p class="section-subtitle">
+        <h2 class="q-ma-none" :id="`${sectionId}-title`">Sleeves and allocation targets</h2>
+        <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
           Top-level targets and every populated nested allocation must total exactly 100%. Drift
           bands use percentage points. No tolerance, implicit cash sleeve, or normalization is
           applied. Transition progress uses an explicitly designated destination sub-sleeve and all
@@ -15,14 +15,21 @@
         >+ Add sleeve</q-btn
       >
     </div>
-    <div v-if="targetIssues.length" class="validation-card" role="status" aria-live="polite">
+    <div
+      v-if="targetIssues.length"
+      class="validation-card q-my-md q-mx-none q-pa-md"
+      role="status"
+      aria-live="polite"
+    >
       <strong>Target check — activation is not valid yet</strong>
-      <ul>
+      <ul class="q-my-sm q-mx-none q-pl-md">
         <li v-for="issue in targetIssues" :key="issue">{{ issue }}</li>
       </ul>
-      <p>These client-side checks are guidance only; the backend response is authoritative.</p>
+      <p class="q-mt-xs q-mb-none q-mx-none">
+        These client-side checks are guidance only; the backend response is authoritative.
+      </p>
     </div>
-    <div v-else class="success-card" role="status">
+    <div v-else class="success-card q-my-md q-mx-none q-pa-md" role="status">
       Enabled top-level and nested target sums are exactly 100%.
     </div>
     <p v-if="deleteError && !pendingDeleteSleeve" class="inline-error" role="alert">
@@ -32,14 +39,14 @@
       <table class="editor-table sleeves-table">
         <thead>
           <tr>
-            <th>Order / sleeve key</th>
-            <th>Name</th>
-            <th>Parent</th>
-            <th>Target (%)</th>
-            <th>Drift band (pp)</th>
-            <th>Designations</th>
-            <th>Enabled</th>
-            <th>Actions</th>
+            <th class="q-pa-sm">Order / sleeve key</th>
+            <th class="q-pa-sm">Name</th>
+            <th class="q-pa-sm">Parent</th>
+            <th class="q-pa-sm">Target (%)</th>
+            <th class="q-pa-sm">Drift band (pp)</th>
+            <th class="q-pa-sm">Designations</th>
+            <th class="q-pa-sm">Enabled</th>
+            <th class="q-pa-sm">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -48,8 +55,8 @@
             :key="`${sleeve.sleeve_key}-${index}`"
             :class="{ 'disabled-row': !sleeve.enabled }"
           >
-            <td>
-              <div class="order-tools">
+            <td class="q-pa-sm">
+              <div class="order-tools row no-wrap q-gutter-xs q-mb-xs">
                 <q-btn
                   unelevated
                   no-caps
@@ -75,18 +82,23 @@
               </div>
               <code class="sleeve-key">{{ sleeve.sleeve_key || 'new sleeve' }}</code>
             </td>
-            <td>
-              <label class="compact-field"
+            <td class="q-pa-sm">
+              <label class="compact-field column no-wrap q-gutter-y-xs"
                 ><span class="sr-only">Sleeve name</span
-                ><input
-                  :value="sleeve.display_name"
-                  @input="setSleeveText(sleeve.sleeve_key, 'display_name', $event)"
+                ><q-input
+                  outlined
+                  dense
+                  hide-bottom-space
+                  :model-value="sleeve.display_name"
+                  @update:model-value="
+                    setSleeveText(sleeve.sleeve_key, 'display_name', String($event ?? ''))
+                  "
                   aria-label="Sleeve display name"
                   placeholder="Display name"
               /></label>
             </td>
-            <td>
-              <label class="compact-field"
+            <td class="q-pa-sm">
+              <label class="compact-field column no-wrap q-gutter-y-xs"
                 ><span class="sr-only">Parent sleeve</span>
                 <q-select
                   :model-value="sleeve.parent_sleeve_key"
@@ -107,29 +119,39 @@
                 />
               </label>
             </td>
-            <td>
-              <label class="compact-field target-input"
+            <td class="q-pa-sm">
+              <label class="compact-field target-input column no-wrap q-gutter-y-xs"
                 ><span class="sr-only">Target percent</span
-                ><input
-                  :value="sleeve.target_pct"
-                  @input="setSleeveText(sleeve.sleeve_key, 'target_pct', $event)"
+                ><q-input
+                  outlined
+                  dense
+                  hide-bottom-space
+                  :model-value="sleeve.target_pct"
+                  @update:model-value="
+                    setSleeveText(sleeve.sleeve_key, 'target_pct', String($event ?? ''))
+                  "
                   inputmode="decimal"
                   aria-label="Target percent"
                   placeholder="0"
               /></label>
             </td>
-            <td>
-              <label class="compact-field target-input"
+            <td class="q-pa-sm">
+              <label class="compact-field target-input column no-wrap q-gutter-y-xs"
                 ><span class="sr-only">Drift band percentage points</span
-                ><input
-                  :value="sleeve.drift_band_pp"
-                  @input="setSleeveText(sleeve.sleeve_key, 'drift_band_pp', $event)"
+                ><q-input
+                  outlined
+                  dense
+                  hide-bottom-space
+                  :model-value="sleeve.drift_band_pp"
+                  @update:model-value="
+                    setSleeveText(sleeve.sleeve_key, 'drift_band_pp', String($event ?? ''))
+                  "
                   inputmode="decimal"
                   aria-label="Drift band in percentage points"
                   placeholder="0"
               /></label>
             </td>
-            <td class="designation-cell">
+            <td class="designation-cell q-pa-sm">
               <q-checkbox
                 dense
                 color="primary"
@@ -161,7 +183,7 @@
                 @update:model-value="setSleeveRole(sleeve.sleeve_key, 'is_cash_sleeve', $event)"
               />
             </td>
-            <td>
+            <td class="q-pa-sm">
               <q-checkbox
                 class="toggle-field"
                 dense
@@ -170,7 +192,10 @@
                 :label="sleeve.enabled ? 'Enabled' : 'Disabled'"
                 @update:model-value="setSleeveEnabled(sleeve.sleeve_key, $event)"
               />
-              <label v-if="!sleeve.enabled" class="compact-field reassignment-field">
+              <label
+                v-if="!sleeve.enabled"
+                class="compact-field reassignment-field column no-wrap q-gutter-y-xs"
+              >
                 <span>Reassign held assets to</span>
                 <q-select
                   :model-value="reassignments[sleeve.sleeve_key] ?? ''"
@@ -191,7 +216,7 @@
                 />
               </label>
             </td>
-            <td>
+            <td class="q-pa-sm">
               <q-btn
                 unelevated
                 no-caps
@@ -204,7 +229,7 @@
             </td>
           </tr>
           <tr v-if="sleeves.length === 0">
-            <td colspan="8" class="empty-cell">
+            <td colspan="8" class="empty-cell q-pa-md">
               No sleeves configured. Add a sleeve and enter its policy values.
             </td>
           </tr>
@@ -213,18 +238,21 @@
     </WorkspaceTableFrame>
     <div
       v-if="pendingDeleteSleeve"
-      class="delete-panel"
+      class="delete-panel q-pa-md column no-wrap q-gutter-y-sm"
       role="group"
       :aria-labelledby="`${sectionId}-delete-title`"
     >
-      <h3 :id="`${sectionId}-delete-title`">
+      <h3 class="q-mr-none q-mb-none q-ml-none" :id="`${sectionId}-delete-title`">
         Delete {{ pendingDeleteSleeve.display_name || pendingDeleteSleeve.sleeve_key }}
       </h3>
-      <p>
+      <p class="q-mr-none q-mb-none q-ml-none">
         Choose an enabled destination for any holdings currently assigned here. Reassignments are
         explicit; no holdings are silently orphaned.
       </p>
-      <label v-if="heldInSleeve(pendingDeleteSleeve.sleeve_key).length" class="field">
+      <label
+        v-if="heldInSleeve(pendingDeleteSleeve.sleeve_key).length"
+        class="field column no-wrap q-gutter-y-xs"
+      >
         <span>Holding reassignment destination</span>
         <q-select
           v-model="deleteTargetKey"
@@ -248,7 +276,7 @@
         :key="child.sleeve_key"
         class="reparent-row"
       >
-        <label class="field"
+        <label class="field column no-wrap q-gutter-y-xs"
           ><span>Move child “{{ child.display_name || child.sleeve_key }}” under</span>
           <q-select
             v-model="childReparents[child.sleeve_key]"
@@ -271,8 +299,10 @@
           />
         </label>
       </div>
-      <p v-if="deleteError" class="inline-error" role="alert">{{ deleteError }}</p>
-      <div class="button-row">
+      <p v-if="deleteError" class="inline-error q-mr-none q-mb-none q-ml-none" role="alert">
+        {{ deleteError }}
+      </p>
+      <div class="button-row row q-gutter-sm items-center">
         <q-btn unelevated no-caps type="button" class="danger-button" @click="confirmDeleteSleeve">
           Confirm delete
         </q-btn>
@@ -341,9 +371,8 @@ function updateSleeve(key: string, patch: Partial<EditableSleeve>): void {
 function setSleeveText(
   key: string,
   field: 'display_name' | 'target_pct' | 'drift_band_pp',
-  event: Event,
+  value: string,
 ): void {
-  const value = (event.target as HTMLInputElement).value;
   if (field === 'display_name') updateSleeve(key, { display_name: value });
   else if (field === 'target_pct') updateSleeve(key, { target_pct: value });
   else updateSleeve(key, { drift_band_pp: value });

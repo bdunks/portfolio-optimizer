@@ -1,5 +1,8 @@
 <template>
-  <section class="workspace-page activity-page" aria-labelledby="activity-title">
+  <section
+    class="workspace-page activity-page q-my-none q-mx-auto q-pa-md"
+    aria-labelledby="activity-title"
+  >
     <WorkspacePageHeader
       eyebrow="Workspace history"
       title="Activity"
@@ -25,7 +28,7 @@
       controls.
     </WorkspaceCapabilityNotice>
 
-    <div class="error-stack">
+    <div class="error-stack column no-wrap q-gutter-y-sm">
       <ApiActionError
         :error="store.actionState.loadActivity.error"
         title="Activity could not be loaded"
@@ -46,38 +49,69 @@
       :pending="store.actionState.openSavedRun.pending"
     />
 
-    <WorkspaceFilterPanel label="Activity filters" class="filter-panel" @submit="applyFilters">
-      <label>
+    <WorkspaceFilterPanel
+      label="Activity filters"
+      class="filter-panel row items-end q-gutter-sm q-pa-md"
+      @submit="applyFilters"
+    >
+      <label class="column no-wrap q-gutter-y-xs">
         <span>Event type</span>
-        <input v-model="eventType" type="search" placeholder="Exact API event type" />
+        <q-input
+          outlined
+          dense
+          hide-bottom-space
+          v-model="eventType"
+          type="search"
+          placeholder="Exact API event type"
+        />
       </label>
-      <label>
+      <label class="column no-wrap q-gutter-y-xs">
         <span>Status</span>
-        <input v-model="status" type="search" placeholder="Exact API status" />
+        <q-input
+          outlined
+          dense
+          hide-bottom-space
+          v-model="status"
+          type="search"
+          placeholder="Exact API status"
+        />
       </label>
-      <label>
+      <label class="column no-wrap q-gutter-y-xs">
         <span>Correlation ID</span>
-        <input v-model="correlationId" type="search" placeholder="Correlation ID" />
+        <q-input
+          outlined
+          dense
+          hide-bottom-space
+          v-model="correlationId"
+          type="search"
+          placeholder="Correlation ID"
+        />
       </label>
-      <label>
+      <label class="column no-wrap q-gutter-y-xs">
         <span>Since (UTC)</span>
-        <input
+        <q-input
+          outlined
+          dense
+          hide-bottom-space
           v-model="since"
           type="datetime-local"
           step="any"
-          @input="markDateTimeEdited('since')"
+          @update:model-value="markDateTimeEdited('since')"
         />
       </label>
-      <label>
+      <label class="column no-wrap q-gutter-y-xs">
         <span>Until (UTC)</span>
-        <input
+        <q-input
+          outlined
+          dense
+          hide-bottom-space
           v-model="until"
           type="datetime-local"
           step="any"
-          @input="markDateTimeEdited('until')"
+          @update:model-value="markDateTimeEdited('until')"
         />
       </label>
-      <label>
+      <label class="column no-wrap q-gutter-y-xs">
         <span>Rows per page</span>
         <q-select
           v-model="pageLimit"
@@ -136,36 +170,44 @@
       The API returned no events for the selected filters.
     </WorkspaceEmptyState>
     <template v-else>
-      <p class="results-summary">
+      <p class="results-summary q-ma-none">
         {{ activity.items.length }} events on this page · {{ activity.total }} matching events ·
         page {{ pageNumber }} of {{ pageCount }}
       </p>
       <WorkspaceEmptyState v-if="activity.items.length === 0" title="No events on this page">
         The API returned no events for this offset. Use the filters or return to a previous page.
       </WorkspaceEmptyState>
-      <ol v-else class="event-list" aria-label="Activity events">
-        <li v-for="event in activity.items" :key="event.id" class="event-card">
-          <header class="event-heading">
+      <ol
+        v-else
+        class="event-list q-mr-none q-mb-none q-ml-none q-pa-none column no-wrap q-gutter-y-sm"
+        aria-label="Activity events"
+      >
+        <li v-for="event in activity.items" :key="event.id" class="event-card q-pa-md">
+          <header
+            class="event-heading row no-wrap justify-between q-gutter-md items-center q-mb-sm"
+          >
             <div>
-              <h2>{{ event.event_type }}</h2>
-              <p>{{ event.created_at }}</p>
+              <h2 class="q-ma-none">{{ event.event_type }}</h2>
+              <p class="q-mt-xs q-mb-none q-mx-none">{{ event.created_at }}</p>
             </div>
-            <span class="status-badge" :class="statusClass(event.status)">{{ event.status }}</span>
+            <span class="status-badge q-py-xs q-px-sm" :class="statusClass(event.status)">{{
+              event.status
+            }}</span>
           </header>
-          <dl class="event-meta">
-            <div>
+          <dl class="event-meta q-mt-none q-mb-sm q-mx-none">
+            <div class="q-pa-sm">
               <dt>Correlation ID</dt>
-              <dd>{{ event.correlation_id }}</dd>
+              <dd class="q-mt-xs q-mb-none q-mx-none">{{ event.correlation_id }}</dd>
             </div>
-            <div>
+            <div class="q-pa-sm">
               <dt>Event ID</dt>
-              <dd>{{ event.id }}</dd>
+              <dd class="q-mt-xs q-mb-none q-mx-none">{{ event.id }}</dd>
             </div>
           </dl>
-          <details>
-            <summary>Event details, including any returned error information</summary>
-            <pre>{{ formatJson(event.details) }}</pre>
-          </details>
+          <q-expansion-item>
+            <template #header>Event details, including any returned error information</template>
+            <pre class="q-ma-none q-pa-sm">{{ formatJson(event.details) }}</pre>
+          </q-expansion-item>
           <q-btn
             unelevated
             no-caps
@@ -339,68 +381,26 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/* Grid gaps use Quasar's spacing scale; negative-margin gutters distort grid tracks. */
 .activity-page {
   max-width: 1600px;
 }
 
-.event-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.error-stack {
-  display: grid;
-  gap: 0.6rem;
-}
 .filter-panel,
 .empty-state,
 .event-card {
   min-width: 0;
-  padding: 1rem;
   border: 1px solid #dce6eb;
   border-radius: 0.8rem;
   background: #fff;
   box-shadow: 0 4px 20px rgb(18 55 77 / 4.5%);
 }
-.filter-panel {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: end;
-  gap: 0.75rem;
-}
+
 .filter-panel label {
-  display: grid;
   min-width: min(13rem, 100%);
-  gap: 0.3rem;
   color: #466779;
   font-size: 0.75rem;
   font-weight: 700;
-}
-input,
-select,
-button {
-  min-height: 2.4rem;
-  border: 1px solid #b8c9d2;
-  border-radius: 0.45rem;
-  background: #fff;
-  color: #203f52;
-  font: inherit;
-}
-input,
-select {
-  padding: 0.4rem 0.55rem;
-}
-button {
-  padding: 0.45rem 0.8rem;
-  cursor: pointer;
-  font-size: 0.76rem;
-  font-weight: 750;
-}
-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
 }
 .primary-button {
   border-color: #067777;
@@ -416,35 +416,19 @@ button:disabled {
   color: #087f7d;
   text-decoration: underline;
 }
-.section-heading {
-  align-items: center;
-  margin-bottom: 0.8rem;
-}
 .section-heading h2,
 .event-heading h2,
 .empty-state h2 {
-  margin: 0;
   color: #10263d;
   font-size: 1.05rem;
-}
-.demo-badge {
-  flex: 0 0 auto;
-  padding: 0.25rem 0.55rem;
-  border-radius: 2rem;
-  background: #fff1d2;
-  color: #77520d;
-  font-size: 0.68rem;
-  font-weight: 800;
 }
 .event-meta {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.65rem;
-  margin: 0;
+  gap: 8px;
 }
 .event-meta > div {
   min-width: 0;
-  padding: 0.6rem;
   border: 1px solid #eaf0f3;
   border-radius: 0.55rem;
 }
@@ -453,7 +437,6 @@ dl dt {
   font-size: 0.7rem;
 }
 dl dd {
-  margin: 0.25rem 0 0;
   color: #29475a;
   font-size: 0.76rem;
   font-weight: 700;
@@ -461,8 +444,6 @@ dl dd {
 }
 pre {
   max-height: 20rem;
-  margin: 0;
-  padding: 0.75rem;
   overflow: auto;
   border-radius: 0.5rem;
   background: #f5f8fa;
@@ -478,32 +459,21 @@ pre {
   font-size: 0.78rem;
   line-height: 1.5;
 }
-.results-summary {
-  margin: 0;
-}
+
 .event-list {
-  display: grid;
-  gap: 0.75rem;
-  margin: 0;
-  padding: 0;
   list-style: none;
 }
-.event-heading {
-  align-items: center;
-  margin-bottom: 0.7rem;
-}
+
 .event-heading h2 {
   font-size: 0.95rem;
   text-transform: capitalize;
 }
 .event-heading p {
-  margin: 0.25rem 0 0;
   color: #657d8b;
   font-size: 0.72rem;
 }
 .status-badge {
   flex: 0 0 auto;
-  padding: 0.25rem 0.55rem;
   border-radius: 2rem;
   font-size: 0.68rem;
   font-weight: 800;
@@ -518,27 +488,8 @@ pre {
 }
 .event-meta {
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-bottom: 0.7rem;
 }
-details {
-  color: #405f71;
-  font-size: 0.76rem;
-}
-summary {
-  cursor: pointer;
-  font-weight: 700;
-}
-details pre {
-  margin-top: 0.5rem;
-}
-.reopen-button {
-  margin-top: 0.7rem;
-}
-.empty-state p {
-  margin: 0.6rem 0 0.8rem;
-}
-@media (max-width: 900px) {
-}
+
 @media (max-width: 650px) {
   .event-heading {
     align-items: stretch;

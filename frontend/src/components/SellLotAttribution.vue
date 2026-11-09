@@ -4,7 +4,7 @@
     class="sell-lot-attribution"
     aria-label="SELL lot attribution"
   >
-    <p class="quantity-note">
+    <p class="quantity-note q-mt-none q-mb-sm q-mx-none">
       These are API-proposed whole-share sale quantities for this run, not current remaining or
       available inventory. Inventory quantities are shown separately on Tax Lots.
     </p>
@@ -13,7 +13,7 @@
       :label="`SELL broker-lot attribution for leg ${leg.leg_id}`"
     >
       <table>
-        <caption>
+        <caption class="q-py-sm">
           SELL broker-lot attribution from the API ·
           {{
             leg.ticker ?? 'ticker unavailable'
@@ -21,19 +21,19 @@
         </caption>
         <thead>
           <tr>
-            <th scope="col">Review selection</th>
-            <th scope="col">Broker lot ID</th>
-            <th scope="col">Acquired</th>
-            <th scope="col">API proposed sale shares</th>
-            <th scope="col">Adjusted basis (API value)</th>
-            <th scope="col">Estimated price</th>
-            <th scope="col">Term</th>
-            <th scope="col">Realized P/L</th>
+            <th class="q-pa-sm" scope="col">Review selection</th>
+            <th class="q-pa-sm" scope="col">Broker lot ID</th>
+            <th class="q-pa-sm" scope="col">Acquired</th>
+            <th class="q-pa-sm" scope="col">API proposed sale shares</th>
+            <th class="q-pa-sm" scope="col">Adjusted basis (API value)</th>
+            <th class="q-pa-sm" scope="col">Estimated price</th>
+            <th class="q-pa-sm" scope="col">Term</th>
+            <th class="q-pa-sm" scope="col">Realized P/L</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="lot in leg.selected_lots" :key="lot.broker_lot_id">
-            <td>
+            <td class="q-pa-sm">
               <q-checkbox
                 class="lot-selection"
                 dense
@@ -45,16 +45,18 @@
                 @update:model-value="changeLotSelection(lot.broker_lot_id, $event)"
               />
             </td>
-            <th scope="row"><BrokerLotIdentity :broker-lot-id="lot.broker_lot_id" /></th>
-            <td>{{ lot.acquired_date }}</td>
-            <td>{{ lot.shares }}</td>
-            <td>{{ formatUsd(lot.adjusted_basis_usd) }}</td>
-            <td>{{ formatUsd(leg.estimated_unit_price_usd) }}</td>
-            <td>{{ lot.st_lt }}</td>
-            <td>{{ formatUsd(lot.realized_pl_usd) }}</td>
+            <th class="q-pa-sm" scope="row">
+              <BrokerLotIdentity :broker-lot-id="lot.broker_lot_id" />
+            </th>
+            <td class="q-pa-sm">{{ lot.acquired_date }}</td>
+            <td class="q-pa-sm">{{ lot.shares }}</td>
+            <td class="q-pa-sm">{{ formatUsd(lot.adjusted_basis_usd) }}</td>
+            <td class="q-pa-sm">{{ formatUsd(leg.estimated_unit_price_usd) }}</td>
+            <td class="q-pa-sm">{{ lot.st_lt }}</td>
+            <td class="q-pa-sm">{{ formatUsd(lot.realized_pl_usd) }}</td>
           </tr>
           <tr v-if="leg.selected_lots.length === 0">
-            <td colspan="8">No broker-lot rows were returned for this SELL leg.</td>
+            <td class="q-pa-sm" colspan="8">No broker-lot rows were returned for this SELL leg.</td>
           </tr>
         </tbody>
       </table>
@@ -87,7 +89,6 @@ function changeLotSelection(brokerLotId: string, selected: boolean): void {
 
 <style scoped>
 .quantity-note {
-  margin: 0 0 0.5rem;
   color: #526c7c;
   font-size: 0.74rem;
   line-height: 1.5;
@@ -106,7 +107,6 @@ function changeLotSelection(brokerLotId: string, selected: boolean): void {
 }
 
 :deep(caption) {
-  padding: 0.6rem 0;
   color: #526c7c;
   font-size: 0.74rem;
   font-weight: 700;
@@ -115,7 +115,6 @@ function changeLotSelection(brokerLotId: string, selected: boolean): void {
 
 :deep(th),
 :deep(td) {
-  padding: 0.55rem;
   border-bottom: 1px solid #eaf0f3;
   color: #35586c;
   font-size: 0.73rem;
@@ -130,9 +129,6 @@ function changeLotSelection(brokerLotId: string, selected: boolean): void {
 }
 
 .lot-selection {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
   color: #526c7c;
   font-size: 0.76rem;
   font-weight: 650;

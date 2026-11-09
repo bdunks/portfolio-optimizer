@@ -1,69 +1,83 @@
 <template>
   <section
     v-if="mode === 'overview'"
-    class="overview-run-summary"
+    class="overview-run-summary column no-wrap q-gutter-y-sm"
     aria-label="Run summary and frozen context"
   >
-    <p v-if="pending" class="pending-message" role="status">
+    <p v-if="pending" class="pending-message q-mr-none q-mb-none q-ml-none q-pa-md" role="status">
       A review update is awaiting API confirmation. Prior run metrics and basket effects are
       withheld.
     </p>
     <template v-else>
-      <dl v-if="record && showMetrics" class="overview-metrics">
-        <div>
+      <dl v-if="record && showMetrics" class="overview-metrics q-mr-none q-mb-none q-ml-none">
+        <div class="q-pa-sm">
           <dt>Realized short-term P/L (estimated)</dt>
-          <dd>{{ formatUsd(record.estimated_realized_st_usd) }}</dd>
+          <dd class="q-mt-xs q-mb-none q-mx-none">
+            {{ formatUsd(record.estimated_realized_st_usd) }}
+          </dd>
         </div>
-        <div>
+        <div class="q-pa-sm">
           <dt>Realized long-term P/L (estimated)</dt>
-          <dd>{{ formatUsd(record.estimated_realized_lt_usd) }}</dd>
+          <dd class="q-mt-xs q-mb-none q-mx-none">
+            {{ formatUsd(record.estimated_realized_lt_usd) }}
+          </dd>
         </div>
-        <div>
+        <div class="q-pa-sm">
           <dt>Estimated tax benefit</dt>
-          <dd>{{ formatUsd(record.estimated_tax_benefit_usd) }}</dd>
+          <dd class="q-mt-xs q-mb-none q-mx-none">
+            {{ formatUsd(record.estimated_tax_benefit_usd) }}
+          </dd>
         </div>
-        <div>
+        <div class="q-pa-sm">
           <dt>Lots sold / positions exited</dt>
-          <dd>{{ record.lots_sold_count }} / {{ record.positions_exited_count }}</dd>
+          <dd class="q-mt-xs q-mb-none q-mx-none">
+            {{ record.lots_sold_count }} / {{ record.positions_exited_count }}
+          </dd>
         </div>
-        <div>
+        <div class="q-pa-sm">
           <dt>Orders in recommendation</dt>
-          <dd>{{ record.orders_count }}</dd>
+          <dd class="q-mt-xs q-mb-none q-mx-none">{{ record.orders_count }}</dd>
         </div>
-        <div>
+        <div class="q-pa-sm">
           <dt>Cash before / after</dt>
-          <dd>{{ formatUsd(record.cash_before_usd) }} / {{ formatUsd(record.cash_after_usd) }}</dd>
+          <dd class="q-mt-xs q-mb-none q-mx-none">
+            {{ formatUsd(record.cash_before_usd) }} / {{ formatUsd(record.cash_after_usd) }}
+          </dd>
         </div>
-        <div>
+        <div class="q-pa-sm">
           <dt>Tax estimate status</dt>
-          <dd>{{ record.estimated_tax_benefit_status }}</dd>
+          <dd class="q-mt-xs q-mb-none q-mx-none">{{ record.estimated_tax_benefit_status }}</dd>
         </div>
       </dl>
       <section
         v-if="record || context"
-        class="frozen-context overview-context"
+        class="frozen-context overview-context q-pa-sm column no-wrap q-gutter-y-xs"
         aria-label="Overview frozen run context"
       >
-        <h3>Frozen run policy context</h3>
+        <h3 class="q-mb-none q-mx-none">Frozen run policy context</h3>
         <template v-if="context?.available">
-          <p>
+          <p class="q-mb-xs q-mx-none">
             {{ view === 'saved' ? 'Historical saved run' : 'Run policy snapshot' }} · revision
             {{ context.policy_revision_id }} · {{ context.source ?? 'Unavailable source' }}
           </p>
-          <p v-if="context.sleeves === null">Frozen sleeve labels and targets: Unavailable</p>
-          <ul v-else>
+          <p class="q-mb-xs q-mx-none" v-if="context.sleeves === null">
+            Frozen sleeve labels and targets: Unavailable
+          </p>
+          <ul class="q-mb-xs q-mx-none q-pl-md" v-else>
             <li v-for="sleeve in context.sleeves" :key="sleeve.sleeve_key">
               {{ sleeve.display_name }} · target {{ formatPercent(sleeve.target_pct) }}
             </li>
           </ul>
-          <details>
-            <summary>Frozen policy assumptions and allowed securities</summary>
-            <pre>{{ formatJson(context.settings) }}</pre>
-            <p>Allowed securities: {{ formatJson(context.allowed_securities) }}</p>
-            <p>Overrides: {{ formatJson(context.overrides) }}</p>
-          </details>
+          <q-expansion-item>
+            <template #header>Frozen policy assumptions and allowed securities</template>
+            <pre class="q-ma-none q-pa-sm">{{ formatJson(context.settings) }}</pre>
+            <p class="q-my-xs q-mx-none">
+              Allowed securities: {{ formatJson(context.allowed_securities) }}
+            </p>
+            <p class="q-my-xs q-mx-none">Overrides: {{ formatJson(context.overrides) }}</p>
+          </q-expansion-item>
         </template>
-        <p v-else>
+        <p class="q-mb-xs q-mx-none" v-else>
           Unavailable ({{
             context?.unavailable_reason ?? 'the API returned no frozen run context'
           }}). Active policy data is not used to reconstruct run history.
@@ -72,11 +86,15 @@
     </template>
   </section>
 
-  <section v-else-if="record || pending" class="run-summary" :aria-labelledby="headingId">
+  <section
+    v-else-if="record || pending"
+    class="run-summary q-pa-md column no-wrap q-gutter-y-md"
+    :aria-labelledby="headingId"
+  >
     <h2 v-if="pending" :id="headingId" class="sr-only">Run summary pending</h2>
     <p
       v-if="mode === 'review' && provenanceLabel"
-      class="provenance-banner"
+      class="provenance-banner row q-gutter-y-sm q-gutter-x-md q-mr-none q-mb-none q-pa-md"
       :data-view="view ?? 'unknown'"
       role="status"
     >
@@ -88,20 +106,20 @@
       <span>Proposed trade date {{ record?.proposed_trade_date ?? 'Unavailable' }}</span>
     </p>
 
-    <p v-if="pending" class="pending-message" role="status">
+    <p v-if="pending" class="pending-message q-mr-none q-mb-none q-ml-none q-pa-md" role="status">
       The requested selection or annotation is being saved or re-solved. Previous basket effects are
       withheld until the API responds; no unconfirmed selection is shown as active.
     </p>
     <template v-else-if="record">
-      <div class="run-title-row">
+      <div class="run-title-row row no-wrap items-center justify-between q-gutter-md">
         <div>
-          <h2 :id="headingId">
+          <h2 class="q-ma-none" :id="headingId">
             <template v-if="mode === 'saved'">Saved run summary and frozen settings</template>
             <template v-else
               >{{ record.solver_version }} recommendations · {{ record.status }}</template
             >
           </h2>
-          <p v-if="mode === 'review'">
+          <p class="q-mt-xs q-mb-none q-mx-none" v-if="mode === 'review'">
             {{ record.demo ? 'DEMO hypothetical data' : 'API run' }} ·
             {{
               record.actionable
@@ -109,15 +127,15 @@
                 : 'API marks this run non-actionable'
             }}
           </p>
-          <p v-if="mode === 'review'" class="review-capability-note">
+          <p v-if="mode === 'review'" class="review-capability-note q-mt-xs q-mb-none q-mx-none">
             No order preview, approval, or submission controls are available.
           </p>
-          <p v-else-if="mode === 'saved'">
+          <p class="q-mt-xs q-mb-none q-mx-none" v-else-if="mode === 'saved'">
             Historical API summary only. Missing assumptions are not reconstructed from current
             policy.
           </p>
         </div>
-        <span class="demo-badge">
+        <span class="demo-badge row inline no-wrap items-center q-py-xs q-px-sm">
           {{
             record.demo
               ? 'DEMO · non-actionable'
@@ -128,85 +146,97 @@
         </span>
       </div>
 
-      <p v-if="mode === 'review' && record.solver_version === 'DEMO'" class="warning-banner">
+      <p
+        v-if="mode === 'review' && record.solver_version === 'DEMO'"
+        class="warning-banner q-mr-none q-mb-none q-ml-none q-pa-md"
+      >
         DEMO solver output is not a real optimizer feasibility result. Treat every value as
         hypothetical and non-executable.
       </p>
       <p
         v-if="mode === 'review' && record.estimated_tax_benefit_status === 'optimizer_unavailable'"
-        class="warning-banner"
+        class="warning-banner q-mr-none q-mb-none q-ml-none q-pa-md"
       >
         The real optimizer is unavailable. No production optimization or feasibility claim is made.
       </p>
 
-      <dl :class="mode === 'saved' ? 'saved-metrics' : 'metric-grid'">
+      <dl
+        class="q-mr-none q-mb-none q-ml-none"
+        :class="mode === 'saved' ? 'saved-metrics' : 'metric-grid'"
+      >
         <template v-if="mode === 'saved'">
           <div>
             <dt>Run ID</dt>
-            <dd>{{ record.run_id }}</dd>
+            <dd class="q-mt-xs q-mb-none q-mx-none">{{ record.run_id }}</dd>
           </div>
           <div>
             <dt>Status / mode</dt>
-            <dd>{{ record.status }} · {{ record.mode }}</dd>
+            <dd class="q-mt-xs q-mb-none q-mx-none">{{ record.status }} · {{ record.mode }}</dd>
           </div>
           <div>
             <dt>Policy revision</dt>
-            <dd>{{ record.policy_revision_id }}</dd>
+            <dd class="q-mt-xs q-mb-none q-mx-none">{{ record.policy_revision_id }}</dd>
           </div>
           <div>
             <dt>Source generation</dt>
-            <dd>{{ record.source_generation }}</dd>
+            <dd class="q-mt-xs q-mb-none q-mx-none">{{ record.source_generation }}</dd>
           </div>
           <div>
             <dt>As of</dt>
-            <dd>{{ record.as_of }}</dd>
+            <dd class="q-mt-xs q-mb-none q-mx-none">{{ record.as_of }}</dd>
           </div>
           <div>
             <dt>Proposed trade date</dt>
-            <dd>{{ record.proposed_trade_date ?? 'Unavailable' }}</dd>
+            <dd class="q-mt-xs q-mb-none q-mx-none">
+              {{ record.proposed_trade_date ?? 'Unavailable' }}
+            </dd>
           </div>
           <div>
             <dt>Solver</dt>
-            <dd>{{ record.solver_version }}</dd>
+            <dd class="q-mt-xs q-mb-none q-mx-none">{{ record.solver_version }}</dd>
           </div>
           <div>
             <dt>Tax profile configured</dt>
-            <dd>{{ record.tax_profile_configured ? 'Yes' : 'No' }}</dd>
+            <dd class="q-mt-xs q-mb-none q-mx-none">
+              {{ record.tax_profile_configured ? 'Yes' : 'No' }}
+            </dd>
           </div>
           <div>
             <dt>Tax estimate status</dt>
-            <dd>{{ record.estimated_tax_benefit_status }}</dd>
+            <dd class="q-mt-xs q-mb-none q-mx-none">{{ record.estimated_tax_benefit_status }}</dd>
           </div>
         </template>
-        <div>
+        <div class="q-pa-sm">
           <dt>Estimated realized ST</dt>
-          <dd>{{ money(record.estimated_realized_st_usd) }}</dd>
+          <dd class="q-mt-xs q-mb-none q-mx-none">{{ money(record.estimated_realized_st_usd) }}</dd>
         </div>
-        <div>
+        <div class="q-pa-sm">
           <dt>Estimated realized LT</dt>
-          <dd>{{ money(record.estimated_realized_lt_usd) }}</dd>
+          <dd class="q-mt-xs q-mb-none q-mx-none">{{ money(record.estimated_realized_lt_usd) }}</dd>
         </div>
-        <div>
+        <div class="q-pa-sm">
           <dt>Estimated tax benefit</dt>
-          <dd>{{ money(record.estimated_tax_benefit_usd) }}</dd>
+          <dd class="q-mt-xs q-mb-none q-mx-none">{{ money(record.estimated_tax_benefit_usd) }}</dd>
         </div>
-        <div v-if="mode === 'review'">
+        <div class="q-pa-sm" v-if="mode === 'review'">
           <dt>Tax estimate status</dt>
-          <dd>{{ record.estimated_tax_benefit_status }}</dd>
+          <dd class="q-mt-xs q-mb-none q-mx-none">{{ record.estimated_tax_benefit_status }}</dd>
         </div>
-        <div>
+        <div class="q-pa-sm">
           <dt>Cash before / after</dt>
-          <dd>{{ money(record.cash_before_usd) }} / {{ money(record.cash_after_usd) }}</dd>
+          <dd class="q-mt-xs q-mb-none q-mx-none">
+            {{ money(record.cash_before_usd) }} / {{ money(record.cash_after_usd) }}
+          </dd>
         </div>
         <template v-if="mode === 'review'">
           <div>
             <dt>Risk tracking</dt>
-            <dd>Unavailable (not returned by API)</dd>
+            <dd class="q-mt-xs q-mb-none q-mx-none">Unavailable (not returned by API)</dd>
             <small>Not returned as a run-level risk score</small>
           </div>
           <div>
             <dt>Hard constraints</dt>
-            <dd>
+            <dd class="q-mt-xs q-mb-none q-mx-none">
               {{
                 record.constraints_satisfied == null
                   ? 'Unavailable (not evaluated)'
@@ -217,66 +247,92 @@
             </dd>
           </div>
         </template>
-        <div>
+        <div class="q-pa-sm">
           <dt>API-reported sell lots / exited positions / orders</dt>
-          <dd>
+          <dd class="q-mt-xs q-mb-none q-mx-none">
             {{ record.lots_sold_count }} / {{ record.positions_exited_count }} /
             {{ record.orders_count }}
           </dd>
         </div>
-        <div>
+        <div class="q-pa-sm">
           <dt>Tax profile</dt>
-          <dd>{{ record.tax_profile_configured ? 'Configured' : 'Incomplete' }}</dd>
+          <dd class="q-mt-xs q-mb-none q-mx-none">
+            {{ record.tax_profile_configured ? 'Configured' : 'Incomplete' }}
+          </dd>
         </div>
       </dl>
 
       <template v-if="mode === 'review'">
-        <p v-if="record.no_trade_reason != null" class="no-trade-reason">
+        <p
+          v-if="record.no_trade_reason != null"
+          class="no-trade-reason q-mr-none q-mb-none q-ml-none"
+        >
           <strong>No beneficial trades identified / API no-trade reason:</strong>
           {{ formatJson(record.no_trade_reason) }}
         </p>
-        <p v-else-if="groupCount === 0" class="no-trade-reason">
+        <p v-else-if="groupCount === 0" class="no-trade-reason q-mr-none q-mb-none q-ml-none">
           No beneficial trades identified. The API returned no recommendation groups.
         </p>
       </template>
 
-      <h3 v-if="mode === 'saved'">Batch settings returned by the API</h3>
-      <h3 v-else-if="mode === 'review'">Frozen API batch settings and provenance</h3>
-      <pre>{{ formatJson(record.batch_settings) }}</pre>
+      <h3 class="q-mb-none q-mx-none" v-if="mode === 'saved'">
+        Batch settings returned by the API
+      </h3>
+      <h3 class="q-mb-none q-mx-none" v-else-if="mode === 'review'">
+        Frozen API batch settings and provenance
+      </h3>
+      <pre class="q-mr-none q-mb-none q-ml-none q-pa-sm">{{
+        formatJson(record.batch_settings)
+      }}</pre>
 
-      <section class="frozen-context" aria-label="Frozen run display context">
-        <h3>Frozen policy display context</h3>
+      <section
+        class="frozen-context q-pa-sm column no-wrap q-gutter-y-xs"
+        aria-label="Frozen run display context"
+      >
+        <h3 class="q-mb-none q-mx-none">Frozen policy display context</h3>
         <template v-if="context?.available">
-          <p>
+          <p class="q-mb-xs q-mx-none">
             Policy revision {{ context.policy_revision_id }} ·
             {{ context.source ?? 'Unavailable source' }}
           </p>
-          <p v-if="context.sleeves === null">Frozen sleeve labels and targets: Unavailable</p>
-          <ul v-else>
+          <p class="q-mb-xs q-mx-none" v-if="context.sleeves === null">
+            Frozen sleeve labels and targets: Unavailable
+          </p>
+          <ul class="q-mb-xs q-mx-none q-pl-md" v-else>
             <li v-for="sleeve in context.sleeves" :key="sleeve.sleeve_key">
               {{ sleeve.display_name }} · target {{ formatPercent(sleeve.target_pct) }}
             </li>
           </ul>
-          <h4>Frozen policy assumptions</h4>
-          <pre>{{ formatJson(context.settings ?? 'Unavailable') }}</pre>
-          <p>Allowed securities: {{ formatJson(context.allowed_securities ?? 'Unavailable') }}</p>
-          <p>Overrides: {{ formatJson(context.overrides ?? 'Unavailable') }}</p>
+          <h4 class="q-mb-none q-mx-none">Frozen policy assumptions</h4>
+          <pre class="q-mr-none q-mb-none q-ml-none q-pa-sm">{{
+            formatJson(context.settings ?? 'Unavailable')
+          }}</pre>
+          <p class="q-mb-xs q-mx-none">
+            Allowed securities: {{ formatJson(context.allowed_securities ?? 'Unavailable') }}
+          </p>
+          <p class="q-mb-xs q-mx-none">
+            Overrides: {{ formatJson(context.overrides ?? 'Unavailable') }}
+          </p>
         </template>
-        <p v-else>
+        <p class="q-mb-xs q-mx-none" v-else>
           Unavailable ({{
             context?.unavailable_reason ?? 'the API returned no frozen run context'
           }}). Active policy data is not used to reconstruct this historical run.
         </p>
       </section>
 
-      <p class="provenance-note">
+      <p class="provenance-note q-mr-none q-mb-none q-ml-none">
         Provenance — input fingerprint: {{ record.input_fingerprint ?? 'Unavailable' }} · source
         checksum: {{ record.source_checksum ?? 'Unavailable' }}
       </p>
       <p v-if="mode === 'review' && summary">
         Saved summary status: {{ summary.status }} · {{ summary.mode }}
       </p>
-      <ul v-if="record.warnings.length" class="warning-list" aria-label="Run warnings">
+      <ul
+        v-if="record.warnings.length"
+        class="warning-list q-mr-none q-mb-none q-ml-none q-pl-md"
+        aria-label="Run warnings"
+      >
         <li v-for="warning in record.warnings" :key="warning">{{ warning }}</li>
       </ul>
     </template>
@@ -338,11 +394,9 @@ function formatJson(value: unknown): string {
 </script>
 
 <style scoped>
+/* Grid gaps use Quasar's spacing scale; negative-margin gutters distort grid tracks. */
 .run-summary {
-  display: grid;
-  gap: 0.8rem;
   min-width: 0;
-  padding: 1rem;
   border: 1px solid #dce6eb;
   border-radius: 0.8rem;
   background: #fff;
@@ -352,16 +406,11 @@ function formatJson(value: unknown): string {
 .provenance-banner,
 .pending-message,
 .warning-banner {
-  margin: 0;
-  padding: 0.8rem 1rem;
   border-radius: 0.65rem;
   line-height: 1.5;
 }
 
 .provenance-banner {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem 1rem;
   border: 1px solid #dce6eb;
   background: #f7fafb;
   color: #35586c;
@@ -388,30 +437,18 @@ function formatJson(value: unknown): string {
   font-size: 0.78rem;
 }
 
-.run-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
 .run-title-row h2 {
-  margin: 0;
   color: #10263d;
   font-size: 1.1rem;
 }
 
 .run-title-row p {
-  margin: 0.35rem 0 0;
   color: #61798a;
   line-height: 1.5;
 }
 
 .demo-badge {
   flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  padding: 0.25rem 0.55rem;
   border-radius: 999px;
   background: #fff1d2;
   color: #77520d;
@@ -425,15 +462,13 @@ function formatJson(value: unknown): string {
 .overview-metrics {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 0.6rem;
-  margin: 0;
+  gap: 8px;
 }
 
 .metric-grid > div,
 .saved-metrics > div,
 .overview-metrics > div {
   min-width: 0;
-  padding: 0.65rem;
   border: 1px solid #eaf0f3;
   border-radius: 0.55rem;
 }
@@ -448,7 +483,6 @@ function formatJson(value: unknown): string {
 .metric-grid dd,
 .saved-metrics dd,
 .overview-metrics dd {
-  margin: 0.25rem 0 0;
   color: #29475a;
   font-size: 0.78rem;
   font-weight: 700;
@@ -461,7 +495,6 @@ function formatJson(value: unknown): string {
 
 .no-trade-reason,
 .provenance-note {
-  margin: 0;
   color: #526c7c;
   font-size: 0.78rem;
   line-height: 1.5;
@@ -471,7 +504,6 @@ function formatJson(value: unknown): string {
 .run-summary h3,
 .run-summary h4,
 .overview-context h3 {
-  margin: 0.2rem 0 0;
   color: #29475a;
   font-size: 0.9rem;
 }
@@ -479,8 +511,6 @@ function formatJson(value: unknown): string {
 .run-summary pre,
 .overview-context pre {
   max-height: 16rem;
-  margin: 0;
-  padding: 0.7rem;
   overflow: auto;
   border-radius: 0.5rem;
   background: #f5f8fa;
@@ -491,41 +521,18 @@ function formatJson(value: unknown): string {
 }
 
 .frozen-context {
-  display: grid;
-  gap: 0.35rem;
-  margin-top: 0.15rem;
-  padding: 0.75rem;
   border: 1px solid #e0e9ed;
   border-radius: 0.55rem;
   color: #405f71;
   font-size: 0.76rem;
 }
 
-.frozen-context p,
-.frozen-context ul {
-  margin: 0.2rem 0;
-}
-
-.frozen-context ul {
-  padding-left: 1.2rem;
-}
-
-.frozen-context details summary {
-  cursor: pointer;
-  font-weight: 700;
-}
-
-.frozen-context details pre {
-  margin-top: 0.5rem;
-}
-
 .warning-list {
-  margin: 0;
-  padding-left: 1.2rem;
   color: #765016;
   font-size: 0.78rem;
 }
 
+/* Keep content available to assistive technology without occupying layout space. */
 .sr-only {
   position: absolute;
   width: 1px;
@@ -539,13 +546,7 @@ function formatJson(value: unknown): string {
 }
 
 .overview-run-summary {
-  display: grid;
-  gap: 0.7rem;
   min-width: 0;
-}
-
-.overview-context {
-  margin-top: 0.2rem;
 }
 
 @media (max-width: 760px) {

@@ -1,5 +1,5 @@
 <template>
-  <section class="workspace-page" aria-labelledby="lots-title">
+  <section class="workspace-page q-my-none q-mx-auto q-pa-md" aria-labelledby="lots-title">
     <WorkspacePageHeader
       eyebrow="Portfolio inventory"
       title="Tax Lots"
@@ -31,12 +31,23 @@
 
     <ResourceFreshnessNotice :resources="['lots']" />
 
-    <WorkspaceFilterPanel label="Tax lot filters" class="filter-panel" @submit="applyFilters">
-      <label>
+    <WorkspaceFilterPanel
+      label="Tax lot filters"
+      class="filter-panel row items-end q-gutter-sm q-pa-md"
+      @submit="applyFilters"
+    >
+      <label class="column no-wrap q-gutter-y-xs">
         <span>Search all account lots</span>
-        <input v-model="search" type="search" placeholder="Ticker or broker lot ID" />
+        <q-input
+          outlined
+          dense
+          hide-bottom-space
+          v-model="search"
+          type="search"
+          placeholder="Ticker or broker lot ID"
+        />
       </label>
-      <label>
+      <label class="column no-wrap q-gutter-y-xs">
         <span>Holding term</span>
         <q-select
           v-model="termFilter"
@@ -53,7 +64,7 @@
           aria-label="Holding term"
         />
       </label>
-      <label>
+      <label class="column no-wrap q-gutter-y-xs">
         <span>Fractional cleanup</span>
         <q-select
           v-model="fractionalFilter"
@@ -70,7 +81,7 @@
           aria-label="Fractional cleanup"
         />
       </label>
-      <label>
+      <label class="column no-wrap q-gutter-y-xs">
         <span>Rows per API page</span>
         <q-select
           v-model="pageLimit"
@@ -88,7 +99,7 @@
           aria-label="Rows per API page"
         />
       </label>
-      <label>
+      <label class="column no-wrap q-gutter-y-xs">
         <span>Sort API results by</span>
         <q-select
           v-model="sortKey"
@@ -133,7 +144,11 @@
       </q-btn>
     </WorkspaceFilterPanel>
 
-    <p v-if="store.actionState.loadLots.pending && !store.lots" class="state-message" role="status">
+    <p
+      v-if="store.actionState.loadLots.pending && !store.lots"
+      class="state-message q-mt-none"
+      role="status"
+    >
       Loading tax lots from the local API…
     </p>
     <WorkspaceEmptyState v-else-if="!store.lots" title="No lot page loaded">
@@ -155,8 +170,8 @@
       The API returned an empty page for these filters.
     </WorkspaceEmptyState>
     <template v-else>
-      <div class="results-heading">
-        <p>
+      <div class="results-heading row no-wrap items-center justify-between q-gutter-md">
+        <p class="q-mr-none q-mb-none">
           API page {{ pageNumber }} · {{ store.lots.items.length }} rows returned ·
           {{ store.lots.total }} rows match the account-wide filters before pagination.
         </p>
@@ -165,15 +180,17 @@
       <WorkspaceEmptyState v-if="filteredLots.length === 0" title="No matching lots">
         No lots on this API page match the account-wide filters.
       </WorkspaceEmptyState>
-      <div v-else class="security-groups">
+      <div v-else class="security-groups column no-wrap q-gutter-y-md">
         <section
           v-for="group in groupedLots"
           :key="group.ticker"
-          class="security-card"
+          class="security-card q-pa-none"
           :aria-labelledby="`security-${group.ticker}`"
         >
-          <header class="security-heading">
-            <h2 :id="`security-${group.ticker}`">{{ group.ticker }}</h2>
+          <header
+            class="security-heading row no-wrap items-center justify-between q-gutter-md q-pa-md"
+          >
+            <h2 class="q-mr-none q-mb-none" :id="`security-${group.ticker}`">{{ group.ticker }}</h2>
             <span>{{ group.lots.length }} {{ group.lots.length === 1 ? 'lot' : 'lots' }}</span>
           </header>
           <WorkspaceTableFrame :label="`Tax lots for ${group.ticker}`" class="table-scroll">
@@ -186,21 +203,21 @@
               </caption>
               <thead>
                 <tr>
-                  <th scope="col">Intent</th>
-                  <th scope="col">Broker lot ID</th>
-                  <th scope="col">Acquired</th>
-                  <th scope="col">Remaining / available shares</th>
-                  <th scope="col">Adjusted basis (unit / total)</th>
-                  <th scope="col">Current price</th>
-                  <th scope="col">Unrealized P/L (USD / %)</th>
-                  <th scope="col">Term</th>
-                  <th scope="col">Sleeve</th>
-                  <th scope="col">Quality and cleanup flags</th>
+                  <th class="q-pa-sm" scope="col">Intent</th>
+                  <th class="q-pa-sm" scope="col">Broker lot ID</th>
+                  <th class="q-pa-sm" scope="col">Acquired</th>
+                  <th class="q-pa-sm" scope="col">Remaining / available shares</th>
+                  <th class="q-pa-sm" scope="col">Adjusted basis (unit / total)</th>
+                  <th class="q-pa-sm" scope="col">Current price</th>
+                  <th class="q-pa-sm" scope="col">Unrealized P/L (USD / %)</th>
+                  <th class="q-pa-sm" scope="col">Term</th>
+                  <th class="q-pa-sm" scope="col">Sleeve</th>
+                  <th class="q-pa-sm" scope="col">Quality and cleanup flags</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="lot in group.lots" :key="lot.broker_lot_id">
-                  <td>
+                  <td class="q-pa-sm">
                     <q-checkbox
                       class="review-toggle"
                       dense
@@ -211,40 +228,42 @@
                       :label="requestedLotIds.has(lot.broker_lot_id) ? 'Requested' : 'Request'"
                       @update:model-value="changeLotIntent(lot, $event)"
                     />
-                    <small v-if="confirmedLotIds.has(lot.broker_lot_id)" class="sub-value">
+                    <small v-if="confirmedLotIds.has(lot.broker_lot_id)" class="sub-value q-mt-xs">
                       Backend-confirmed in loaded DEMO run
                     </small>
                   </td>
-                  <th scope="row" class="lot-id">
+                  <th scope="row" class="lot-id q-pa-sm">
                     <BrokerLotIdentity :broker-lot-id="lot.broker_lot_id" />
                   </th>
-                  <td>{{ lot.acquired_date }}</td>
-                  <td>
+                  <td class="q-pa-sm">{{ lot.acquired_date }}</td>
+                  <td class="q-pa-sm">
                     {{ lot.remaining_shares }} / {{ lot.available_shares }}
-                    <small class="sub-value">
+                    <small class="sub-value q-mt-xs">
                       Whole shares available: {{ lot.whole_shares_available }}; fractional
                       remainder:
                       {{ lot.fractional_shares }}
                     </small>
                   </td>
-                  <td>
+                  <td class="q-pa-sm">
                     {{ formatUsd(lot.adjusted_unit_basis_usd) }} /
                     {{ formatUsd(lot.adjusted_total_basis_usd) }}
                   </td>
-                  <td>{{ formatUsd(lot.current_price_usd) }}</td>
-                  <td>
+                  <td class="q-pa-sm">{{ formatUsd(lot.current_price_usd) }}</td>
+                  <td class="q-pa-sm">
                     {{ formatUsd(lot.unrealized_pl_usd) }} /
                     {{ formatPercent(lot.unrealized_pl_pct) }}
                   </td>
-                  <td>{{ lot.term }}</td>
-                  <td>
+                  <td class="q-pa-sm">{{ lot.term }}</td>
+                  <td class="q-pa-sm">
                     {{ lot.sleeve_key ?? 'Unassigned' }}
-                    <small v-if="lot.sub_sleeve_key" class="sub-value">{{
+                    <small v-if="lot.sub_sleeve_key" class="sub-value q-mt-xs">{{
                       lot.sub_sleeve_key
                     }}</small>
                   </td>
-                  <td>
-                    <ul class="flag-list">
+                  <td class="q-pa-sm">
+                    <ul
+                      class="flag-list q-mr-none q-mb-none q-ml-none q-pl-md column no-wrap q-gutter-y-xs"
+                    >
                       <li v-for="flag in lot.quality_flags" :key="flag">{{ flag }}</li>
                       <li v-if="lot.small_lot_cleanup_candidate">Small-lot cleanup candidate</li>
                       <li v-if="lot.position_cleanup_candidate">Only lot in position</li>
@@ -255,7 +274,9 @@
                         No quality or cleanup flags reported
                       </li>
                     </ul>
-                    <small class="sub-value">{{ lot.source }} · as of {{ lot.as_of }}</small>
+                    <small class="sub-value q-mt-xs"
+                      >{{ lot.source }} · as of {{ lot.as_of }}</small
+                    >
                   </td>
                 </tr>
               </tbody>
@@ -274,9 +295,11 @@
       @page="loadLots"
     />
 
-    <section class="review-summary" aria-labelledby="review-title">
-      <h2 id="review-title">Requested lot intent · {{ store.lotReviewIntent.length }}</h2>
-      <p>
+    <section class="review-summary q-pa-md" aria-labelledby="review-title">
+      <h2 class="q-mt-none q-mb-sm" id="review-title">
+        Requested lot intent · {{ store.lotReviewIntent.length }}
+      </h2>
+      <p class="q-mt-none q-mb-sm">
         This is a complete replacement set, not an additive change: apply submits every requested
         broker lot ID, and an explicitly empty set clears the DEMO recommendation basket. Requested
         intent is not backend-confirmed selection and neither one approves an order. Only a
@@ -294,44 +317,60 @@
           !store.lotReviewIntentDirty &&
           !store.actionState.applyLotReviewIntent.error
         "
-        class="state-message"
+        class="state-message q-mt-none q-mb-sm"
         role="status"
       >
         The loaded DEMO run currently selects exactly this requested set. This is recommendation
         state only, not order approval.
       </p>
-      <p v-if="store.lotReviewIntentNotice" class="state-message" role="status">
+      <p v-if="store.lotReviewIntentNotice" class="state-message q-mt-none q-mb-sm" role="status">
         {{ store.lotReviewIntentNotice }}
       </p>
-      <p v-if="store.lots?.source_generation === null" class="state-message" role="status">
+      <p
+        v-if="store.lots?.source_generation === null"
+        class="state-message q-mt-none q-mb-sm"
+        role="status"
+      >
         This lot page has no source generation. It is unvalidated; lot intent cannot be submitted.
       </p>
-      <p v-else-if="store.lots && !lotPageGenerationMatches" class="state-message" role="status">
+      <p
+        v-else-if="store.lots && !lotPageGenerationMatches"
+        class="state-message q-mt-none q-mb-sm"
+        role="status"
+      >
         This page is from source generation {{ store.lots.source_generation }}, but the workspace
         currently observes generation {{ store.observedSourceGeneration ?? 'unavailable' }}. Refresh
         lots before marking or submitting any set.
       </p>
-      <p v-if="basketUnchanged" class="state-message" role="status">
+      <p v-if="basketUnchanged" class="state-message q-mt-none q-mb-sm" role="status">
         The API rejected the complete request atomically. Backend-confirmed selection is unchanged.
       </p>
-      <ul v-if="rejectedLotReasons.length" aria-label="Requested lot rejection reasons">
+      <ul
+        class="q-mr-none q-mb-none q-ml-none q-pl-md q-gutter-y-xs"
+        v-if="rejectedLotReasons.length"
+        aria-label="Requested lot rejection reasons"
+      >
         <li v-for="entry in rejectedLotReasons" :key="entry.broker_lot_id">
           {{ entry.broker_lot_id }}: {{ rejectionReasonLabel(entry.reason) }} ({{ entry.reason }})
         </li>
       </ul>
-      <p v-if="store.currentRunView === 'stale'" class="state-message" role="status">
+      <p
+        v-if="store.currentRunView === 'stale'"
+        class="state-message q-mt-none q-mb-sm"
+        role="status"
+      >
         The loaded DEMO run is stale. Create a current DEMO run before applying intent; this page
         will not silently create or merge one.
       </p>
-      <p v-else-if="!currentRunIsUsable" class="state-message" role="status">
+      <p v-else-if="!currentRunIsUsable" class="state-message q-mt-none q-mb-sm" role="status">
         No current DEMO run is available. Create a run in Overview or Recommendations, then return
         here. Saved runs remain read-only.
       </p>
-      <p v-else class="sub-value">
+      <p v-else class="sub-value q-mt-xs q-mb-sm">
         Target run {{ store.currentRun?.run_id }} · source generation
         {{ store.currentRun?.source_generation }}
       </p>
-      <ul v-if="store.lotReviewIntent.length > 0">
+      <ul class="q-ma-none q-pl-md" v-if="store.lotReviewIntent.length > 0">
         <li v-for="entry in store.lotReviewIntent" :key="entry.broker_lot_id">
           {{ entry.ticker }} · {{ entry.broker_lot_id }} · generation {{ entry.source_generation }}
           <q-btn
@@ -346,10 +385,10 @@
           </q-btn>
         </li>
       </ul>
-      <p v-else class="sub-value">
+      <p v-else class="sub-value q-mt-xs q-mb-sm">
         Requested set is empty; clearing is explicit and must be applied.
       </p>
-      <p class="sub-value">
+      <p class="sub-value q-mt-xs q-mb-sm">
         Backend-confirmed selected SELL lot IDs in the loaded run:
         {{ confirmedBrokerLotIds.join(', ') || 'none' }}
       </p>
@@ -602,70 +641,21 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.security-heading,
-.results-heading,
-.sort-control {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.8rem;
-}
-
-h1,
-h2,
-p {
-  margin-top: 0;
-}
 .filter-panel,
 .review-summary,
 .security-card,
 .empty-state {
-  padding: 1rem;
   border: 1px solid #dce6eb;
   border-radius: 0.8rem;
   background: #fff;
   box-shadow: 0 4px 20px rgb(18 55 77 / 4.5%);
 }
-.filter-panel {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: end;
-  gap: 0.75rem;
-}
+
 .filter-panel label,
 .sort-control {
-  display: grid;
-  gap: 0.3rem;
   color: #466779;
   font-size: 0.75rem;
   font-weight: 700;
-}
-input,
-select,
-button {
-  min-height: 2.4rem;
-  border: 1px solid #b8c9d2;
-  border-radius: 0.45rem;
-  background: #fff;
-  color: #203f52;
-  font: inherit;
-}
-input,
-select {
-  padding: 0.4rem 0.55rem;
-}
-.filter-panel input[type='search'] {
-  min-width: 15rem;
-}
-button {
-  padding: 0.45rem 0.8rem;
-  cursor: pointer;
-  font-size: 0.76rem;
-  font-weight: 750;
-}
-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
 }
 .primary-button {
   border-color: #067777;
@@ -678,40 +668,28 @@ button:disabled {
   background: #f7fafb;
 }
 .text-button {
-  min-height: auto;
-  margin-left: 0.5rem;
-  padding: 0.15rem 0.35rem;
   border: 0;
   color: #087f7d;
   text-decoration: underline;
 }
 .results-heading {
-  flex-wrap: wrap;
   color: #526c7c;
   font-size: 0.76rem;
 }
-.results-heading p {
-  margin: 0;
-}
+
 .sort-control {
   display: flex;
   align-items: center;
 }
-.security-groups {
-  display: grid;
-  gap: 0.8rem;
-}
+
 .security-card {
   min-width: 0;
-  padding: 0;
   overflow: hidden;
 }
 .security-heading {
-  padding: 0.85rem 1rem;
   border-bottom: 1px solid #eaf0f3;
 }
 .security-heading h2 {
-  margin: 0;
   color: #10263d;
   font-size: 1rem;
 }
@@ -730,7 +708,6 @@ table {
 }
 th,
 td {
-  padding: 0.65rem 0.7rem;
   border-bottom: 1px solid #edf2f4;
   text-align: left;
   vertical-align: top;
@@ -750,21 +727,15 @@ tbody th {
 .review-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
   white-space: nowrap;
 }
 .sub-value {
   display: block;
-  margin-top: 0.25rem;
   color: #718792;
   font-size: 0.67rem;
   line-height: 1.4;
 }
 .flag-list {
-  display: grid;
-  gap: 0.2rem;
-  margin: 0;
-  padding-left: 1rem;
   color: #725528;
 }
 .state-message,
@@ -776,23 +747,15 @@ tbody th {
 }
 .empty-state h2,
 .review-summary h2 {
-  margin-bottom: 0.4rem;
   color: #10263d;
   font-size: 1rem;
 }
-.empty-state p,
-.review-summary p {
-  margin-bottom: 0.7rem;
-}
+
 .review-summary ul {
-  margin: 0;
-  padding-left: 1.2rem;
   color: #29475a;
   font-size: 0.78rem;
 }
-.review-summary li + li {
-  margin-top: 0.35rem;
-}
+/* Keep content available to assistive technology without occupying layout space. */
 .sr-only {
   position: absolute;
   width: 1px;

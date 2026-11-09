@@ -24,9 +24,6 @@ withDefaults(
 
 <style scoped>
 .api-error {
-  display: grid;
-  gap: 0.3rem;
-  padding: 0.8rem 1rem;
   border: 1px solid #efc2c2;
   border-radius: 0.65rem;
   background: #fff0f0;

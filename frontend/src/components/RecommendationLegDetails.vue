@@ -1,38 +1,40 @@
 <template>
-  <article :id="id" class="leg-card" :aria-labelledby="headingId">
-    <h3 :id="headingId">
+  <article :id="id" class="leg-card q-pa-md" :aria-labelledby="headingId">
+    <h3 class="q-ma-none" :id="headingId">
       Sequence {{ leg.sequence }} · {{ leg.side }} {{ leg.ticker ?? 'ticker unavailable' }}
     </h3>
-    <dl class="leg-facts">
-      <div>
+    <dl class="leg-facts q-mt-md q-mb-sm q-mx-none">
+      <div class="q-pa-sm">
         <dt>Leg ID</dt>
-        <dd>{{ leg.leg_id }}</dd>
+        <dd class="q-mt-xs q-mb-none q-mx-none">{{ leg.leg_id }}</dd>
       </div>
-      <div>
+      <div class="q-pa-sm">
         <dt>API-proposed whole shares</dt>
-        <dd>{{ leg.shares }}</dd>
+        <dd class="q-mt-xs q-mb-none q-mx-none">{{ leg.shares }}</dd>
       </div>
-      <div>
+      <div class="q-pa-sm">
         <dt>Estimated unit price</dt>
-        <dd>{{ formatUsd(leg.estimated_unit_price_usd) }}</dd>
+        <dd class="q-mt-xs q-mb-none q-mx-none">{{ formatUsd(leg.estimated_unit_price_usd) }}</dd>
       </div>
-      <div>
+      <div class="q-pa-sm">
         <dt>Estimated notional</dt>
-        <dd>{{ formatUsd(leg.estimated_notional_usd) }}</dd>
+        <dd class="q-mt-xs q-mb-none q-mx-none">{{ formatUsd(leg.estimated_notional_usd) }}</dd>
       </div>
-      <div>
+      <div class="q-pa-sm">
         <dt>Net realized ST / LT</dt>
-        <dd>{{ formatUsd(leg.net_st_realized_usd) }} / {{ formatUsd(leg.net_lt_realized_usd) }}</dd>
+        <dd class="q-mt-xs q-mb-none q-mx-none">
+          {{ formatUsd(leg.net_st_realized_usd) }} / {{ formatUsd(leg.net_lt_realized_usd) }}
+        </dd>
       </div>
     </dl>
-    <p class="dependency-note">
+    <p class="dependency-note q-mt-sm q-mb-none q-mx-none">
       {{
         leg.dependencies.length
           ? `Requires API leg(s): ${leg.dependencies.join(', ')}`
           : 'No leg dependency was returned by the API.'
       }}
     </p>
-    <p class="leg-status">
+    <p class="leg-status q-mt-sm q-mb-none q-mx-none">
       {{ leg.selected ? 'Selected in this API basket' : 'Not selected in this API basket' }}
     </p>
   </article>
@@ -52,17 +54,17 @@ const headingId = `recommendation-leg-${useId()}`;
 </script>
 
 <style scoped>
+/* Grid gaps use Quasar's spacing scale; negative-margin gutters distort grid tracks. */
 .leg-card {
   min-width: 0;
-  padding: 0.8rem;
   border: 1px solid #eaf0f3;
   border-radius: 0.6rem;
   background: #fbfdfe;
-  scroll-margin-top: 1rem;
+  /* Anchor navigation needs scroll clearance; Quasar margin utilities do not affect scrolling. */
+  scroll-margin-top: 16px;
 }
 
 .leg-card h3 {
-  margin: 0;
   color: #29475a;
   font-size: 0.9rem;
 }
@@ -70,13 +72,11 @@ const headingId = `recommendation-leg-${useId()}`;
 .leg-facts {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 0.6rem;
-  margin: 0.8rem 0 0.5rem;
+  gap: 8px;
 }
 
 .leg-facts > div {
   min-width: 0;
-  padding: 0.65rem;
   border: 1px solid #eaf0f3;
   border-radius: 0.55rem;
 }
@@ -87,7 +87,6 @@ const headingId = `recommendation-leg-${useId()}`;
 }
 
 .leg-facts dd {
-  margin: 0.25rem 0 0;
   color: #29475a;
   font-size: 0.78rem;
   font-weight: 700;
@@ -96,7 +95,6 @@ const headingId = `recommendation-leg-${useId()}`;
 
 .dependency-note,
 .leg-status {
-  margin: 0.4rem 0 0;
   color: #526c7c;
   font-size: 0.78rem;
   line-height: 1.5;

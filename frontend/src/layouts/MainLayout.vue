@@ -1,6 +1,6 @@
 <template>
   <q-layout view="lHh Lpr lFf" class="workspace-layout">
-    <a class="skip-link" href="#main-content" @click.prevent="focusMainContent">
+    <a class="skip-link q-py-sm q-px-md" href="#main-content" @click.prevent="focusMainContent">
       Skip to main content
     </a>
     <q-header class="workspace-header" elevated>
@@ -15,7 +15,7 @@
           :aria-expanded="drawerOpen"
           @click="toggleDrawer"
         />
-        <q-toolbar-title class="brand-title">
+        <q-toolbar-title class="brand-title row no-wrap items-center q-gutter-sm">
           <span class="brand-mark" aria-hidden="true">PO</span>
           <span>Portfolio Optimizer</span>
         </q-toolbar-title>
@@ -30,11 +30,11 @@
       :breakpoint="1024"
       class="workspace-drawer"
     >
-      <div class="drawer-brand">
+      <div class="drawer-brand row no-wrap items-center q-gutter-sm q-py-lg q-px-md">
         <span class="brand-mark" aria-hidden="true">PO</span>
         <div>
           <strong>Portfolio Optimizer</strong>
-          <small>Local decision support</small>
+          <small class="q-mt-xs">Local decision support</small>
         </div>
       </div>
       <nav aria-label="Primary navigation">
@@ -60,7 +60,7 @@
           </q-item>
         </q-list>
       </nav>
-      <div class="drawer-footer">
+      <div class="drawer-footer q-mr-md q-mb-md q-ml-md q-pa-md column no-wrap q-gutter-y-xs">
         <strong>Local demo mode</strong>
         <span>No broker connection or order submission</span>
       </div>
@@ -117,9 +117,6 @@ function closeDrawerOnSmallScreen(): void {
 }
 
 .brand-title {
-  display: flex;
-  align-items: center;
-  gap: 0.7rem;
   font-size: 1rem;
   font-weight: 800;
 }
@@ -146,13 +143,6 @@ function closeDrawerOnSmallScreen(): void {
   color: #d5e3eb;
 }
 
-.drawer-brand {
-  display: flex;
-  align-items: center;
-  gap: 0.7rem;
-  padding: 1.4rem 1.2rem 1.8rem;
-}
-
 .drawer-brand strong,
 .drawer-brand small {
   display: block;
@@ -164,7 +154,6 @@ function closeDrawerOnSmallScreen(): void {
 }
 
 .drawer-brand small {
-  margin-top: 0.2rem;
   color: #9fb6c4;
   font-size: 0.68rem;
 }
@@ -178,7 +167,6 @@ function closeDrawerOnSmallScreen(): void {
 }
 
 .workspace-drawer :deep(.q-item) {
-  margin: 0.15rem 0.6rem;
   border-radius: 0.55rem;
   color: #cfdee7;
 }
@@ -198,10 +186,6 @@ function closeDrawerOnSmallScreen(): void {
 }
 
 .drawer-footer {
-  display: grid;
-  gap: 0.35rem;
-  margin: 1.2rem 0.8rem 0.8rem;
-  padding: 0.9rem;
   border: 1px solid #3b5870;
   border-radius: 0.6rem;
   background: #1c3a53;
@@ -218,9 +202,6 @@ function closeDrawerOnSmallScreen(): void {
 }
 
 .demo-banner {
-  display: flex;
-  gap: 0.65rem;
-  align-items: center;
   border: 1px solid #f2dcad;
   background: #fff7e8;
   color: #765016;
@@ -233,17 +214,12 @@ function closeDrawerOnSmallScreen(): void {
   letter-spacing: 0.05em;
 }
 
-.workspace-main {
-  min-height: calc(100vh - 3.15rem);
-}
-
 .skip-link {
   position: fixed;
   z-index: 10000;
   top: 0.5rem;
   left: 0.5rem;
   transform: translateY(-160%);
-  padding: 0.7rem 1rem;
   border-radius: 0.4rem;
   background: #fff;
   color: #10263d;
@@ -259,10 +235,6 @@ function closeDrawerOnSmallScreen(): void {
 @media (max-width: 600px) {
   .header-context {
     display: none;
-  }
-
-  .demo-banner {
-    align-items: flex-start;
   }
 }
 </style>

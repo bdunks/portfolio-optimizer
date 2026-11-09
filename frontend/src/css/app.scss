@@ -1,14 +1,13 @@
+/* Grid gaps use Quasar's spacing scale; negative-margin gutters distort grid tracks. */
 // app global css
 
 .workspace-page {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 1rem;
+  gap: 16px;
   width: 100%;
   max-width: 1800px;
   min-width: 0;
-  margin: 0 auto;
-  padding: clamp(1rem, 2.5vw, 2rem);
   box-sizing: border-box;
   color: #172e41;
 }
@@ -19,11 +18,6 @@
 
 .workspace-page .page-header,
 .workspace-page .section-heading {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
   min-width: 0;
 }
 
@@ -37,14 +31,12 @@
 }
 
 .workspace-page .page-header h1 {
-  margin: 0;
   color: #10263d;
   font-size: clamp(1.7rem, 3vw, 2rem);
   letter-spacing: -0.04em;
 }
 
 .workspace-page .eyebrow {
-  margin: 0 0 0.25rem;
   color: #087f7d;
   font-size: 0.7rem;
   font-weight: 800;
@@ -54,7 +46,6 @@
 
 .workspace-page .page-subtitle {
   max-width: 52rem;
-  margin: 0.4rem 0 0;
   color: #637b8a;
   font-size: 0.82rem;
   line-height: 1.5;
@@ -62,17 +53,11 @@
 
 .workspace-page .section-subtitle {
   max-width: 52rem;
-  margin: 0.4rem 0 0;
   color: #637b8a;
   font-size: 0.76rem;
   line-height: 1.5;
 }
 
 .workspace-page .page-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.55rem;
   min-width: 0;
 }

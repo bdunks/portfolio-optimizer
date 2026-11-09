@@ -1,45 +1,56 @@
 <template>
-  <section class="transition-panel" aria-labelledby="transition-title">
-    <header class="panel-heading">
+  <section class="transition-panel column no-wrap q-gutter-y-md" aria-labelledby="transition-title">
+    <header class="panel-heading row no-wrap justify-between items-start q-gutter-md">
       <div>
-        <h2 id="transition-title">US Equities Transition</h2>
-        <p>
+        <h2 class="q-ma-none" id="transition-title">US Equities Transition</h2>
+        <p class="q-mt-xs q-mb-none q-mx-none">
           {{ transition?.label ?? 'US sleeve' }} · API-reported values; percentages identify both
           within-sleeve and whole-portfolio units.
         </p>
       </div>
-      <span class="unit-badge">Within US sleeve + whole portfolio</span>
+      <span class="unit-badge q-py-xs q-px-sm">Within US sleeve + whole portfolio</span>
     </header>
 
-    <p v-if="showNoCurrentBasket" class="comparison-note" role="status">
+    <p
+      v-if="showNoCurrentBasket"
+      class="comparison-note q-mr-none q-mb-none q-ml-none q-py-sm q-px-md"
+      role="status"
+    >
       No current proposed basket from a matching current optimizer run. Values shown below come only
       from the portfolio API; historical or stale runs are not overlaid.
     </p>
 
     <p
       v-if="transition && transition.transition_destination_sleeve_key === null"
-      class="comparison-note"
+      class="comparison-note q-mr-none q-mb-none q-ml-none q-py-sm q-px-md"
       role="status"
     >
       No transition destination is designated in this policy; progress is unavailable and no ETF or
       ticker is inferred.
     </p>
 
-    <p v-if="!transition" class="empty-state">
+    <p v-if="!transition" class="empty-state q-mr-none q-mb-none q-ml-none">
       US transition data is unavailable from the portfolio API.
     </p>
 
     <div v-else class="state-grid">
-      <article v-for="state in states" :key="state.key" class="state-card" :data-state="state.key">
-        <h3>{{ state.title }}</h3>
-        <dl class="state-summary">
-          <div>
+      <article
+        v-for="state in states"
+        :key="state.key"
+        class="state-card q-pa-md"
+        :data-state="state.key"
+      >
+        <h3 class="q-mt-none q-mb-md q-mx-none">{{ state.title }}</h3>
+        <dl class="state-summary q-mr-none q-mb-none q-ml-none column no-wrap q-gutter-y-sm">
+          <div class="row no-wrap justify-between q-gutter-md q-pb-xs">
             <dt>US sleeve value</dt>
-            <dd>{{ formatUsd(state.snapshot?.us_sleeve_value_usd) }}</dd>
+            <dd class="q-mr-none q-mb-none">
+              {{ formatUsd(state.snapshot?.us_sleeve_value_usd) }}
+            </dd>
           </div>
-          <div>
+          <div class="row no-wrap justify-between q-gutter-md q-pb-xs">
             <dt>US sleeve share of portfolio</dt>
-            <dd>
+            <dd class="q-mr-none q-mb-none">
               {{
                 formatPercent(
                   state.snapshot?.us_sleeve_whole_portfolio_pct ??
@@ -48,15 +59,21 @@
               }}
             </dd>
           </div>
-          <div>
+          <div class="row no-wrap justify-between q-gutter-md q-pb-xs">
             <dt>Transition destination progress within US sleeve</dt>
-            <dd>{{ formatPercent(state.snapshot?.etf_progress_pct) }}</dd>
+            <dd class="q-mr-none q-mb-none">
+              {{ formatPercent(state.snapshot?.etf_progress_pct) }}
+            </dd>
           </div>
         </dl>
 
-        <h4>US sleeve components</h4>
-        <ul v-if="childKeys.length" class="component-list">
-          <li v-for="childKey in childKeys" :key="childKey">
+        <h4 class="q-mt-md q-mb-sm q-mx-none">US sleeve components</h4>
+        <ul v-if="childKeys.length" class="component-list q-ma-none q-pa-none">
+          <li
+            class="q-py-sm q-px-none column no-wrap q-gutter-y-xs"
+            v-for="childKey in childKeys"
+            :key="childKey"
+          >
             <strong>{{ labels[childKey] ?? childKey }}</strong>
             <span>{{ formatPercent(childWithinSleeve(state, childKey)) }} within US sleeve</span>
             <span
@@ -65,7 +82,7 @@
             <span>{{ formatUsd(childValue(state, childKey)) }}</span>
           </li>
         </ul>
-        <p v-else class="empty-state">No US sleeve component values were returned.</p>
+        <p v-else class="empty-state q-ma-none">No US sleeve component values were returned.</p>
       </article>
     </div>
   </section>
@@ -143,26 +160,14 @@ function childValue(state: TransitionState, childKey: string): string | null {
 </script>
 
 <style scoped>
-.transition-panel {
-  display: grid;
-  gap: 1rem;
-}
-
-.panel-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 1rem;
-}
+/* Grid gaps use Quasar's spacing scale; negative-margin gutters distort grid tracks. */
 
 .panel-heading h2 {
-  margin: 0;
   color: #10263d;
   font-size: 1.2rem;
 }
 
 .panel-heading p {
-  margin: 0.3rem 0 0;
   color: #61798a;
   line-height: 1.5;
 }
@@ -172,53 +177,38 @@ function childValue(state: TransitionState, childKey: string): string | null {
   border-radius: 999px;
   background: #e4f5f2;
   color: #086f6e;
-  padding: 0.35rem 0.65rem;
   font-size: 0.72rem;
   font-weight: 700;
 }
 
 .comparison-note {
-  margin: 0;
   border-left: 3px solid #d19536;
   background: #fff7e9;
   color: #765016;
-  padding: 0.75rem 0.9rem;
   line-height: 1.5;
 }
 
 .state-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.8rem;
+  gap: 16px;
 }
 
 .state-card {
   min-width: 0;
   border: 1px solid #dce6eb;
   border-radius: 0.75rem;
-  padding: 1rem;
   background: #fff;
   box-shadow: 0 4px 20px rgb(18 55 77 / 4.5%);
 }
 
 .state-card h3 {
-  margin: 0 0 0.8rem;
   color: #056b70;
   font-size: 0.95rem;
 }
 
-.state-summary {
-  margin: 0;
-  display: grid;
-  gap: 0.45rem;
-}
-
 .state-summary div {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.8rem;
   border-bottom: 1px solid #eaf0f3;
-  padding-bottom: 0.35rem;
 }
 
 .state-summary dt {
@@ -227,7 +217,6 @@ function childValue(state: TransitionState, childKey: string): string | null {
 }
 
 .state-summary dd {
-  margin: 0;
   text-align: right;
   font-variant-numeric: tabular-nums;
   font-size: 0.8rem;
@@ -236,7 +225,6 @@ function childValue(state: TransitionState, childKey: string): string | null {
 }
 
 .state-card h4 {
-  margin: 0.9rem 0 0.4rem;
   color: #526c7c;
   font-size: 0.75rem;
   text-transform: uppercase;
@@ -245,14 +233,9 @@ function childValue(state: TransitionState, childKey: string): string | null {
 
 .component-list {
   list-style: none;
-  margin: 0;
-  padding: 0;
 }
 
 .component-list li {
-  display: grid;
-  gap: 0.18rem;
-  padding: 0.55rem 0;
   border-top: 1px solid #eff3f5;
   font-size: 0.72rem;
 }
@@ -269,7 +252,6 @@ function childValue(state: TransitionState, childKey: string): string | null {
 
 .empty-state {
   color: #718795;
-  margin: 0;
   font-size: 0.82rem;
 }
 

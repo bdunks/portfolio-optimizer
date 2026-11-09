@@ -1,7 +1,11 @@
 <template>
-  <section class="workspace-empty-state empty-state" role="status" aria-live="polite">
-    <h2>{{ title }}</h2>
-    <p><slot /></p>
+  <section
+    class="workspace-empty-state empty-state column no-wrap q-gutter-y-sm"
+    role="status"
+    aria-live="polite"
+  >
+    <h2 class="q-mr-none q-mb-none q-ml-none">{{ title }}</h2>
+    <p class="q-mr-none q-mb-none q-ml-none"><slot /></p>
     <slot name="details" />
     <slot name="action" />
   </section>
@@ -12,19 +16,12 @@ defineProps<{ title: string }>();
 </script>
 
 <style scoped>
-.workspace-empty-state {
-  display: grid;
-  gap: 0.45rem;
-}
-
 .workspace-empty-state h2 {
-  margin: 0;
   color: #10263d;
   font-size: 1.05rem;
 }
 
 .workspace-empty-state p {
-  margin: 0;
   color: #718795;
 }
 </style>

@@ -239,7 +239,7 @@ describe('isolated local backend smoke', () => {
         workspace!.wrapper
           .findAll('.settings-group input')
           .find((input) =>
-            input.element.closest('label')?.textContent?.includes('Target retained net loss'),
+            input.element.closest('.field')?.textContent?.includes('Target retained net loss'),
           );
       const retainedLossInput = findRetainedLossInput();
       expect(retainedLossInput).toBeDefined();
@@ -375,7 +375,7 @@ describe('isolated local backend smoke', () => {
         const retainedLossInput = workspace!.wrapper
           .findAll('.settings-group input')
           .find((input) =>
-            input.element.closest('label')?.textContent?.includes('Target retained net loss'),
+            input.element.closest('.field')?.textContent?.includes('Target retained net loss'),
           );
         return (
           (retainedLossInput?.element as HTMLInputElement | undefined)?.value === exactRetainedLoss
@@ -386,7 +386,7 @@ describe('isolated local backend smoke', () => {
           workspace.wrapper
             .findAll('.settings-group input')
             .find((input) =>
-              input.element.closest('label')?.textContent?.includes('Target retained net loss'),
+              input.element.closest('.field')?.textContent?.includes('Target retained net loss'),
             )?.element as HTMLInputElement | undefined
         )?.value,
       ).toBe(exactRetainedLoss);

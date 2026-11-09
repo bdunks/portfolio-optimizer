@@ -1,15 +1,21 @@
 <template>
-  <section class="allocation-panel" aria-labelledby="allocation-title">
+  <section class="allocation-panel column no-wrap q-gutter-y-md" aria-labelledby="allocation-title">
     <header>
-      <h2 id="allocation-title">Portfolio Allocation</h2>
-      <p>API-reported sleeve weights as percentages of the whole portfolio.</p>
+      <h2 class="q-ma-none" id="allocation-title">Portfolio Allocation</h2>
+      <p class="q-mt-xs q-mb-none q-mx-none">
+        API-reported sleeve weights as percentages of the whole portfolio.
+      </p>
     </header>
-    <p v-if="showNoCurrentBasket" class="comparison-note" role="status">
+    <p
+      v-if="showNoCurrentBasket"
+      class="comparison-note q-mr-none q-mb-none q-ml-none q-py-sm q-px-md"
+      role="status"
+    >
       No current proposed basket from a matching optimizer run. We show only allocation values
       reported by the portfolio API.
     </p>
 
-    <p v-if="!allocation" class="empty-state">
+    <p v-if="!allocation" class="empty-state q-mr-none q-mb-none q-ml-none">
       Allocation data is unavailable from the portfolio API.
     </p>
     <WorkspaceTableFrame
@@ -23,23 +29,31 @@
         </caption>
         <thead>
           <tr>
-            <th scope="col">Sleeve</th>
-            <th scope="col">Current</th>
-            <th scope="col">Proposed basket</th>
-            <th scope="col">Policy target</th>
+            <th class="q-pa-sm" scope="col">Sleeve</th>
+            <th class="q-pa-sm" scope="col">Current</th>
+            <th class="q-pa-sm" scope="col">Proposed basket</th>
+            <th class="q-pa-sm" scope="col">Policy target</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="sleeveKey in sleeveKeys" :key="sleeveKey">
-            <th scope="row">{{ labels[sleeveKey] ?? sleeveKey }}</th>
-            <td>{{ formatPercent(allocation.current?.sleeve_weights_pct[sleeveKey]) }}</td>
-            <td>{{ formatPercent(allocation.proposed?.sleeve_weights_pct[sleeveKey]) }}</td>
-            <td>{{ formatPercent(allocation.target?.sleeve_weights_pct[sleeveKey]) }}</td>
+            <th class="q-pa-sm" scope="row">{{ labels[sleeveKey] ?? sleeveKey }}</th>
+            <td class="q-pa-sm">
+              {{ formatPercent(allocation.current?.sleeve_weights_pct[sleeveKey]) }}
+            </td>
+            <td class="q-pa-sm">
+              {{ formatPercent(allocation.proposed?.sleeve_weights_pct[sleeveKey]) }}
+            </td>
+            <td class="q-pa-sm">
+              {{ formatPercent(allocation.target?.sleeve_weights_pct[sleeveKey]) }}
+            </td>
           </tr>
         </tbody>
       </table>
     </WorkspaceTableFrame>
-    <p v-else class="empty-state">No allocation weights were returned.</p>
+    <p v-else class="empty-state q-mr-none q-mb-none q-ml-none">
+      No allocation weights were returned.
+    </p>
   </section>
 </template>
 
@@ -73,19 +87,12 @@ const sleeveKeys = computed(() => {
 </script>
 
 <style scoped>
-.allocation-panel {
-  display: grid;
-  gap: 0.8rem;
-}
-
 .allocation-panel h2 {
-  margin: 0;
   color: #10263d;
   font-size: 1.1rem;
 }
 
 .allocation-panel header p {
-  margin: 0.3rem 0 0;
   color: #61798a;
   font-size: 0.82rem;
 }
@@ -102,7 +109,6 @@ table {
 
 th,
 td {
-  padding: 0.65rem 0.75rem;
   border-bottom: 1px solid #eaf0f3;
   font-size: 0.8rem;
 }
@@ -126,21 +132,19 @@ tbody td {
 }
 
 .comparison-note {
-  margin: 0;
   border-left: 3px solid #d19536;
   background: #fff7e9;
   color: #765016;
-  padding: 0.75rem 0.9rem;
   line-height: 1.5;
   font-size: 0.78rem;
 }
 
 .empty-state {
   color: #718795;
-  margin: 0;
   font-size: 0.82rem;
 }
 
+/* Keep content available to assistive technology without occupying layout space. */
 .visually-hidden {
   position: absolute;
   width: 1px;

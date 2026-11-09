@@ -1,5 +1,5 @@
 <template>
-  <q-page class="workspace-page overview-page">
+  <q-page class="workspace-page overview-page q-my-none q-mx-auto q-pa-md">
     <WorkspacePageHeader
       eyebrow="Workspace overview"
       title="Overview"
@@ -30,12 +30,12 @@
       </template>
     </WorkspacePageHeader>
 
-    <p v-if="!canRunOptimizer" class="run-help">
+    <p v-if="!canRunOptimizer" class="run-help q-ma-none q-pl-md">
       Recommendations require a ready portfolio snapshot and a valid active policy. Nothing runs
       automatically.
     </p>
 
-    <div class="error-stack" aria-label="Workspace request errors">
+    <div class="error-stack column no-wrap q-gutter-y-sm" aria-label="Workspace request errors">
       <ApiActionError
         :error="store.actionState.loadHealth.error"
         title="Application health could not be loaded"
@@ -73,41 +73,55 @@
     <section class="summary-grid" aria-label="Current portfolio summary">
       <q-card flat bordered class="summary-card">
         <q-card-section>
-          <p class="summary-label">Portfolio value</p>
-          <p class="summary-value">{{ formatUsd(portfolio?.portfolio_total_usd) }}</p>
-          <p class="summary-foot">Value returned by the portfolio API</p>
+          <p class="summary-label q-ma-none">Portfolio value</p>
+          <p class="summary-value q-mt-sm q-mb-none q-mx-none">
+            {{ formatUsd(portfolio?.portfolio_total_usd) }}
+          </p>
+          <p class="summary-foot q-mt-xs q-mb-none q-mx-none">
+            Value returned by the portfolio API
+          </p>
         </q-card-section>
       </q-card>
       <q-card flat bordered class="summary-card">
         <q-card-section>
-          <p class="summary-label">Cash</p>
-          <p class="summary-value">{{ formatUsd(portfolio?.cash_usd) }}</p>
-          <p class="summary-foot">Cash balance returned by the portfolio API</p>
+          <p class="summary-label q-ma-none">Cash</p>
+          <p class="summary-value q-mt-sm q-mb-none q-mx-none">
+            {{ formatUsd(portfolio?.cash_usd) }}
+          </p>
+          <p class="summary-foot q-mt-xs q-mb-none q-mx-none">
+            Cash balance returned by the portfolio API
+          </p>
         </q-card-section>
       </q-card>
       <q-card flat bordered class="summary-card">
         <q-card-section>
-          <p class="summary-label">Positions</p>
-          <p class="summary-value">{{ positionCount }}</p>
-          <p class="summary-foot">Current API position count</p>
+          <p class="summary-label q-ma-none">Positions</p>
+          <p class="summary-value q-mt-sm q-mb-none q-mx-none">{{ positionCount }}</p>
+          <p class="summary-foot q-mt-xs q-mb-none q-mx-none">Current API position count</p>
         </q-card-section>
       </q-card>
       <q-card flat bordered class="summary-card">
         <q-card-section>
-          <p class="summary-label">Risk tracking</p>
-          <p class="summary-value summary-value-small">Not calculated</p>
-          <p class="summary-foot">No risk estimate is available from this workflow</p>
+          <p class="summary-label q-ma-none">Risk tracking</p>
+          <p class="summary-value summary-value-small q-mt-sm q-mb-none q-mx-none">
+            Not calculated
+          </p>
+          <p class="summary-foot q-mt-xs q-mb-none q-mx-none">
+            No risk estimate is available from this workflow
+          </p>
         </q-card-section>
       </q-card>
     </section>
 
-    <section class="content-grid">
+    <section class="content-grid items-start">
       <q-card flat bordered class="workspace-card account-card">
         <q-card-section>
-          <div class="section-heading">
+          <div class="section-heading row justify-between q-gutter-md items-center q-mb-md">
             <div>
-              <h2>Portfolio data</h2>
-              <p class="section-subtitle">Source status and coverage from the backend API</p>
+              <h2 class="q-ma-none">Portfolio data</h2>
+              <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
+                Source status and coverage from the backend API
+              </p>
             </div>
             <q-badge
               :color="portfolio?.status === 'ready' ? 'positive' : 'warning'"
@@ -117,30 +131,34 @@
             </q-badge>
           </div>
 
-          <dl class="data-list">
-            <div>
+          <dl class="data-list q-ma-none column no-wrap q-gutter-y-none">
+            <div class="q-py-sm q-px-none">
               <dt>Account</dt>
-              <dd>{{ accountLabel }}</dd>
+              <dd class="q-ma-none">{{ accountLabel }}</dd>
             </div>
-            <div>
+            <div class="q-py-sm q-px-none">
               <dt>Source</dt>
-              <dd>{{ portfolio?.status === 'ready' ? portfolio.source : 'Unavailable' }}</dd>
+              <dd class="q-ma-none">
+                {{ portfolio?.status === 'ready' ? portfolio.source : 'Unavailable' }}
+              </dd>
             </div>
-            <div>
+            <div class="q-py-sm q-px-none">
               <dt>Data as of</dt>
-              <dd>{{ portfolio?.as_of ?? 'Unavailable' }}</dd>
+              <dd class="q-ma-none">{{ portfolio?.as_of ?? 'Unavailable' }}</dd>
             </div>
-            <div>
+            <div class="q-py-sm q-px-none">
               <dt>Sync generation</dt>
-              <dd>{{ portfolio ? String(portfolio.sync.generation) : 'Unavailable' }}</dd>
+              <dd class="q-ma-none">
+                {{ portfolio ? String(portfolio.sync.generation) : 'Unavailable' }}
+              </dd>
             </div>
-            <div>
+            <div class="q-py-sm q-px-none">
               <dt>Last completed sync</dt>
-              <dd>{{ portfolio?.sync.completed_at ?? 'Unavailable' }}</dd>
+              <dd class="q-ma-none">{{ portfolio?.sync.completed_at ?? 'Unavailable' }}</dd>
             </div>
-            <div>
+            <div class="q-py-sm q-px-none">
               <dt>Last sync error</dt>
-              <dd>
+              <dd class="q-ma-none">
                 <template v-if="portfolio?.sync.last_error_code">
                   {{ portfolio.sync.last_error_code }}:
                   {{ portfolio.sync.last_error_summary ?? 'No summary returned' }}
@@ -150,18 +168,22 @@
             </div>
           </dl>
 
-          <p v-if="portfolio?.status === 'not_synced'" class="empty-note">
+          <p v-if="portfolio?.status === 'not_synced'" class="empty-note q-ma-none">
             The current portfolio snapshot has not been synchronized. Use Sync portfolio to request
             the configured local demo snapshot.
           </p>
 
-          <div class="coverage-block">
-            <h3>Data coverage</h3>
-            <p v-if="coverageEntries.length === 0" class="empty-note">
+          <div class="coverage-block q-mt-md">
+            <h3 class="q-mt-none q-mb-sm q-mx-none">Data coverage</h3>
+            <p v-if="coverageEntries.length === 0" class="empty-note q-ma-none">
               Coverage is unavailable until portfolio data loads.
             </p>
-            <ul v-else class="coverage-list">
-              <li v-for="[key, covered] in coverageEntries" :key="key">
+            <ul v-else class="coverage-list q-ma-none q-pa-none">
+              <li
+                class="row no-wrap justify-between items-center q-gutter-sm q-py-sm q-px-none"
+                v-for="[key, covered] in coverageEntries"
+                :key="key"
+              >
                 <span>{{ key }}</span>
                 <strong :class="covered ? 'coverage-yes' : 'coverage-no'">{{
                   covered ? 'Available' : 'Unavailable'
@@ -174,10 +196,10 @@
 
       <q-card flat bordered class="workspace-card run-card">
         <q-card-section>
-          <div class="section-heading">
+          <div class="section-heading row justify-between q-gutter-md items-center q-mb-md">
             <div>
-              <h2>Latest recommendations</h2>
-              <p class="section-subtitle">
+              <h2 class="q-ma-none">Latest recommendations</h2>
+              <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
                 Metrics are shown only for a run matching this current portfolio and active policy.
               </p>
             </div>
@@ -186,7 +208,7 @@
             >
           </div>
 
-          <p v-if="!currentRunMatches" class="empty-note">
+          <p v-if="!currentRunMatches" class="empty-note q-ma-none">
             No current matching recommendation run. Saved or stale runs are not used as current
             portfolio comparisons.
           </p>
@@ -225,10 +247,10 @@
 
       <q-card flat bordered class="workspace-card policy-card">
         <q-card-section>
-          <div class="section-heading">
+          <div class="section-heading row justify-between q-gutter-md items-center q-mb-md">
             <div>
-              <h2>Active allocation policy</h2>
-              <p class="section-subtitle">
+              <h2 class="q-ma-none">Active allocation policy</h2>
+              <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
                 Policy settings and allowed securities supplied by the API
               </p>
             </div>
@@ -237,20 +259,27 @@
             </q-badge>
           </div>
 
-          <p v-if="!activePolicy" class="empty-note">No active policy has been returned.</p>
+          <p v-if="!activePolicy" class="empty-note q-ma-none">
+            No active policy has been returned.
+          </p>
           <template v-else>
-            <h3>Enabled sleeves and targets</h3>
-            <ul v-if="enabledSleeves.length" class="policy-list">
-              <li v-for="sleeve in enabledSleeves" :key="sleeve.sleeve_key">
+            <h3 class="q-mt-none q-mb-sm q-mx-none">Enabled sleeves and targets</h3>
+            <ul v-if="enabledSleeves.length" class="policy-list q-ma-none q-pa-none">
+              <li
+                class="row no-wrap justify-between items-center q-gutter-sm q-py-sm q-px-none"
+                v-for="sleeve in enabledSleeves"
+                :key="sleeve.sleeve_key"
+              >
                 <span>{{ sleeve.display_name }}</span>
                 <strong>{{ formatPercent(sleeve.target_pct) }}</strong>
               </li>
             </ul>
-            <p v-else class="empty-note">No enabled sleeves were returned.</p>
+            <p v-else class="empty-note q-ma-none">No enabled sleeves were returned.</p>
 
-            <h3 class="policy-subhead">Allowed securities</h3>
-            <ul v-if="enabledSecurities.length" class="security-list">
+            <h3 class="policy-subhead q-mt-md q-mb-sm q-mx-none">Allowed securities</h3>
+            <ul v-if="enabledSecurities.length" class="security-list q-ma-none q-pa-none">
               <li
+                class="row no-wrap items-center q-gutter-sm justify-start q-py-sm q-px-none"
                 v-for="security in enabledSecurities"
                 :key="`${security.sleeve_key}:${security.ticker}`"
               >
@@ -258,7 +287,7 @@
                 <span>{{ policyLabels[security.sleeve_key] ?? security.sleeve_key }}</span>
               </li>
             </ul>
-            <p v-else class="empty-note">No enabled allowed securities were returned.</p>
+            <p v-else class="empty-note q-ma-none">No enabled allowed securities were returned.</p>
           </template>
         </q-card-section>
       </q-card>
@@ -443,28 +472,22 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/* Grid gaps use Quasar's spacing scale; negative-margin gutters distort grid tracks. */
 .run-help,
 .empty-note {
-  margin: 0;
   color: #657d8b;
   font-size: 0.8rem;
   line-height: 1.55;
 }
 
 .run-help {
-  padding-left: 0.8rem;
   border-left: 3px solid #d4a24f;
-}
-
-.error-stack {
-  display: grid;
-  gap: 0.55rem;
 }
 
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.8rem;
+  gap: 16px;
 }
 
 .summary-card,
@@ -480,19 +503,13 @@ onMounted(() => {
   min-height: 7.2rem;
 }
 
-.summary-card :deep(.q-card__section) {
-  padding: 1rem 1.1rem;
-}
-
 .summary-label {
-  margin: 0;
   color: #466779;
   font-size: 0.75rem;
   font-weight: 750;
 }
 
 .summary-value {
-  margin: 0.45rem 0 0;
   color: #172e41;
   font-size: clamp(1.1rem, 2vw, 1.45rem);
   font-weight: 820;
@@ -505,7 +522,6 @@ onMounted(() => {
 }
 
 .summary-foot {
-  margin: 0.3rem 0 0;
   color: #748894;
   font-size: 0.68rem;
   line-height: 1.4;
@@ -514,21 +530,10 @@ onMounted(() => {
 .content-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.85rem;
-  align-items: start;
-}
-
-.workspace-card :deep(.q-card__section) {
-  padding: clamp(1rem, 2vw, 1.25rem);
-}
-
-.section-heading {
-  align-items: center;
-  margin-bottom: 1rem;
+  gap: 16px;
 }
 
 .section-heading h2 {
-  margin: 0;
   color: #10263d;
   font-size: 1.08rem;
   letter-spacing: -0.025em;
@@ -550,17 +555,10 @@ onMounted(() => {
   grid-column: 1 / -1;
 }
 
-.data-list {
-  display: grid;
-  gap: 0;
-  margin: 0;
-}
-
 .data-list > div {
   display: grid;
   grid-template-columns: minmax(10rem, 0.8fr) minmax(0, 1.2fr);
-  gap: 0.7rem;
-  padding: 0.6rem 0;
+  gap: 8px;
   border-bottom: 1px solid #eaf0f3;
 }
 
@@ -570,20 +568,14 @@ onMounted(() => {
 }
 
 .data-list dd {
-  margin: 0;
   color: #29475a;
   font-size: 0.78rem;
   font-weight: 650;
   overflow-wrap: anywhere;
 }
 
-.coverage-block {
-  margin-top: 1.1rem;
-}
-
 .coverage-block h3,
 .policy-card h3 {
-  margin: 0 0 0.5rem;
   color: #526c7c;
   font-size: 0.76rem;
   letter-spacing: 0.04em;
@@ -594,18 +586,11 @@ onMounted(() => {
 .policy-list,
 .security-list {
   list-style: none;
-  margin: 0;
-  padding: 0;
 }
 
 .coverage-list li,
 .policy-list li,
 .security-list li {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.7rem;
-  padding: 0.55rem 0;
   border-bottom: 1px solid #edf2f4;
   color: #405f71;
   font-size: 0.76rem;
@@ -628,14 +613,6 @@ onMounted(() => {
 .policy-list strong {
   color: #067777;
   white-space: nowrap;
-}
-
-.policy-subhead {
-  margin-top: 1.1rem !important;
-}
-
-.security-list li {
-  justify-content: flex-start;
 }
 
 .security-list strong {
@@ -677,20 +654,16 @@ onMounted(() => {
 
   .summary-grid {
     grid-template-columns: 1fr 1fr;
-    gap: 0.55rem;
+    gap: 8px;
   }
 
   .summary-card {
     min-height: 6.5rem;
   }
 
-  .summary-card :deep(.q-card__section) {
-    padding: 0.75rem;
-  }
-
   .data-list > div {
     grid-template-columns: 1fr;
-    gap: 0.25rem;
+    gap: 4px;
   }
 }
 </style>

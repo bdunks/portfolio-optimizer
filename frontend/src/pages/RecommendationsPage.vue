@@ -1,5 +1,8 @@
 <template>
-  <section class="workspace-page recommendations-page" aria-labelledby="recommendations-title">
+  <section
+    class="workspace-page recommendations-page q-my-none q-mx-auto q-pa-md"
+    aria-labelledby="recommendations-title"
+  >
     <WorkspacePageHeader
       eyebrow="Small-batch review"
       title="Recommendations"
@@ -27,10 +30,17 @@
       submission controls exist on this screen.
     </WorkspaceCapabilityNotice>
 
-    <section class="run-controls" aria-label="Recommendation run controls">
-      <label class="trade-date-control">
+    <section class="run-controls q-pa-md" aria-label="Recommendation run controls">
+      <label class="trade-date-control column no-wrap q-gutter-y-xs">
         <span>Proposed trade date (optional)</span>
-        <input v-model="proposedTradeDate" type="date" :disabled="!canRunOptimizer" />
+        <q-input
+          outlined
+          dense
+          hide-bottom-space
+          v-model="proposedTradeDate"
+          type="date"
+          :disable="!canRunOptimizer"
+        />
       </label>
       <p class="trade-date-help">
         Blank uses the deterministic DEMO date 2026-11-05. This is a calendar date; no weekend or
@@ -40,10 +50,16 @@
         A new run requires a ready synchronized portfolio, healthy local API, and valid active
         policy. Nothing runs automatically.
       </p>
-      <form class="saved-run-form" @submit.prevent="openSavedRun">
-        <label>
+      <form
+        class="saved-run-form row items-end q-gutter-sm justify-end"
+        @submit.prevent="openSavedRun"
+      >
+        <label class="column no-wrap q-gutter-y-xs">
           <span>Open saved run ID</span>
-          <input
+          <q-input
+            outlined
+            dense
+            hide-bottom-space
             v-model.trim="savedRunId"
             type="text"
             autocomplete="off"
@@ -66,7 +82,10 @@
       </form>
     </section>
 
-    <div class="error-stack" aria-label="Recommendation request errors">
+    <div
+      class="error-stack column no-wrap q-gutter-y-sm"
+      aria-label="Recommendation request errors"
+    >
       <ApiActionError
         :error="store.actionState.loadHealth.error"
         title="Local API health could not be loaded"
@@ -149,13 +168,13 @@
 
       <section
         v-if="!runPresentation.reviewMutationPending"
-        class="effects-panel"
+        class="effects-panel q-pa-md column no-wrap q-gutter-y-md"
         aria-labelledby="effects-title"
       >
-        <header class="section-heading">
+        <header class="section-heading row items-start justify-between q-gutter-md">
           <div>
-            <h2 id="effects-title">API allocation effects</h2>
-            <p>{{ effectsDescription }}</p>
+            <h2 class="q-ma-none" id="effects-title">API allocation effects</h2>
+            <p class="q-mt-xs q-mb-none q-mx-none">{{ effectsDescription }}</p>
           </div>
         </header>
         <AllocationTargets
@@ -172,13 +191,13 @@
 
       <section
         v-if="currentRunGroupCount && !runPresentation.reviewMutationPending"
-        class="review-panel"
+        class="review-panel q-pa-md"
         aria-labelledby="groups-title"
       >
-        <header class="section-heading">
+        <header class="section-heading row items-start justify-between q-gutter-md">
           <div>
-            <h2 id="groups-title">Ranked trade groups</h2>
-            <p>
+            <h2 class="q-ma-none" id="groups-title">Ranked trade groups</h2>
+            <p class="q-mt-xs q-mb-none q-mx-none">
               Priority rank is the API rank, not a precision score. Execution sequence and
               dependencies are shown separately.
             </p>
@@ -186,8 +205,11 @@
           <span>{{ filteredGroups.length }} shown / {{ currentRunGroupCount }} returned</span>
         </header>
 
-        <WorkspaceFilterPanel label="Recommendation filters" class="filter-panel">
-          <label>
+        <WorkspaceFilterPanel
+          label="Recommendation filters"
+          class="filter-panel row items-end q-gutter-sm q-pa-sm"
+        >
+          <label class="column no-wrap q-gutter-y-xs">
             <span>Sleeve</span>
             <q-select
               v-model="filters.sleeve"
@@ -206,7 +228,7 @@
               aria-label="Sleeve"
             />
           </label>
-          <label>
+          <label class="column no-wrap q-gutter-y-xs">
             <span>Action</span>
             <q-select
               v-model="filters.action"
@@ -223,7 +245,7 @@
               aria-label="Action"
             />
           </label>
-          <label>
+          <label class="column no-wrap q-gutter-y-xs">
             <span>Tax term</span>
             <q-select
               v-model="filters.term"
@@ -240,7 +262,7 @@
               aria-label="Tax term"
             />
           </label>
-          <label>
+          <label class="column no-wrap q-gutter-y-xs">
             <span>Expected benefit</span>
             <q-select
               v-model="filters.benefit"
@@ -256,7 +278,7 @@
               aria-label="Expected benefit"
             />
           </label>
-          <label>
+          <label class="column no-wrap q-gutter-y-xs">
             <span>Warnings</span>
             <q-select
               v-model="filters.warning"
@@ -273,7 +295,7 @@
               aria-label="Warnings"
             />
           </label>
-          <label>
+          <label class="column no-wrap q-gutter-y-xs">
             <span>Group type</span>
             <q-select
               v-model="filters.groupType"
@@ -289,7 +311,7 @@
               aria-label="Group type"
             />
           </label>
-          <label>
+          <label class="column no-wrap q-gutter-y-xs">
             <span>Sort by API priority rank</span>
             <q-select
               v-model="sortOrder"
@@ -307,11 +329,22 @@
           </label>
         </WorkspaceFilterPanel>
 
-        <fieldset class="selection-tools" :disabled="!canChangeSelection">
-          <legend>Re-solve selected basket</legend>
-          <label class="top-n-control">
+        <fieldset
+          class="selection-tools row items-end q-gutter-sm q-mb-md q-mr-none q-pa-md"
+          :disabled="!canChangeSelection"
+        >
+          <legend class="q-py-none q-px-xs">Re-solve selected basket</legend>
+          <label class="top-n-control column no-wrap q-gutter-y-xs">
             <span>Top N groups by API rank</span>
-            <input v-model.number="topN" type="number" min="1" :max="currentRunGroupCount" />
+            <q-input
+              outlined
+              dense
+              hide-bottom-space
+              v-model.number="topN"
+              type="number"
+              min="1"
+              :max="currentRunGroupCount"
+            />
           </label>
           <q-btn unelevated no-caps type="button" class="secondary-button" @click="selectTopGroups">
             Select top N and re-solve
@@ -329,7 +362,7 @@
           </span>
         </fieldset>
 
-        <p v-if="filteredGroups.length === 0" class="empty-inline">
+        <p v-if="filteredGroups.length === 0" class="empty-inline q-my-xs q-mx-none">
           No returned groups match these filters.
         </p>
         <div v-else class="group-list">
@@ -358,11 +391,13 @@
 
         <section
           v-if="visibleSharedLegs.length"
-          class="shared-legs"
+          class="shared-legs q-pt-md column no-wrap q-gutter-y-sm"
           aria-labelledby="shared-legs-title"
         >
-          <h3 id="shared-legs-title">Shared consolidated legs · each canonical leg shown once</h3>
-          <p>
+          <h3 class="q-mb-none q-mx-none" id="shared-legs-title">
+            Shared consolidated legs · each canonical leg shown once
+          </h3>
+          <p class="q-mr-none q-mb-none q-ml-none">
             These API legs are referenced by multiple groups. A shared BUY cannot be toggled
             independently.
           </p>
@@ -376,10 +411,10 @@
         </section>
         <section
           v-if="visibleUnlinkedLegs.length"
-          class="warning-banner"
+          class="warning-banner q-mt-sm q-mb-none q-mx-none q-pa-md"
           aria-label="Unlinked API legs"
         >
-          <h3>Unlinked API legs — not executable</h3>
+          <h3 class="q-mt-xs q-mb-none q-mx-none">Unlinked API legs — not executable</h3>
           <article v-for="leg in visibleUnlinkedLegs" :key="leg.leg_id" class="unlinked-leg-card">
             <RecommendationLegDetails :leg="leg" :id="legAnchor(leg.leg_id)" />
             <p>
@@ -392,12 +427,12 @@
 
       <section
         v-if="!runPresentation.reviewMutationPending"
-        class="export-panel"
+        class="export-panel row no-wrap justify-between q-gutter-md items-center q-pa-md"
         aria-label="Recommendation export"
       >
         <div>
-          <h2>Export this API run</h2>
-          <p>
+          <h2 class="q-ma-none">Export this API run</h2>
+          <p class="q-mt-xs q-mb-none q-mx-none">
             Exports retain the API run, policy, source generation, as-of time, warnings, and
             demo/actionability metadata.
           </p>
@@ -857,29 +892,19 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.export-panel {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
+/* Grid gaps use Quasar's spacing scale; negative-margin gutters distort grid tracks. */
 .section-heading h2,
 .export-panel h2 {
-  margin: 0;
   color: #10263d;
 }
 
 .section-heading p,
 .export-panel p {
-  margin: 0.35rem 0 0;
   color: #61798a;
   line-height: 1.5;
 }
 
 .warning-banner {
-  margin: 0;
-  padding: 0.8rem 1rem;
   border-radius: 0.65rem;
   line-height: 1.5;
 }
@@ -892,80 +917,18 @@ onMounted(() => {
 .effects-panel,
 .review-panel,
 .export-panel {
-  padding: 1rem;
   border: 1px solid #dce6eb;
   border-radius: 0.8rem;
   background: #fff;
   box-shadow: 0 4px 20px rgb(18 55 77 / 4.5%);
 }
-.saved-run-form,
-.filter-panel,
-.selection-tools {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: end;
-  gap: 0.75rem;
-}
-.saved-run-form {
-  justify-content: flex-end;
-}
+
 label {
-  display: grid;
-  gap: 0.3rem;
   color: #526c7c;
   font-size: 0.76rem;
   font-weight: 650;
 }
-input,
-select,
-textarea {
-  min-width: 9rem;
-  padding: 0.55rem 0.65rem;
-  border: 1px solid #bfd0d8;
-  border-radius: 0.45rem;
-  background: #fff;
-  color: #29475a;
-  font: inherit;
-}
-textarea {
-  min-width: min(28rem, 100%);
-  resize: vertical;
-}
-button {
-  padding: 0.58rem 0.82rem;
-  border: 1px solid #bfd0d8;
-  border-radius: 0.5rem;
-  background: #f7fafb;
-  color: #24475a;
-  font: inherit;
-  font-weight: 700;
-  cursor: pointer;
-}
-button.primary-button {
-  border-color: #087f7d;
-  background: #087f7d;
-  color: #fff;
-}
-button.text-button {
-  border: 0;
-  background: transparent;
-  color: #087f7d;
-  text-decoration: underline;
-}
-button:disabled,
-input:disabled,
-select:disabled,
-textarea:disabled {
-  cursor: not-allowed;
-  opacity: 0.58;
-}
-.error-stack {
-  display: grid;
-  gap: 0.5rem;
-}
-.warning-banner {
-  margin-top: 0.7rem;
-}
+
 .read-only-note,
 .empty-inline,
 .state-message {
@@ -973,10 +936,7 @@ textarea:disabled {
   font-size: 0.78rem;
   line-height: 1.5;
 }
-.effects-panel {
-  display: grid;
-  gap: 1rem;
-}
+
 .section-heading h2 {
   font-size: 1.05rem;
 }
@@ -985,7 +945,6 @@ textarea:disabled {
   font-size: 0.76rem;
 }
 .filter-panel {
-  padding: 0.75rem;
   border: 1px solid #eaf0f3;
   border-radius: 0.65rem;
 }
@@ -997,14 +956,11 @@ textarea:disabled {
   width: 100%;
 }
 .selection-tools {
-  margin: 0.8rem 0;
-  padding: 0.8rem;
   border: 1px solid #dce6eb;
   border-radius: 0.65rem;
   min-width: 0;
 }
 .selection-tools legend {
-  padding: 0 0.3rem;
   color: #29475a;
   font-weight: 800;
 }
@@ -1021,55 +977,28 @@ textarea:disabled {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   min-width: 0;
-  gap: 0.65rem;
+  gap: 8px;
 }
 .shared-legs h3,
 .warning-banner h3 {
-  margin: 0.2rem 0 0;
   color: #29475a;
   font-size: 0.9rem;
 }
 .shared-legs {
-  display: grid;
-  gap: 0.65rem;
-  margin-top: 1rem;
-  padding-top: 1rem;
   border-top: 1px solid #dce6eb;
 }
 .shared-legs > p {
-  margin: 0;
   color: #526c7c;
   font-size: 0.78rem;
 }
-.export-panel {
-  align-items: center;
-  flex-wrap: wrap;
-}
+
 .export-panel > div {
   flex: 1 1 20rem;
 }
 .export-panel h2 {
   font-size: 1rem;
 }
-.empty-state {
-  padding: 1.2rem;
-  border: 1px dashed #bfd0d8;
-  border-radius: 0.75rem;
-  color: #526c7c;
-}
-.empty-state h2 {
-  margin: 0;
-  color: #29475a;
-  font-size: 1rem;
-}
-.empty-state p {
-  margin: 0.55rem 0 0;
-  font-size: 0.8rem;
-  line-height: 1.5;
-}
-.empty-inline {
-  margin: 0.3rem 0;
-}
+
 @media (max-width: 760px) {
   .section-heading {
     flex-direction: column;

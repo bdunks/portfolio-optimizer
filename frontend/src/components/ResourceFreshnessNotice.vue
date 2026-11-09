@@ -1,5 +1,10 @@
 <template>
-  <p v-for="notice in notices" :key="notice" class="resource-freshness-notice" role="status">
+  <p
+    v-for="notice in notices"
+    :key="notice"
+    class="resource-freshness-notice q-my-sm q-mx-none q-pa-sm"
+    role="status"
+  >
     {{ notice }}
   </p>
 </template>
@@ -19,8 +24,6 @@ const notices = computed(() =>
 
 <style scoped>
 .resource-freshness-notice {
-  margin: 0.45rem 0;
-  padding: 0.55rem 0.7rem;
   border: 1px solid #e6cb8d;
   border-radius: 0.5rem;
   background: #fff8e9;

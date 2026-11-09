@@ -260,7 +260,8 @@ test('FakeBroker policy, review, and lot workflows', async ({ seededApp, page, b
   const savedDraft = draftPolicy.drafts.find((revision) => revision.status === 'DRAFT');
   expect(savedDraft).toBeDefined();
   await retainedLoss.fill('4567.89');
-  await page.getByLabel('Select policy source revision').selectOption(originalPolicyId);
+  await page.getByRole('combobox', { name: 'Select policy source revision' }).click();
+  await page.getByRole('option').filter({ hasText: originalPolicyId }).click();
   await expect(
     page.getByText('There are unsaved edits. Loading another revision will discard them.'),
   ).toBeVisible();
@@ -268,7 +269,8 @@ test('FakeBroker policy, review, and lot workflows', async ({ seededApp, page, b
   await expect(retainedLoss).toHaveValue('3000');
   await expect(sleeveName).toHaveValue(originalUsLabel);
 
-  await page.getByLabel('Select policy source revision').selectOption(savedDraft!.id);
+  await page.getByRole('combobox', { name: 'Select policy source revision' }).click();
+  await page.getByRole('option').filter({ hasText: savedDraft!.id }).click();
   await expect(retainedLoss).toHaveValue('3456.78');
   await expect(sleeveName).toHaveValue('Browser renamed US equities');
   const activateDraft = page.getByRole('button', { name: 'Activate saved revision' });
@@ -328,12 +330,12 @@ test('FakeBroker policy, review, and lot workflows', async ({ seededApp, page, b
 
   await page.getByRole('link', { name: /Recommendations/ }).click();
   await expect(page.getByRole('heading', { name: 'Ranked trade groups' })).toBeVisible();
-  const groupCard = page.locator('details.group-card').first();
+  const groupCard = page.locator('.q-expansion-item.group-card').first();
   const groupLabel = await groupCard.getAttribute('aria-label');
   const groupId = groupLabel?.replace('Recommendation group ', '');
   if (!groupId) throw new Error('The first recommendation group has no identifier');
-  if (!(await groupCard.evaluate((element) => (element as HTMLDetailsElement).open))) {
-    await groupCard.locator('summary').click();
+  if ((await groupCard.locator('.group-header').getAttribute('aria-expanded')) !== 'true') {
+    await groupCard.locator('.group-header').click();
   }
   const groupCheckbox = groupCard.getByRole('checkbox', {
     name: `Select recommendation group ${groupId}`,
@@ -386,8 +388,8 @@ test('FakeBroker policy, review, and lot workflows', async ({ seededApp, page, b
     releasePendingAnnotation();
     await page.unroute('**/api/v1/optimizer/runs/**/recommendations/**');
   }
-  if (!(await groupCard.evaluate((element) => (element as HTMLDetailsElement).open))) {
-    await groupCard.locator('summary').click();
+  if ((await groupCard.locator('.group-header').getAttribute('aria-expanded')) !== 'true') {
+    await groupCard.locator('.group-header').click();
   }
   const restoredNoteField = groupCard.locator('textarea');
   await restoredNoteField.fill('');
@@ -409,8 +411,8 @@ test('FakeBroker policy, review, and lot workflows', async ({ seededApp, page, b
   try {
     const rejectionReason = groupCard.getByLabel('Rejection reason (up to 500 characters)');
 
-    if (!(await groupCard.evaluate((element) => (element as HTMLDetailsElement).open))) {
-      await groupCard.locator('summary').click();
+    if ((await groupCard.locator('.group-header').getAttribute('aria-expanded')) !== 'true') {
+      await groupCard.locator('.group-header').click();
     }
     await expect(rejectionReason).toBeVisible();
     await rejectionReason.fill('Controlled E2E rejection rollback');
@@ -420,8 +422,8 @@ test('FakeBroker policy, review, and lot workflows', async ({ seededApp, page, b
     await expect(
       page.getByRole('alert').filter({ hasText: 'Group note or rejection was not saved' }),
     ).toBeVisible();
-    if (!(await groupCard.evaluate((element) => (element as HTMLDetailsElement).open))) {
-      await groupCard.locator('summary').click();
+    if ((await groupCard.locator('.group-header').getAttribute('aria-expanded')) !== 'true') {
+      await groupCard.locator('.group-header').click();
     }
     await expect(groupCheckbox).toBeChecked();
     await expect
@@ -444,8 +446,8 @@ test('FakeBroker policy, review, and lot workflows', async ({ seededApp, page, b
         };
       })
       .toEqual({ selected: false, rejected: true, reason: 'Controlled E2E rejection rollback' });
-    if (!(await groupCard.evaluate((element) => (element as HTMLDetailsElement).open))) {
-      await groupCard.locator('summary').click();
+    if ((await groupCard.locator('.group-header').getAttribute('aria-expanded')) !== 'true') {
+      await groupCard.locator('.group-header').click();
     }
     await expect(
       page.getByText('Saved rejection reason: Controlled E2E rejection rollback'),

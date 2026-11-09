@@ -1,5 +1,8 @@
 <template>
-  <nav class="workspace-pagination" :aria-label="label">
+  <nav
+    class="workspace-pagination row items-center justify-between q-gutter-sm"
+    :aria-label="label"
+  >
     <q-btn
       type="button"
       flat
@@ -63,14 +66,6 @@ function requestPage(direction: -1 | 1): void {
 </script>
 
 <style scoped>
-.workspace-pagination {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.65rem;
-}
-
 .workspace-pagination__status {
   color: #526c7c;
   font-size: 0.78rem;

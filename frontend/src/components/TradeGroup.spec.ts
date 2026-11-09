@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils';
-import { QCheckbox } from 'quasar';
+import { QCheckbox, QExpansionItem } from 'quasar';
 import { findQuasarComponent, setQuasarModelValue } from '@/test-utils/quasar-mount';
 import { describe, expect, it } from 'vitest';
 import TradeGroup from './TradeGroup.vue';
@@ -92,6 +92,14 @@ function mountGroup(props: Partial<InstanceType<typeof TradeGroup>['$props']> = 
 }
 
 describe('TradeGroup', () => {
+  it('uses a collapsed Quasar disclosure with an accessible header', () => {
+    const wrapper = mountGroup();
+    expect(wrapper.findComponent(QExpansionItem).exists()).toBe(true);
+    const header = wrapper.get('.q-expansion-item .q-item[role="button"]');
+    expect(header.attributes('aria-expanded')).toBe('false');
+    expect(header.text()).toContain('Priority 1');
+  });
+
   it('emits group, lot, note, and reject intent without performing page actions', async () => {
     const wrapper = mountGroup();
     expect(

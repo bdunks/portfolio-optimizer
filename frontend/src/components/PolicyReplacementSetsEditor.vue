@@ -1,9 +1,9 @@
 <template>
-  <section class="panel" :aria-labelledby="`${sectionId}-title`">
-    <div class="section-heading">
+  <section class="panel q-pa-md" :aria-labelledby="`${sectionId}-title`">
+    <div class="section-heading items-center row justify-between q-gutter-md q-mb-md">
       <div>
-        <h2 :id="`${sectionId}-title`">Approved ETF replacement sets</h2>
-        <p class="section-subtitle">
+        <h2 class="q-ma-none" :id="`${sectionId}-title`">Approved ETF replacement sets</h2>
+        <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
           Set ID groups candidate pairs or triplets; priority, suitability, enabled status, and
           sleeve assignments are explicit policy data. Distinct approved funds are a user
           assumption, not a wash-sale guarantee or automated exposure-equivalence check.
@@ -17,15 +17,15 @@
       <table class="editor-table securities-table">
         <thead>
           <tr>
-            <th>Order</th>
-            <th>Ticker</th>
-            <th>Replacement set ID</th>
-            <th>Priority</th>
-            <th>Parent sleeve</th>
-            <th>Sub-sleeve</th>
-            <th>Exposure suitability (API note)</th>
-            <th>Enabled</th>
-            <th>Actions</th>
+            <th class="q-pa-sm">Order</th>
+            <th class="q-pa-sm">Ticker</th>
+            <th class="q-pa-sm">Replacement set ID</th>
+            <th class="q-pa-sm">Priority</th>
+            <th class="q-pa-sm">Parent sleeve</th>
+            <th class="q-pa-sm">Sub-sleeve</th>
+            <th class="q-pa-sm">Exposure suitability (API note)</th>
+            <th class="q-pa-sm">Enabled</th>
+            <th class="q-pa-sm">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -33,8 +33,8 @@
             v-for="(security, index) in allowedSecurities"
             :key="`${security.ticker}-${security.replacement_set_id}-${index}`"
           >
-            <td>
-              <div class="order-tools">
+            <td class="q-pa-sm">
+              <div class="order-tools row no-wrap q-gutter-xs q-mb-xs">
                 <q-btn
                   unelevated
                   no-caps
@@ -59,39 +59,50 @@
                 </q-btn>
               </div>
             </td>
-            <td>
-              <label class="compact-field"
+            <td class="q-pa-sm">
+              <label class="compact-field column no-wrap q-gutter-y-xs"
                 ><span class="sr-only">ETF ticker</span
-                ><input
-                  :value="security.ticker"
-                  @input="setSecurityText(index, 'ticker', $event)"
+                ><q-input
+                  outlined
+                  dense
+                  hide-bottom-space
+                  :model-value="security.ticker"
+                  @update:model-value="setSecurityText(index, 'ticker', String($event ?? ''))"
                   aria-label="ETF ticker"
                   placeholder="Ticker"
               /></label>
             </td>
-            <td>
-              <label class="compact-field"
+            <td class="q-pa-sm">
+              <label class="compact-field column no-wrap q-gutter-y-xs"
                 ><span class="sr-only">Replacement set ID</span
-                ><input
-                  :value="security.replacement_set_id"
-                  @input="setSecurityText(index, 'replacement_set_id', $event)"
+                ><q-input
+                  outlined
+                  dense
+                  hide-bottom-space
+                  :model-value="security.replacement_set_id"
+                  @update:model-value="
+                    setSecurityText(index, 'replacement_set_id', String($event ?? ''))
+                  "
                   aria-label="Replacement set ID"
                   placeholder="Set ID"
               /></label>
             </td>
-            <td>
-              <label class="compact-field priority-input"
+            <td class="q-pa-sm">
+              <label class="compact-field priority-input column no-wrap q-gutter-y-xs"
                 ><span class="sr-only">Candidate priority</span
-                ><input
-                  :value="security.priority"
-                  @input="setSecurityPriority(index, $event)"
+                ><q-input
+                  outlined
+                  dense
+                  hide-bottom-space
+                  :model-value="security.priority"
+                  @update:model-value="setSecurityPriority(index, String($event ?? ''))"
                   type="number"
                   step="1"
                   aria-label="Candidate priority"
               /></label>
             </td>
-            <td>
-              <label class="compact-field"
+            <td class="q-pa-sm">
+              <label class="compact-field column no-wrap q-gutter-y-xs"
                 ><span class="sr-only">Candidate parent sleeve</span
                 ><q-select
                   :model-value="security.sleeve_key"
@@ -111,8 +122,8 @@
                   @update:model-value="setSecurityParent(index, $event)"
               /></label>
             </td>
-            <td>
-              <label class="compact-field"
+            <td class="q-pa-sm">
+              <label class="compact-field column no-wrap q-gutter-y-xs"
                 ><span class="sr-only">Candidate sub-sleeve</span
                 ><q-select
                   :model-value="security.sub_sleeve_key"
@@ -132,17 +143,22 @@
                   @update:model-value="setSecuritySubSleeve(index, $event)"
               /></label>
             </td>
-            <td>
-              <label class="compact-field"
+            <td class="q-pa-sm">
+              <label class="compact-field column no-wrap q-gutter-y-xs"
                 ><span class="sr-only">Exposure suitability note</span
-                ><input
-                  :value="security.exposure_suitability ?? ''"
-                  @input="setSecurityText(index, 'exposure_suitability', $event)"
+                ><q-input
+                  outlined
+                  dense
+                  hide-bottom-space
+                  :model-value="security.exposure_suitability ?? ''"
+                  @update:model-value="
+                    setSecurityText(index, 'exposure_suitability', String($event ?? ''))
+                  "
                   aria-label="Exposure suitability note"
                   placeholder="Optional API text"
               /></label>
             </td>
-            <td>
+            <td class="q-pa-sm">
               <q-checkbox
                 class="toggle-field"
                 dense
@@ -152,7 +168,7 @@
                 @update:model-value="setSecurityEnabled(index, $event)"
               />
             </td>
-            <td>
+            <td class="q-pa-sm">
               <q-btn
                 unelevated
                 no-caps
@@ -166,7 +182,7 @@
             </td>
           </tr>
           <tr v-if="allowedSecurities.length === 0">
-            <td colspan="9" class="empty-cell">
+            <td colspan="9" class="empty-cell q-pa-md">
               No replacement candidates configured. Nothing is inferred or added automatically.
             </td>
           </tr>
@@ -215,9 +231,8 @@ function updateSecurity(index: number, patch: Partial<AllowedSecurityInput>): vo
 function setSecurityText(
   index: number,
   key: 'ticker' | 'replacement_set_id' | 'exposure_suitability',
-  event: Event,
+  value: string,
 ): void {
-  const value = (event.target as HTMLInputElement).value;
   if (key === 'ticker') updateSecurity(index, { ticker: value });
   else if (key === 'replacement_set_id') updateSecurity(index, { replacement_set_id: value });
   else updateSecurity(index, { exposure_suitability: value });
@@ -231,8 +246,7 @@ function setSecuritySubSleeve(index: number, value: string | null): void {
   updateSecurity(index, { sub_sleeve_key: value });
 }
 
-function setSecurityPriority(index: number, event: Event): void {
-  const value = (event.target as HTMLInputElement).value;
+function setSecurityPriority(index: number, value: string): void {
   updateSecurity(index, { priority: value.trim() ? Number(value) : Number.NaN });
 }
 

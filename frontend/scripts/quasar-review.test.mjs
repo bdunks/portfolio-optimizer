@@ -107,9 +107,34 @@ test('loads full real inventory locally and groups/filters it', async () => {
   await expect(page.locator('.group')).toHaveCount(
     new Set(actual.findings.map((f) => f.rule)).size,
   );
-  await page.locator('#search').fill('q-card__section');
-  await expect(page.locator('#counts')).not.toContainText(`${actual.findings.length} visible`);
-  assert.ok((await page.locator('article').count()) > 0);
+
+  const query = actual.findings[0].id.toLowerCase();
+  const matches = actual.findings.filter((f) =>
+    [f.file, f.rule, f.evidence, f.context, f.suggestion, f.caution, f.id, 'unreviewed']
+      .join(' ')
+      .toLowerCase()
+      .includes(query),
+  );
+  assert.ok(matches.length > 0, 'Search query comes from a real finding ID.');
+  assert.ok(matches.length < actual.findings.length, 'Search must filter out findings.');
+  await page.locator('#search').fill(query);
+  await expect(page.locator('#counts')).toContainText(`${matches.length} visible`);
+  await expect(page.locator('.group')).toHaveCount(new Set(matches.map((f) => f.rule)).size);
+  await expect(page.locator('article')).toHaveCount(matches.length);
+
+  const target = matches[0];
+  const visibleInGroup = matches.filter((f) => f.rule === target.rule).length;
+  const totalInGroup = actual.findings.filter((f) => f.rule === target.rule).length;
+  const group = page.locator('.group').filter({
+    has: page.locator(':scope > summary', {
+      hasText: `${target.rule} — ${visibleInGroup} visible / ${totalInGroup} total`,
+    }),
+  });
+  await expect(group).toHaveCount(1);
+  await group.locator(':scope > summary').click();
+  const targetArticle = page.locator(`[id="finding-${target.id}"]`);
+  await expect(targetArticle).toBeVisible();
+  await expect(targetArticle).toContainText(target.file);
 });
 
 test('current context/evidence and suggested equivalent are visible without expanding caution', async () => {
@@ -347,16 +372,25 @@ test('unexported direct decisions warn before reload and can be kept by cancelli
 test('keyboard can approve then reject at tablet width, with visible comparisons and no overflow', async () => {
   await page.setViewportSize({ width: 768, height: 1024 });
   await load();
-  await page.locator('.group > summary').first().focus();
+  const summary = page.locator('.group > summary').first();
+  await expect(summary).toBeVisible();
+  await summary.focus();
+  await expect(summary).toBeFocused();
   await page.keyboard.press('Enter');
   const card = page.locator('#finding-z1');
-  await card.getByRole('button', { name: 'Approve', exact: true }).focus();
+  await expect(card).toBeVisible();
+  const approve = card.getByRole('button', { name: 'Approve', exact: true });
+  const reject = card.getByRole('button', { name: 'Reject', exact: true });
+  await approve.focus();
+  await expect(approve).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(card.locator('.status-badge')).toHaveText('approved');
+  await expect(approve).toBeFocused();
   await page.keyboard.press('Tab');
-  await expect(card.getByRole('button', { name: 'Reject', exact: true })).toBeFocused();
+  await expect(reject).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(card.locator('.status-badge')).toHaveText('rejected');
+  await expect(reject).toBeFocused();
   await expect(page.locator('#review-dialog')).not.toBeVisible();
   await expect(card.locator('.current pre')).toBeVisible();
   await expect(card.locator('.suggested p')).toBeVisible();

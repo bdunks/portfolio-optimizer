@@ -8,11 +8,11 @@
         "@quasar/mcp@latest"
       ]
     },
-    "primevue": {
+    "shadcn": {
       "command": "npx",
       "args": [
-        "-y",
-        "@primevue/mcp@>=5.0.0 <6.0.0"
+        "shadcn-vue@latest",
+        "mcp"
       ]
     }
   }

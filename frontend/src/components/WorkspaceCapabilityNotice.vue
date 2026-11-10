@@ -1,5 +1,11 @@
 <template>
-  <QBanner rounded class="workspace-capability-notice" role="status" aria-live="polite">
+  <QBanner
+    dense
+    rounded
+    class="workspace-capability-notice bg-amber-1 text-brown-10"
+    role="status"
+    aria-live="polite"
+  >
     <strong>{{ label }}</strong> <slot />
   </QBanner>
 </template>
@@ -9,13 +15,3 @@ import { QBanner } from 'quasar';
 
 defineProps<{ label: string }>();
 </script>
-
-<style scoped>
-.workspace-capability-notice {
-  border: 1px solid #f2dcad;
-  background: #fff7e8;
-  color: #765016;
-  font-size: 0.82rem;
-  line-height: 1.5;
-}
-</style>

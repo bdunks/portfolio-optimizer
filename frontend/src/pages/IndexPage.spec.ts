@@ -6,6 +6,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { useWorkspaceStore } from '@/stores/workspace-store';
 import IndexPage from './IndexPage.vue';
+import { QBanner, QCard } from 'quasar';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -159,8 +160,15 @@ describe('IndexPage', () => {
     });
 
     expect(wrapper.get('.workspace-page').classes()).toContain('overview-page');
+    expect(
+      wrapper.findAllComponents(QCard).filter((card) => card.classes().includes('summary-card')),
+    ).toHaveLength(4);
+    expect(
+      wrapper.findAllComponents(QCard).filter((card) => card.classes().includes('workspace-card')),
+    ).toHaveLength(5);
     expect(wrapper.get('h1').text()).toBe('Overview');
 
+    expect(wrapper.findAll('.overview-page-action')).toHaveLength(2);
     wrapper.unmount();
   });
   it('uses shared freshness selectors to withhold an unconfirmed run comparison', () => {
@@ -219,6 +227,9 @@ describe('IndexPage', () => {
     const wrapper = mountWorkspacePageWithQuasar(IndexPage, {
       global: { plugins: [pinia, router] },
     });
+    expect(wrapper.get('.policy-subhead').classes()).toEqual(
+      expect.arrayContaining(['text-subtitle2', 'text-blue-grey-8', 'text-uppercase']),
+    );
 
     expect(wrapper.text()).toContain('No current matching recommendation run');
 
@@ -320,6 +331,12 @@ describe('IndexPage', () => {
     expect(wrapper.text()).toContain(
       'Portfolio effects use policy revision portfolio-revision-a; the active policy is active-policy-b.',
     );
+    const mismatchBanner = wrapper
+      .findAllComponents(QBanner)
+      .find((banner) =>
+        banner.text().includes('Portfolio effects use policy revision portfolio-revision-a'),
+      );
+    expect(mismatchBanner?.attributes('role')).toBe('status');
     expect(wrapper.get('.allocation-card').text()).toContain('us');
 
     expect(wrapper.get('.allocation-card').text()).toContain('100.0000%');

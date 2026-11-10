@@ -1,55 +1,52 @@
 <template>
   <section class="allocation-panel column no-wrap q-gutter-y-md" aria-labelledby="allocation-title">
     <header>
-      <h2 class="q-ma-none" id="allocation-title">Portfolio Allocation</h2>
-      <p class="q-mt-xs q-mb-none q-mx-none">
+      <h2 class="q-ma-none text-h6" id="allocation-title">Portfolio Allocation</h2>
+      <p class="q-mt-xs q-mb-none q-mx-none text-body2">
         API-reported sleeve weights as percentages of the whole portfolio.
       </p>
     </header>
-    <p
+
+    <q-banner
       v-if="showNoCurrentBasket"
-      class="comparison-note q-mr-none q-mb-none q-ml-none q-py-sm q-px-md"
+      class="q-my-sm rounded bg-amber-1 text-brown-10"
       role="status"
     >
       No current proposed basket from a matching optimizer run. We show only allocation values
       reported by the portfolio API.
-    </p>
+    </q-banner>
 
     <p v-if="!allocation" class="empty-state q-mr-none q-mb-none q-ml-none">
       Allocation data is unavailable from the portfolio API.
     </p>
-    <WorkspaceTableFrame
-      v-else-if="sleeveKeys.length"
-      class="table-wrap"
-      label="Portfolio allocation weights"
-    >
-      <table>
+    <WorkspaceTableFrame v-else-if="sleeveKeys.length" label="Portfolio allocation weights">
+      <q-markup-table class="allocation-table" wrap-cells>
         <caption class="visually-hidden">
           Current, proposed basket, and policy target allocation weights
         </caption>
         <thead>
           <tr>
-            <th class="q-pa-sm" scope="col">Sleeve</th>
-            <th class="q-pa-sm" scope="col">Current</th>
-            <th class="q-pa-sm" scope="col">Proposed basket</th>
-            <th class="q-pa-sm" scope="col">Policy target</th>
+            <th scope="col">Sleeve</th>
+            <th scope="col">Current</th>
+            <th scope="col">Proposed basket</th>
+            <th scope="col">Policy target</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="sleeveKey in sleeveKeys" :key="sleeveKey">
-            <th class="q-pa-sm" scope="row">{{ labels[sleeveKey] ?? sleeveKey }}</th>
-            <td class="q-pa-sm">
+            <th scope="row">{{ labels[sleeveKey] ?? sleeveKey }}</th>
+            <td>
               {{ formatPercent(allocation.current?.sleeve_weights_pct[sleeveKey]) }}
             </td>
-            <td class="q-pa-sm">
+            <td>
               {{ formatPercent(allocation.proposed?.sleeve_weights_pct[sleeveKey]) }}
             </td>
-            <td class="q-pa-sm">
+            <td>
               {{ formatPercent(allocation.target?.sleeve_weights_pct[sleeveKey]) }}
             </td>
           </tr>
         </tbody>
-      </table>
+      </q-markup-table>
     </WorkspaceTableFrame>
     <p v-else class="empty-state q-mr-none q-mb-none q-ml-none">
       No allocation weights were returned.
@@ -87,56 +84,8 @@ const sleeveKeys = computed(() => {
 </script>
 
 <style scoped>
-.allocation-panel h2 {
-  color: #10263d;
-  font-size: 1.1rem;
-}
-
-.allocation-panel header p {
-  color: #61798a;
-  font-size: 0.82rem;
-}
-
-.table-wrap {
-  overflow-x: auto;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-  text-align: left;
-}
-
-th,
-td {
-  border-bottom: 1px solid #eaf0f3;
-  font-size: 0.8rem;
-}
-
-thead th {
-  background: #f3f8fa;
-  color: #627b8b;
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-tbody th {
-  color: #29475a;
-  font-weight: 650;
-}
-
-tbody td {
-  color: #35586c;
+.allocation-table :deep(tbody td) {
   font-variant-numeric: tabular-nums;
-}
-
-.comparison-note {
-  border-left: 3px solid #d19536;
-  background: #fff7e9;
-  color: #765016;
-  line-height: 1.5;
-  font-size: 0.78rem;
 }
 
 .empty-state {

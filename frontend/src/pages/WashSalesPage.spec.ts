@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import type { WashSalesResponse } from '@/types/api';
 import WashSalesPage from './WashSalesPage.vue';
-import { QSelect } from 'quasar';
+import { QBadge, QBanner, QCard, QMarkupTable, QSelect } from 'quasar';
 import { setQuasarModelValue } from '@/test-utils/quasar-mount';
 
 const response: WashSalesResponse = {
@@ -91,6 +91,33 @@ describe('WashSalesPage', () => {
     vi.stubGlobal('fetch', fetcher);
     const wrapper = mount(WashSalesPage);
     await flushPromises();
+    const cards = wrapper.findAllComponents(QCard);
+    expect(cards).toHaveLength(4);
+    expect(wrapper.get('form[aria-label="Wash-sale filters"]').classes()).toContain('q-card');
+    expect(wrapper.get('.coverage-card').element.tagName).toBe('SECTION');
+    expect(wrapper.get('.data-card[aria-labelledby="history-title"]').element.tagName).toBe(
+      'SECTION',
+    );
+    const markupTables = wrapper.findAllComponents(QMarkupTable);
+    expect(markupTables).toHaveLength(3);
+    expect(
+      markupTables.map((markup) =>
+        markup.element.querySelector('caption')?.textContent?.replace(/\s+/g, ' ').trim(),
+      ),
+    ).toEqual([
+      'Acquisition history with API-provided lookback dates',
+      'Managed-account transaction history returned by the API',
+      'Current and proposed purchase restrictions',
+    ]);
+    for (const markup of markupTables) {
+      expect(markup.element.querySelectorAll('table')).toHaveLength(1);
+      const table = markup.element.querySelector('table');
+      expect(table?.querySelectorAll('thead th[scope="col"]')).toHaveLength(
+        table?.querySelectorAll('thead th').length,
+      );
+      expect(markup.element.getAttribute('tabindex')).toBe('0');
+      expect(markup.element.closest('[role="region"]')?.getAttribute('tabindex')).toBe('0');
+    }
 
     expect(wrapper.get('.workspace-page').classes()).toContain('workspace-page');
     expect(wrapper.text()).toContain('synthetic-test-source');
@@ -103,9 +130,26 @@ describe('WashSalesPage', () => {
     expect(wrapper.text()).toContain('affected tax-lot IDs are not included');
     expect(wrapper.text()).toContain('DEMO ONLY');
 
+    const provenanceBadge = wrapper.findComponent(QBadge);
+    expect(provenanceBadge.text()).toBe('DEMO');
+    expect(provenanceBadge.attributes('role')).toBe('status');
+    expect(provenanceBadge.props('color')).toBe('amber-1');
     await wrapper.find('input[type="search"]').setValue('synthetic-proposed-loss');
     expect(wrapper.text()).toContain('synthetic-proposed-loss');
     expect(wrapper.text()).not.toContain('synthetic-current-loss');
+  });
+  it('labels API-sourced wash data with the same status widget', async () => {
+    const fetcher = vi.fn<typeof fetch>(() =>
+      Promise.resolve(jsonResponse({ ...response, demo: false })),
+    );
+    vi.stubGlobal('fetch', fetcher);
+    const wrapper = mount(WashSalesPage);
+    await flushPromises();
+
+    const provenanceBadge = wrapper.findComponent(QBadge);
+    expect(provenanceBadge.text()).toBe('API');
+    expect(provenanceBadge.attributes('role')).toBe('status');
+    expect(provenanceBadge.props('color')).toBe('amber-1');
   });
 
   it('filters transaction history by kind without changing API-supplied decimal quantities', async () => {
@@ -158,5 +202,32 @@ describe('WashSalesPage', () => {
     expect(wrapper.text()).toContain('The API returned no transaction-history rows.');
     expect(wrapper.text()).toContain('The API returned no current or proposed restrictions.');
     expect(calls).toBe(2);
+  });
+  it('shows the conditional wash-sale loading state as a polite banner', async () => {
+    let resolveWashSales!: (value: Response) => void;
+    const fetcher = vi.fn<typeof fetch>(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveWashSales = resolve;
+        }),
+    );
+    vi.stubGlobal('fetch', fetcher);
+    const wrapper = mount(WashSalesPage);
+    await flushPromises();
+
+    const loadingBanner = wrapper
+      .findAllComponents(QBanner)
+      .find((banner) => banner.text().includes('Loading wash-sale history and restrictions'));
+    expect(loadingBanner?.attributes('role')).toBe('status');
+    expect(loadingBanner?.text()).toContain('from the local API');
+
+    resolveWashSales(jsonResponse(response));
+    await flushPromises();
+    expect(
+      wrapper
+        .findAllComponents(QBanner)
+        .some((banner) => banner.text().includes('Loading wash-sale history and restrictions')),
+    ).toBe(false);
+    wrapper.unmount();
   });
 });

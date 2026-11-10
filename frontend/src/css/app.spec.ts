@@ -4,6 +4,10 @@ import { describe, expect, it } from 'vitest';
 
 const workspaceStyles = readFileSync(resolve(process.cwd(), 'src/css/app.scss'), 'utf8');
 
+const pageHeaderStyles = readFileSync(
+  resolve(process.cwd(), 'src/components/WorkspacePageHeader.vue'),
+  'utf8',
+);
 describe('shared workspace styles', () => {
   it('keeps page grids shrinkable and workspace titles standardized', () => {
     expect(workspaceStyles).toMatch(
@@ -15,10 +19,9 @@ describe('shared workspace styles', () => {
     );
   });
 
-  it('avoids a fixed basis that becomes excess height in column headers', () => {
-    expect(workspaceStyles).toContain(
-      '.workspace-page .page-header > :first-child {\n  flex: 1 1 auto;\n}',
-    );
+  it('keeps page-heading flex sizing in its owning component', () => {
+    expect(workspaceStyles).not.toContain('.workspace-page .page-header > :first-child');
+    expect(pageHeaderStyles).toMatch(/\.page-heading\s*\{[^}]*flex:\s*1 1 auto;/s);
     expect(workspaceStyles).not.toContain('flex: 1 1 20rem;');
   });
 });

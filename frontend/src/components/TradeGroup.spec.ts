@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils';
-import { QCheckbox, QExpansionItem } from 'quasar';
+import { QBadge, QCard, QCheckbox, QChip, QExpansionItem } from 'quasar';
 import { findQuasarComponent, setQuasarModelValue } from '@/test-utils/quasar-mount';
 import { describe, expect, it } from 'vitest';
 import TradeGroup from './TradeGroup.vue';
@@ -95,17 +95,49 @@ describe('TradeGroup', () => {
   it('uses a collapsed Quasar disclosure with an accessible header', () => {
     const wrapper = mountGroup();
     expect(wrapper.findComponent(QExpansionItem).exists()).toBe(true);
+    const card = wrapper.findComponent(QCard);
+    expect(card.exists()).toBe(true);
+    expect(card.classes()).toContain('q-card');
+    expect(wrapper.get('.group-body').classes()).toContain('q-px-md');
     const header = wrapper.get('.q-expansion-item .q-item[role="button"]');
     expect(header.attributes('aria-expanded')).toBe('false');
     expect(header.text()).toContain('Priority 1');
+    const priorityChip = wrapper.findComponent(QChip);
+    expect(priorityChip.text()).toBe('Priority 1');
+    expect(priorityChip.props('clickable')).toBe(false);
+    expect(priorityChip.attributes('role')).toBeUndefined();
+    expect(wrapper.findAllComponents(QBadge)).toHaveLength(0);
+  });
+
+  it('shows selected and rejected API states as explicit Quasar status badges', () => {
+    const wrapper = mountGroup({ group: group({ selected: true, rejected: true }) });
+    const statusBadges = wrapper.findAllComponents(QBadge);
+
+    expect(statusBadges.map((badge) => badge.text())).toEqual([
+      'Selected by API',
+      'Rejected by user',
+    ]);
+    expect(statusBadges.map((badge) => badge.attributes('role'))).toEqual(['status', 'status']);
+    expect(statusBadges.map((badge) => badge.props('color'))).toEqual(['teal-1', 'red-1']);
   });
 
   it('emits group, lot, note, and reject intent without performing page actions', async () => {
     const wrapper = mountGroup();
-    expect(
-      findQuasarComponent(wrapper, QCheckbox, 'Select recommendation group group-a').exists(),
-    ).toBe(true);
+    const groupSelection = findQuasarComponent(
+      wrapper,
+      QCheckbox,
+      'Select recommendation group group-a',
+    );
+    expect(groupSelection.exists()).toBe(true);
+    expect(groupSelection.classes()).toEqual(
+      expect.arrayContaining(['text-caption', 'text-weight-bold', 'text-blue-grey-8']),
+    );
     expect(wrapper.get('[aria-label="Notes and rejection for group-a"]')).toBeDefined();
+    const annotationLabels = wrapper.findAll('.annotation-panel label.column');
+    expect(annotationLabels).toHaveLength(2);
+    expect(annotationLabels[0]?.classes()).toEqual(
+      expect.arrayContaining(['text-caption', 'text-weight-bold', 'text-blue-grey-8']),
+    );
 
     await setQuasarModelValue(wrapper, QCheckbox, 'Select recommendation group group-a', true);
     expect(wrapper.emitted('groupSelection')).toEqual([[{ groupId: 'group-a', selected: true }]]);
@@ -213,6 +245,7 @@ describe('TradeGroup', () => {
     expect(parent.findAll('.group-leg-detail')).toHaveLength(0);
     expect(parent.findAll('.leg-card')).toHaveLength(0);
     expect(parent.text().match(/canonical details appear once/g)).toHaveLength(2);
+    expect(parent.findAll('span.shared-note.block')).toHaveLength(2);
   });
 
   it('restores a rejected group through a user-intent event', async () => {

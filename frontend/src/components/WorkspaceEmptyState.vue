@@ -1,27 +1,18 @@
 <template>
-  <section
-    class="workspace-empty-state empty-state column no-wrap q-gutter-y-sm"
+  <q-banner
+    class="workspace-empty-state bg-blue-grey-1 text-blue-grey-10"
+    dense
+    rounded
     role="status"
     aria-live="polite"
   >
-    <h2 class="q-mr-none q-mb-none q-ml-none">{{ title }}</h2>
-    <p class="q-mr-none q-mb-none q-ml-none"><slot /></p>
+    <h2 class="q-ma-none text-primary text-subtitle1">{{ title }}</h2>
+    <p class="q-ma-none text-blue-grey-7"><slot /></p>
     <slot name="details" />
     <slot name="action" />
-  </section>
+  </q-banner>
 </template>
 
 <script setup lang="ts">
 defineProps<{ title: string }>();
 </script>
-
-<style scoped>
-.workspace-empty-state h2 {
-  color: #10263d;
-  font-size: 1.05rem;
-}
-
-.workspace-empty-state p {
-  color: #718795;
-}
-</style>

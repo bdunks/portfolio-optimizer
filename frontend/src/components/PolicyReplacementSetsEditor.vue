@@ -1,8 +1,8 @@
 <template>
-  <section class="panel q-pa-md" :aria-labelledby="`${sectionId}-title`">
+  <q-card tag="section" class="panel q-pa-md" :aria-labelledby="`${sectionId}-title`">
     <div class="section-heading items-center row justify-between q-gutter-md q-mb-md">
       <div>
-        <h2 class="q-ma-none" :id="`${sectionId}-title`">Approved ETF replacement sets</h2>
+        <h2 class="q-ma-none text-h6" :id="`${sectionId}-title`">Approved ETF replacement sets</h2>
         <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
           Set ID groups candidate pairs or triplets; priority, suitability, enabled status, and
           sleeve assignments are explicit policy data. Distinct approved funds are a user
@@ -21,19 +21,22 @@
         + Add ETF candidate
       </q-btn>
     </div>
-    <WorkspaceTableFrame class="table-scroll" label="Replacement security candidates">
-      <table class="editor-table securities-table">
+    <WorkspaceTableFrame label="Replacement security candidates">
+      <q-markup-table class="editor-table securities-table" wrap-cells>
+        <caption class="sr-only">
+          Configured ETF replacement candidates and policy settings
+        </caption>
         <thead>
           <tr>
-            <th class="q-pa-sm">Order</th>
-            <th class="q-pa-sm">Ticker</th>
-            <th class="q-pa-sm">Replacement set ID</th>
-            <th class="q-pa-sm">Priority</th>
-            <th class="q-pa-sm">Parent sleeve</th>
-            <th class="q-pa-sm">Sub-sleeve</th>
-            <th class="q-pa-sm">Exposure suitability (API note)</th>
-            <th class="q-pa-sm">Enabled</th>
-            <th class="q-pa-sm">Actions</th>
+            <th scope="col">Order</th>
+            <th scope="col">Ticker</th>
+            <th scope="col">Replacement set ID</th>
+            <th scope="col">Priority</th>
+            <th scope="col">Parent sleeve</th>
+            <th scope="col">Sub-sleeve</th>
+            <th scope="col">Exposure suitability (API note)</th>
+            <th scope="col">Enabled</th>
+            <th scope="col">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -41,7 +44,7 @@
             v-for="(security, index) in allowedSecurities"
             :key="`${security.ticker}-${security.replacement_set_id}-${index}`"
           >
-            <td class="q-pa-sm">
+            <td>
               <div class="order-tools row no-wrap q-gutter-xs q-mb-xs">
                 <q-btn
                   no-caps
@@ -73,7 +76,7 @@
                 </q-btn>
               </div>
             </td>
-            <td class="q-pa-sm">
+            <td>
               <label class="compact-field column no-wrap q-gutter-y-xs"
                 ><span class="sr-only">ETF ticker</span
                 ><q-input
@@ -86,7 +89,7 @@
                   placeholder="Ticker"
               /></label>
             </td>
-            <td class="q-pa-sm">
+            <td>
               <label class="compact-field column no-wrap q-gutter-y-xs"
                 ><span class="sr-only">Replacement set ID</span
                 ><q-input
@@ -101,7 +104,7 @@
                   placeholder="Set ID"
               /></label>
             </td>
-            <td class="q-pa-sm">
+            <td>
               <label class="compact-field priority-input column no-wrap q-gutter-y-xs"
                 ><span class="sr-only">Candidate priority</span
                 ><q-input
@@ -115,7 +118,7 @@
                   aria-label="Candidate priority"
               /></label>
             </td>
-            <td class="q-pa-sm">
+            <td>
               <label class="compact-field column no-wrap q-gutter-y-xs"
                 ><span class="sr-only">Candidate parent sleeve</span
                 ><q-select
@@ -136,7 +139,7 @@
                   @update:model-value="setSecurityParent(index, $event)"
               /></label>
             </td>
-            <td class="q-pa-sm">
+            <td>
               <label class="compact-field column no-wrap q-gutter-y-xs"
                 ><span class="sr-only">Candidate sub-sleeve</span
                 ><q-select
@@ -157,7 +160,7 @@
                   @update:model-value="setSecuritySubSleeve(index, $event)"
               /></label>
             </td>
-            <td class="q-pa-sm">
+            <td>
               <label class="compact-field column no-wrap q-gutter-y-xs"
                 ><span class="sr-only">Exposure suitability note</span
                 ><q-input
@@ -172,9 +175,9 @@
                   placeholder="Optional API text"
               /></label>
             </td>
-            <td class="q-pa-sm">
+            <td>
               <q-checkbox
-                class="toggle-field"
+                class="text-caption text-weight-bold text-blue-grey-8"
                 dense
                 color="primary"
                 :model-value="security.enabled"
@@ -182,7 +185,7 @@
                 @update:model-value="setSecurityEnabled(index, $event)"
               />
             </td>
-            <td class="q-pa-sm">
+            <td>
               <q-btn
                 no-caps
                 type="button"
@@ -198,14 +201,14 @@
             </td>
           </tr>
           <tr v-if="allowedSecurities.length === 0">
-            <td colspan="9" class="empty-cell q-pa-md">
+            <td colspan="9" class="empty-cell">
               No replacement candidates configured. Nothing is inferred or added automatically.
             </td>
           </tr>
         </tbody>
-      </table>
+      </q-markup-table>
     </WorkspaceTableFrame>
-  </section>
+  </q-card>
 </template>
 
 <script setup lang="ts">

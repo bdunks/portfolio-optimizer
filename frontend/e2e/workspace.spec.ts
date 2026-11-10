@@ -38,6 +38,216 @@ async function expectNoHorizontalOverflow(page: Page, label: string): Promise<vo
   expect(dimensions.body, `${label} body width`).toBeLessThanOrEqual(dimensions.viewport + 1);
 }
 
+async function expectDrawerSettled(page: Page, open: boolean): Promise<void> {
+  const drawer = page.locator('aside.q-drawer');
+  await expect
+    .poll(() =>
+      drawer.evaluate((element, shouldBeOpen) => {
+        const rect = element.getBoundingClientRect();
+        const fullyVisible = rect.left >= 0 && rect.right <= window.innerWidth && rect.width > 0;
+        const fullyHidden = rect.right <= 0;
+        const transitioning = element
+          .getAnimations({ subtree: true })
+          .some((animation) => animation.playState === 'running');
+        return !transitioning && (shouldBeOpen ? fullyVisible : fullyHidden);
+      }, open),
+    )
+    .toBe(true);
+}
+
+type ContrastSample = {
+  foreground: string;
+  background: string;
+  visible: boolean;
+};
+
+type NavigationContrastSnapshot = {
+  header: ContrastSample;
+  brandTitle: ContrastSample;
+  brandSubtitle: ContrastSample;
+  footerTitle: ContrastSample;
+  footerBody: ContrastSample;
+  links: Array<{
+    path: string | null;
+    active: boolean;
+    primary: ContrastSample;
+    caption: ContrastSample;
+    icon: ContrastSample;
+  }>;
+};
+
+async function readNavigationContrast(page: Page): Promise<NavigationContrastSnapshot> {
+  const screenshotBase64 = (await page.screenshot()).toString('base64');
+  return page.evaluate(async (encodedScreenshot) => {
+    const drawer = document.querySelector<HTMLElement>('aside.q-drawer');
+    const navigation = drawer?.querySelector<HTMLElement>('nav[aria-label="Primary navigation"]');
+    const header = navigation?.querySelector<HTMLElement>('.q-item__label--header');
+    if (!drawer || !navigation || !header) {
+      throw new Error('Workspace drawer navigation is missing');
+    }
+
+    const brand = drawer.querySelector<HTMLElement>('.drawer-brand');
+    const brandTitle = brand?.querySelector<HTMLElement>('strong');
+    const brandSubtitle = brand?.querySelector<HTMLElement>('small');
+    const footer = drawer.querySelector<HTMLElement>('.drawer-footer');
+    const footerTitle = footer?.querySelector<HTMLElement>('strong');
+    const footerBody = footer?.querySelector<HTMLElement>('span');
+    if (!brand || !brandTitle || !brandSubtitle || !footer || !footerTitle || !footerBody) {
+      throw new Error('Workspace drawer branding or footer is missing');
+    }
+
+    const image = new Image();
+    image.src = `data:image/png;base64,${encodedScreenshot}`;
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) throw new Error('Unable to sample the rendered drawer screenshot');
+    context.drawImage(image, 0, 0);
+
+    const scaleX = canvas.width / window.innerWidth;
+    const scaleY = canvas.height / window.innerHeight;
+    const drawerRect = drawer.getBoundingClientRect();
+    const drawerOnScreen =
+      drawerRect.left >= 0 && drawerRect.right <= window.innerWidth && drawerRect.width > 0;
+
+    function isFullyOpaqueAndVisible(element: HTMLElement): boolean {
+      let opacity = 1;
+      for (
+        let ancestor: HTMLElement | null = element;
+        ancestor;
+        ancestor = ancestor.parentElement
+      ) {
+        const style = getComputedStyle(ancestor);
+        if (
+          style.display === 'none' ||
+          style.visibility === 'hidden' ||
+          style.visibility === 'collapse'
+        ) {
+          return false;
+        }
+        const ancestorOpacity = Number(style.opacity);
+        if (!Number.isFinite(ancestorOpacity)) return false;
+        opacity *= ancestorOpacity;
+      }
+      return opacity === 1;
+    }
+
+    function sample(element: HTMLElement, backgroundBox: HTMLElement): ContrastSample {
+      const elementRect = element.getBoundingClientRect();
+      const backgroundRect = backgroundBox.getBoundingClientRect();
+      const visible =
+        drawerOnScreen &&
+        isFullyOpaqueAndVisible(element) &&
+        element.getClientRects().length > 0 &&
+        elementRect.width > 0 &&
+        elementRect.height > 0 &&
+        elementRect.top >= 0 &&
+        elementRect.bottom <= window.innerHeight &&
+        backgroundRect.right - 24 >= 0 &&
+        backgroundRect.right - 24 < window.innerWidth;
+      if (!visible) return { foreground: '', background: '', visible: false };
+
+      // Sample inside the painted row, away from glyphs and the drawer scrollbar.
+      const x = Math.floor((backgroundRect.right - 24) * scaleX);
+      const y = Math.floor((elementRect.top + elementRect.height / 2) * scaleY);
+      const pixel = context!.getImageData(x, y, 1, 1).data;
+      return {
+        foreground: getComputedStyle(element).color,
+        background: `rgb(${pixel[0]}, ${pixel[1]}, ${pixel[2]})`,
+        visible: true,
+      };
+    }
+
+    const links = Array.from(navigation.querySelectorAll<HTMLElement>('.q-item')).map((item) => {
+      const primary = item.querySelector<HTMLElement>(
+        '.q-item__label:not(.q-item__label--caption)',
+      );
+      const caption = item.querySelector<HTMLElement>('.q-item__label--caption');
+      const icon = item.querySelector<HTMLElement>('.q-icon');
+      if (!primary || !caption || !icon) throw new Error('Navigation item is incomplete');
+      return {
+        path: item.getAttribute('href'),
+        active: item.getAttribute('aria-current') === 'page',
+        primary: sample(primary, item),
+        caption: sample(caption, item),
+        icon: sample(icon, item),
+      };
+    });
+    const headerBackground = header.parentElement;
+    if (!headerBackground) throw new Error('Workspace heading has no painted background');
+    return {
+      header: sample(header, headerBackground),
+      brandTitle: sample(brandTitle, brand),
+      brandSubtitle: sample(brandSubtitle, brand),
+      footerTitle: sample(footerTitle, footer),
+      footerBody: sample(footerBody, footer),
+      links,
+    };
+  }, screenshotBase64);
+}
+
+function contrastRatio(foreground: string, background: string): number {
+  const channels = (color: string): [number, number, number] => {
+    const values = color.match(/[\d.]+/g)?.map(Number);
+    if (!values || values.length < 3) throw new Error(`Unsupported computed color: ${color}`);
+    return [values[0]!, values[1]!, values[2]!].map((value) => {
+      const linear = value / 255;
+      return linear <= 0.04045 ? linear / 12.92 : ((linear + 0.055) / 1.055) ** 2.4;
+    }) as [number, number, number];
+  };
+  const luminance = (color: string): number => {
+    const [red, green, blue] = channels(color);
+    return red * 0.2126 + green * 0.7152 + blue * 0.0722;
+  };
+  const first = luminance(foreground);
+  const second = luminance(background);
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+}
+
+async function expectReadableNavigation(page: Page, viewport: string): Promise<void> {
+  const snapshot = await readNavigationContrast(page);
+  expect(snapshot.links).toHaveLength(6);
+  expect(snapshot.links.filter((link) => link.active)).toHaveLength(1);
+  for (const [label, sample] of [
+    ['Workspace heading', snapshot.header],
+    ['Drawer branding', snapshot.brandTitle],
+    ['Brand subtitle', snapshot.brandSubtitle],
+    ['Footer title', snapshot.footerTitle],
+    ['Footer text', snapshot.footerBody],
+  ] as const) {
+    expect(sample.visible, `${viewport} ${label} is painted`).toBe(true);
+    const ratio = contrastRatio(sample.foreground, sample.background);
+    expect(
+      ratio,
+      `${viewport} ${label} contrast: ${sample.foreground} on ${sample.background}`,
+    ).toBeGreaterThanOrEqual(4.5);
+    console.log(
+      `${viewport} ${label}: ${sample.foreground} on ${sample.background} (${ratio.toFixed(2)}:1)`,
+    );
+  }
+
+  for (const link of snapshot.links) {
+    const label = `${viewport} ${link.path ?? 'navigation link'}${link.active ? ' (active)' : ''}`;
+    for (const [part, sample, minimum] of [
+      ['label', link.primary, 4.5],
+      ['caption', link.caption, 4.5],
+      ['icon', link.icon, 3],
+    ] as const) {
+      expect(sample.visible, `${label} ${part} is painted in the open drawer`).toBe(true);
+      const ratio = contrastRatio(sample.foreground, sample.background);
+      expect(
+        ratio,
+        `${label} ${part} contrast: ${sample.foreground} on ${sample.background}`,
+      ).toBeGreaterThanOrEqual(minimum);
+      console.log(
+        `${label} ${part}: ${sample.foreground} on ${sample.background} (${ratio.toFixed(2)}:1)`,
+      );
+    }
+  }
+}
+
 async function readPolicy(page: Page, app: BrowserDemoApp): Promise<PolicyResponse> {
   const response = await page.request.get(`${app.apiBaseUrl}/api/v1/policy`);
   expect(response.ok()).toBe(true);
@@ -207,6 +417,96 @@ test('desktop/tablet Quasar routes and keyboard states', async ({ emptyApp, page
   }
 });
 
+test('workspace navigation contrast uses the painted drawer surface on desktop and tablet', async ({
+  emptyApp,
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(new URL('/', emptyApp.baseUrl).toString(), { waitUntil: 'domcontentloaded' });
+
+  const navigation = page.getByRole('navigation', { name: 'Primary navigation' });
+  const overviewLink = navigation.getByRole('link', { name: /Overview/ });
+  const recommendationsLink = navigation.getByRole('link', { name: /Recommendations/ });
+  await expect(overviewLink).toHaveAttribute('aria-current', 'page');
+  await expectReadableNavigation(page, 'desktop overview');
+
+  const probeItem = navigation.locator('.q-item').nth(1);
+  const probeText = probeItem.locator('.q-item__label:not(.q-item__label--caption)');
+  const originalItemStyle = await probeItem.getAttribute('style');
+  const originalTextStyle = await probeText.getAttribute('style');
+  const expectProbeRejected = async (reason: string): Promise<void> => {
+    const sample = (await readNavigationContrast(page)).links.find((link) =>
+      link.path?.endsWith('/recommendations'),
+    )?.primary;
+    expect(sample?.visible, reason).toBe(false);
+  };
+  try {
+    await probeText.evaluate((element) => (element.style.visibility = 'hidden'));
+    await expectProbeRejected('visibility:hidden target must be rejected');
+    await probeText.evaluate((element) => element.style.removeProperty('visibility'));
+
+    await probeText.evaluate((element) => (element.style.display = 'none'));
+    await expectProbeRejected('display:none target must be rejected');
+    await probeText.evaluate((element) => element.style.removeProperty('display'));
+
+    await probeText.evaluate((element) => (element.style.opacity = '0'));
+    await expectProbeRejected('opacity:0 target must be rejected');
+    await probeText.evaluate((element) => element.style.removeProperty('opacity'));
+
+    await probeItem.evaluate((element) => (element.style.opacity = '0.5'));
+    await expectProbeRejected('partially transparent ancestor must be rejected');
+  } finally {
+    await probeText.evaluate((element, style) => {
+      if (style === null) element.removeAttribute('style');
+      else element.setAttribute('style', style);
+    }, originalTextStyle);
+    await probeItem.evaluate((element, style) => {
+      if (style === null) element.removeAttribute('style');
+      else element.setAttribute('style', style);
+    }, originalItemStyle);
+  }
+
+  await recommendationsLink.click();
+  await expect(page.getByRole('heading', { name: 'No recommendation run loaded' })).toBeVisible();
+  await expect(recommendationsLink).toHaveAttribute('aria-current', 'page');
+  await expect(overviewLink).not.toHaveAttribute('aria-current', 'page');
+  await expectDrawerSettled(page, true);
+  await expectReadableNavigation(page, 'desktop recommendations');
+
+  const tabletPage = await browser.newPage({ viewport: { width: 768, height: 1024 } });
+  try {
+    await tabletPage.goto(new URL('/#/recommendations', emptyApp.baseUrl).toString(), {
+      waitUntil: 'domcontentloaded',
+    });
+    await expect(
+      tabletPage.getByRole('heading', { name: 'No recommendation run loaded' }),
+    ).toBeVisible();
+    const menuButton = tabletPage.getByRole('button', { name: 'Toggle workspace navigation' });
+    await expect(menuButton).toHaveAttribute('aria-expanded', 'false');
+    await expectDrawerSettled(tabletPage, false);
+    await menuButton.click();
+    await expect(menuButton).toHaveAttribute('aria-expanded', 'true');
+    await expectDrawerSettled(tabletPage, true);
+    await expectReadableNavigation(tabletPage, 'tablet overlay recommendations');
+
+    const tabletNavigation = tabletPage.getByRole('navigation', { name: 'Primary navigation' });
+    const taxLotsLink = tabletNavigation.getByRole('link', { name: /Tax Lots/ });
+    await taxLotsLink.click();
+    await expect(tabletPage.getByRole('heading', { name: 'Tax Lots', exact: true })).toBeVisible();
+    await expect(menuButton).toHaveAttribute('aria-expanded', 'false');
+    await expectDrawerSettled(tabletPage, false);
+    await menuButton.click();
+    await expect(menuButton).toHaveAttribute('aria-expanded', 'true');
+    await expectDrawerSettled(tabletPage, true);
+    await expect(taxLotsLink).toHaveAttribute('aria-current', 'page');
+    await expectReadableNavigation(tabletPage, 'tablet overlay tax lots');
+  } finally {
+    await tabletPage.close();
+  }
+});
+
 test('FakeBroker policy, review, and lot workflows', async ({ seededApp, page, browser }) => {
   test.setTimeout(180_000);
   console.log(`Playwright-managed Chromium version: ${browser.version()}`);
@@ -242,10 +542,20 @@ test('FakeBroker policy, review, and lot workflows', async ({ seededApp, page, b
 
   await page.getByRole('link', { name: /Allocation Policy/ }).click();
   await expect(page.getByRole('heading', { name: 'Policy revision' })).toBeVisible();
+  await page.setViewportSize({ width: 768, height: 1024 });
+  const sleeveRegion = page.getByRole('region', { name: 'Sleeve allocation policy settings' });
+  await expect(sleeveRegion).toHaveAttribute('tabindex', '0');
+  await expect(sleeveRegion.locator('.q-markup-table table')).toHaveCount(1);
+  await expect(sleeveRegion.locator('thead th:not([scope="col"])')).toHaveCount(0);
+  await expect
+    .poll(() => sleeveRegion.evaluate((element) => element.scrollWidth > element.clientWidth))
+    .toBe(true);
+  await expectNoHorizontalOverflow(page, 'policy table at tablet');
   const retainedLoss = page.getByLabel('Target retained net loss (USD)');
   const sleeveName = page.getByLabel('Sleeve display name').first();
   await retainedLoss.fill('3456.78');
   await sleeveName.fill('Browser renamed US equities');
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole('link', { name: /Activity/ }).click();
   await expect(page.getByRole('heading', { name: 'Activity', exact: true })).toBeVisible();
   await page.getByRole('link', { name: /Allocation Policy/ }).click();
@@ -308,6 +618,18 @@ test('FakeBroker policy, review, and lot workflows', async ({ seededApp, page, b
   const lotSearch = page.getByLabel('Search all account lots');
   await lotSearch.fill('DEMO-VB-LOT-1');
   await page.getByRole('button', { name: 'Apply API filters' }).click();
+  await page.setViewportSize({ width: 768, height: 1024 });
+  const lotRegion = page.locator('[role="region"][aria-label^="Tax lots for "]').first();
+  await expect(lotRegion).toBeVisible();
+  await expect(lotRegion).toHaveAttribute('tabindex', '0');
+  await expect(lotRegion.locator('.q-markup-table table')).toHaveCount(1);
+  await expect(lotRegion.locator('thead th:not([scope="col"])')).toHaveCount(0);
+  await expect
+    .poll(() => lotRegion.evaluate((element) => element.scrollWidth > element.clientWidth))
+    .toBe(true);
+  await expectNoHorizontalOverflow(page, 'tax-lot table at tablet');
+  await lotRegion.focus();
+  await expect(lotRegion).toBeFocused();
   const vbLot = page.getByRole('checkbox', { name: 'Request VB lot DEMO-VB-LOT-1' });
   await expect(vbLot).toBeVisible();
   await vbLot.check();
@@ -320,6 +642,7 @@ test('FakeBroker policy, review, and lot workflows', async ({ seededApp, page, b
   await expect(
     page.getByText(/The loaded DEMO run currently selects exactly this requested set/),
   ).toBeVisible();
+  await page.setViewportSize({ width: 1440, height: 1000 });
   const confirmedLots = await readRecommendations(page, seededApp, currentRun.run_id);
   const selectedSellLots = confirmedLots.consolidated_legs
     .filter((leg) => leg.side === 'SELL')
@@ -330,12 +653,13 @@ test('FakeBroker policy, review, and lot workflows', async ({ seededApp, page, b
 
   await page.getByRole('link', { name: /Recommendations/ }).click();
   await expect(page.getByRole('heading', { name: 'Ranked trade groups' })).toBeVisible();
-  const groupCard = page.locator('.q-expansion-item.group-card').first();
+  const groupCard = page.getByLabel(/^Recommendation group /).first();
   const groupLabel = await groupCard.getAttribute('aria-label');
   const groupId = groupLabel?.replace('Recommendation group ', '');
   if (!groupId) throw new Error('The first recommendation group has no identifier');
-  if ((await groupCard.locator('.group-header').getAttribute('aria-expanded')) !== 'true') {
-    await groupCard.locator('.group-header').click();
+  const groupHeader = groupCard.locator('.group-header');
+  if ((await groupHeader.getAttribute('aria-expanded')) !== 'true') {
+    await groupHeader.click();
   }
   const groupCheckbox = groupCard.getByRole('checkbox', {
     name: `Select recommendation group ${groupId}`,
@@ -388,8 +712,8 @@ test('FakeBroker policy, review, and lot workflows', async ({ seededApp, page, b
     releasePendingAnnotation();
     await page.unroute('**/api/v1/optimizer/runs/**/recommendations/**');
   }
-  if ((await groupCard.locator('.group-header').getAttribute('aria-expanded')) !== 'true') {
-    await groupCard.locator('.group-header').click();
+  if ((await groupHeader.getAttribute('aria-expanded')) !== 'true') {
+    await groupHeader.click();
   }
   const restoredNoteField = groupCard.locator('textarea');
   await restoredNoteField.fill('');
@@ -411,8 +735,8 @@ test('FakeBroker policy, review, and lot workflows', async ({ seededApp, page, b
   try {
     const rejectionReason = groupCard.getByLabel('Rejection reason (up to 500 characters)');
 
-    if ((await groupCard.locator('.group-header').getAttribute('aria-expanded')) !== 'true') {
-      await groupCard.locator('.group-header').click();
+    if ((await groupHeader.getAttribute('aria-expanded')) !== 'true') {
+      await groupHeader.click();
     }
     await expect(rejectionReason).toBeVisible();
     await rejectionReason.fill('Controlled E2E rejection rollback');
@@ -422,8 +746,8 @@ test('FakeBroker policy, review, and lot workflows', async ({ seededApp, page, b
     await expect(
       page.getByRole('alert').filter({ hasText: 'Group note or rejection was not saved' }),
     ).toBeVisible();
-    if ((await groupCard.locator('.group-header').getAttribute('aria-expanded')) !== 'true') {
-      await groupCard.locator('.group-header').click();
+    if ((await groupHeader.getAttribute('aria-expanded')) !== 'true') {
+      await groupHeader.click();
     }
     await expect(groupCheckbox).toBeChecked();
     await expect
@@ -446,8 +770,8 @@ test('FakeBroker policy, review, and lot workflows', async ({ seededApp, page, b
         };
       })
       .toEqual({ selected: false, rejected: true, reason: 'Controlled E2E rejection rollback' });
-    if ((await groupCard.locator('.group-header').getAttribute('aria-expanded')) !== 'true') {
-      await groupCard.locator('.group-header').click();
+    if ((await groupHeader.getAttribute('aria-expanded')) !== 'true') {
+      await groupHeader.click();
     }
     await expect(
       page.getByText('Saved rejection reason: Controlled E2E rejection rollback'),

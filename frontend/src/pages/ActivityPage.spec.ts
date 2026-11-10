@@ -12,7 +12,7 @@ import type {
 } from '@/types/api';
 import ActivityPage from './ActivityPage.vue';
 import { useWorkspaceStore } from '@/stores/workspace-store';
-import { QSelect } from 'quasar';
+import { QBadge, QBanner, QCard, QSelect } from 'quasar';
 import { findQuasarComponent, setQuasarModelValue } from '@/test-utils/quasar-mount';
 
 const frozenDisplayContext: FrozenRunDisplayContextResponse = {
@@ -159,6 +159,9 @@ describe('ActivityPage', () => {
     const wrapper = mount(ActivityPage, { global: { plugins: [router] } });
     await flushPromises();
     expect(wrapper.get('.workspace-page').classes()).toContain('activity-page');
+    const filterCard = findQuasarComponent(wrapper, QCard, 'Activity filters');
+    expect(filterCard.element.tagName).toBe('FORM');
+    expect(wrapper.get('li.event-card').element.tagName).toBe('LI');
 
     const searchInputs = wrapper.findAll('input[type="search"]');
     await searchInputs[0]!.setValue('optimizer_run');
@@ -177,6 +180,12 @@ describe('ActivityPage', () => {
     expect(filtered.searchParams.get('limit')).toBe('50');
     expect(wrapper.text()).toContain('page 1 of 2');
 
+    const completeStatus = wrapper
+      .findAllComponents(QBadge)
+      .find((badge) => badge.text() === 'complete');
+    expect(completeStatus?.attributes('role')).toBe('status');
+    expect(completeStatus?.props('color')).toBe('blue-grey-1');
+    expect(completeStatus?.props('textColor')).toBe('blue-grey-10');
     await wrapper
       .findAll('button')
       .find((button) => button.text().includes('Next page'))!
@@ -320,9 +329,52 @@ describe('ActivityPage', () => {
     await flushPromises();
     expect(wrapper.text()).toContain('Synthetic failure detail');
     expect(wrapper.text()).toContain('error');
+    const errorStatus = wrapper.findAllComponents(QBadge).find((badge) => badge.text() === 'error');
+    expect(errorStatus?.attributes('role')).toBe('status');
+    expect(errorStatus?.props('color')).toBe('red-1');
+    expect(errorStatus?.props('textColor')).toBe('red-10');
     await wrapper.get('button.primary-button').trigger('click');
     await flushPromises();
     expect(wrapper.text()).toContain('No activity events returned');
     expect(calls).toBe(3);
+  });
+  it('announces activity loading politely and then presents the empty result', async () => {
+    let resolveActivity!: (response: Response) => void;
+    const fetcher = vi.fn<typeof fetch>(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveActivity = resolve;
+        }),
+    );
+    vi.stubGlobal('fetch', fetcher);
+    const router = testRouter();
+    await router.push('/activity');
+    await router.isReady();
+    const wrapper = mount(ActivityPage, { global: { plugins: [router] } });
+    await flushPromises();
+
+    const loadingBanner = wrapper
+      .findAllComponents(QBanner)
+      .find((banner) => banner.text().includes('Loading activity from the local API'));
+    expect(loadingBanner?.attributes('role')).toBe('status');
+    expect(loadingBanner?.text()).toContain('Loading activity from the local API');
+
+    resolveActivity(jsonResponse(activityPage([], 0)));
+    await flushPromises();
+    expect(
+      wrapper
+        .findAllComponents(QBanner)
+        .some((banner) => banner.text().includes('Loading activity from the local API')),
+    ).toBe(false);
+    expect(
+      wrapper
+        .findAllComponents(QBanner)
+        .some(
+          (banner) =>
+            banner.attributes('role') === 'status' &&
+            banner.text().includes('No activity events returned'),
+        ),
+    ).toBe(true);
+    wrapper.unmount();
   });
 });

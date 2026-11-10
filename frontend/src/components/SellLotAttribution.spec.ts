@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils';
-import { QCheckbox } from 'quasar';
+import { QCheckbox, QMarkupTable } from 'quasar';
 import { findQuasarComponent, setQuasarModelValue } from '@/test-utils/quasar-mount';
 import { describe, expect, it } from 'vitest';
 import SellLotAttribution from './SellLotAttribution.vue';
@@ -43,6 +43,26 @@ describe('SellLotAttribution', () => {
     });
 
     expect(wrapper.get('caption').text()).toContain('AAPL');
+    const selection = findQuasarComponent(
+      wrapper,
+      QCheckbox,
+      'Select SELL lot BROKER-A1 in group group-a',
+    );
+    expect(selection.classes()).toEqual(
+      expect.arrayContaining(['text-caption', 'text-weight-bold', 'text-blue-grey-8']),
+    );
+    expect(selection.get('.q-checkbox__inner').classes()).toContain('text-primary');
+    const markup = wrapper.findComponent(QMarkupTable);
+    expect(markup.exists()).toBe(true);
+    expect(markup.element.querySelectorAll('table')).toHaveLength(1);
+    const table = markup.element.querySelector('table');
+    expect(table?.querySelectorAll('thead th[scope="col"]')).toHaveLength(
+      table?.querySelectorAll('thead th').length,
+    );
+    expect(wrapper.get('[role="region"]').attributes('aria-label')).toBe(
+      'SELL broker-lot attribution for leg sell-aapl',
+    );
+    expect(wrapper.get('[role="region"]').attributes('tabindex')).toBe('0');
     expect(wrapper.text()).toContain('API proposed sale shares');
     expect(wrapper.text()).toContain('not current remaining or available inventory');
     expect(wrapper.text()).toContain('BROKER-A1');

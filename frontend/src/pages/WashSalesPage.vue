@@ -34,9 +34,13 @@
 
     <ResourceFreshnessNotice :resources="['washSales']" />
 
-    <WorkspaceFilterPanel
-      label="Wash-sale filters"
-      class="filter-panel row items-end q-gutter-sm q-pa-md"
+    <q-card
+      tag="form"
+      flat
+      bordered
+      aria-label="Wash-sale filters"
+      class="filter-panel row items-end q-gutter-sm q-pa-md text-caption text-weight-bold text-blue-grey-8"
+      @submit.prevent
     >
       <label class="column no-wrap q-gutter-y-xs">
         <span>Filter records</span>
@@ -68,15 +72,17 @@
           aria-label="Transaction kind"
         />
       </label>
-    </WorkspaceFilterPanel>
+    </q-card>
 
-    <p
+    <q-banner
       v-if="store.actionState.loadWashSales.pending && !washSales"
-      class="state-message"
+      dense
+      rounded
+      class="q-my-sm bg-blue-grey-1 text-blue-grey-10"
       role="status"
     >
       Loading wash-sale history and restrictions from the local API…
-    </p>
+    </q-banner>
     <WorkspaceEmptyState v-else-if="!washSales" title="No wash-sale data loaded">
       Retry to request the current API response. No history or restrictions have been inferred.
       <template #action>
@@ -95,15 +101,25 @@
       </template>
     </WorkspaceEmptyState>
     <template v-else>
-      <section class="coverage-card q-pa-md" aria-labelledby="coverage-title">
+      <q-card
+        tag="section"
+        flat
+        bordered
+        class="coverage-card q-pa-md"
+        aria-labelledby="coverage-title"
+      >
         <div class="section-heading row justify-between q-gutter-md items-center q-mb-md">
           <div>
-            <h2 class="q-ma-none" id="coverage-title">API coverage</h2>
+            <h2 class="q-ma-none text-subtitle1 text-blue-grey-10" id="coverage-title">
+              API coverage
+            </h2>
             <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
               Source: {{ washSales.source }}
             </p>
           </div>
-          <span class="demo-badge q-py-xs q-px-sm">{{ washSales.demo ? 'DEMO' : 'API' }}</span>
+          <q-badge rounded color="amber-1" text-color="brown-10">
+            {{ washSales.demo ? 'DEMO' : 'API' }}
+          </q-badge>
         </div>
         <dl class="coverage-grid q-ma-none">
           <div class="q-pa-sm">
@@ -140,50 +156,48 @@
         <p v-else class="coverage-note q-mt-sm q-mb-none q-mx-none">
           The API returned no coverage warnings.
         </p>
-      </section>
+      </q-card>
 
-      <section class="data-card q-pa-md" aria-labelledby="history-title">
+      <q-card tag="section" flat bordered class="data-card q-pa-md" aria-labelledby="history-title">
         <div class="section-heading row justify-between q-gutter-md items-center q-mb-md">
           <div>
-            <h2 class="q-ma-none" id="history-title">Acquisition and transaction history</h2>
+            <h2 class="q-ma-none text-subtitle1 text-blue-grey-10" id="history-title">
+              Acquisition and transaction history
+            </h2>
             <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
               Acquisition rows include the API-provided lookback-window end date; transaction keys
               and quantities are shown as returned.
             </p>
           </div>
         </div>
-        <WorkspaceTableFrame
-          v-if="filteredAcquisitions.length"
-          class="table-scroll"
-          label="Wash-sale acquisition rows"
-        >
-          <table>
+        <WorkspaceTableFrame v-if="filteredAcquisitions.length" label="Wash-sale acquisition rows">
+          <q-markup-table class="wash-sales-table" wrap-cells>
             <caption class="sr-only">
               Acquisition history with API-provided lookback dates
             </caption>
             <thead>
               <tr>
-                <th class="q-pa-sm" scope="col">Ticker</th>
-                <th class="q-pa-sm" scope="col">Kind</th>
-                <th class="q-pa-sm" scope="col">Trade date / time</th>
-                <th class="q-pa-sm" scope="col">Shares</th>
-                <th class="q-pa-sm" scope="col">Lookback window ends</th>
-                <th class="q-pa-sm" scope="col">Transaction key</th>
-                <th class="q-pa-sm" scope="col">Source</th>
+                <th scope="col">Ticker</th>
+                <th scope="col">Kind</th>
+                <th scope="col">Trade date / time</th>
+                <th scope="col">Shares</th>
+                <th scope="col">Lookback window ends</th>
+                <th scope="col">Transaction key</th>
+                <th scope="col">Source</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="row in filteredAcquisitions" :key="row.broker_transaction_key">
-                <th class="q-pa-sm" scope="row">{{ row.ticker ?? 'Ticker unavailable' }}</th>
-                <td class="q-pa-sm">{{ row.transaction_kind }}</td>
-                <td class="q-pa-sm">{{ row.trade_date }} · {{ row.transaction_time }}</td>
-                <td class="q-pa-sm">{{ row.shares }}</td>
-                <td class="q-pa-sm">{{ row.lookback_window_end_date }}</td>
-                <td class="wrap-cell q-pa-sm">{{ row.broker_transaction_key }}</td>
-                <td class="q-pa-sm">{{ row.source }}</td>
+                <th scope="row">{{ row.ticker ?? 'Ticker unavailable' }}</th>
+                <td>{{ row.transaction_kind }}</td>
+                <td>{{ row.trade_date }} · {{ row.transaction_time }}</td>
+                <td>{{ row.shares }}</td>
+                <td>{{ row.lookback_window_end_date }}</td>
+                <td class="wrap-cell">{{ row.broker_transaction_key }}</td>
+                <td>{{ row.source }}</td>
               </tr>
             </tbody>
-          </table>
+          </q-markup-table>
         </WorkspaceTableFrame>
         <p v-else class="empty-note q-mt-sm q-mb-none q-mx-none">
           {{
@@ -194,38 +208,34 @@
         </p>
 
         <h3 class="subsection-title q-mt-md q-mb-sm q-mx-none">All transaction history</h3>
-        <WorkspaceTableFrame
-          v-if="filteredHistory.length"
-          class="table-scroll"
-          label="Wash-sale transaction history"
-        >
-          <table>
+        <WorkspaceTableFrame v-if="filteredHistory.length" label="Wash-sale transaction history">
+          <q-markup-table class="wash-sales-table" wrap-cells>
             <caption class="sr-only">
               Managed-account transaction history returned by the API
             </caption>
             <thead>
               <tr>
-                <th class="q-pa-sm" scope="col">Ticker</th>
-                <th class="q-pa-sm" scope="col">Kind</th>
-                <th class="q-pa-sm" scope="col">Acquisition?</th>
-                <th class="q-pa-sm" scope="col">Trade date / time</th>
-                <th class="q-pa-sm" scope="col">Shares</th>
-                <th class="q-pa-sm" scope="col">Transaction key</th>
-                <th class="q-pa-sm" scope="col">Source</th>
+                <th scope="col">Ticker</th>
+                <th scope="col">Kind</th>
+                <th scope="col">Acquisition?</th>
+                <th scope="col">Trade date / time</th>
+                <th scope="col">Shares</th>
+                <th scope="col">Transaction key</th>
+                <th scope="col">Source</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="row in filteredHistory" :key="row.broker_transaction_key">
-                <th class="q-pa-sm" scope="row">{{ row.ticker ?? 'Ticker unavailable' }}</th>
-                <td class="q-pa-sm">{{ row.transaction_kind }}</td>
-                <td class="q-pa-sm">{{ row.is_acquisition ? 'Yes' : 'No' }}</td>
-                <td class="q-pa-sm">{{ row.trade_date }} · {{ row.transaction_time }}</td>
-                <td class="q-pa-sm">{{ row.shares }}</td>
-                <td class="wrap-cell q-pa-sm">{{ row.broker_transaction_key }}</td>
-                <td class="q-pa-sm">{{ row.source }}</td>
+                <th scope="row">{{ row.ticker ?? 'Ticker unavailable' }}</th>
+                <td>{{ row.transaction_kind }}</td>
+                <td>{{ row.is_acquisition ? 'Yes' : 'No' }}</td>
+                <td>{{ row.trade_date }} · {{ row.transaction_time }}</td>
+                <td>{{ row.shares }}</td>
+                <td class="wrap-cell">{{ row.broker_transaction_key }}</td>
+                <td>{{ row.source }}</td>
               </tr>
             </tbody>
-          </table>
+          </q-markup-table>
         </WorkspaceTableFrame>
         <p v-else class="empty-note q-mt-sm q-mb-none q-mx-none">
           {{
@@ -234,12 +244,20 @@
               : 'The API returned no transaction-history rows.'
           }}
         </p>
-      </section>
+      </q-card>
 
-      <section class="data-card q-pa-md" aria-labelledby="restrictions-title">
+      <q-card
+        tag="section"
+        flat
+        bordered
+        class="data-card q-pa-md"
+        aria-labelledby="restrictions-title"
+      >
         <div class="section-heading row justify-between q-gutter-md items-center q-mb-md">
           <div>
-            <h2 class="q-ma-none" id="restrictions-title">Purchase restrictions</h2>
+            <h2 class="q-ma-none text-subtitle1 text-blue-grey-10" id="restrictions-title">
+              Purchase restrictions
+            </h2>
             <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
               Current and proposed restrictions are separate API lists. Proposed records are not
               represented as executed sales.
@@ -248,38 +266,37 @@
         </div>
         <WorkspaceTableFrame
           v-if="filteredRestrictions.length"
-          class="table-scroll"
           label="Wash-sale purchase restrictions"
         >
-          <table>
+          <q-markup-table class="wash-sales-table" wrap-cells>
             <caption class="sr-only">
               Current and proposed purchase restrictions
             </caption>
             <thead>
               <tr>
-                <th class="q-pa-sm" scope="col">Status</th>
-                <th class="q-pa-sm" scope="col">Ticker</th>
-                <th class="q-pa-sm" scope="col">Trigger</th>
-                <th class="q-pa-sm" scope="col">Loss-sale date</th>
-                <th class="q-pa-sm" scope="col">Next eligible purchase</th>
-                <th class="q-pa-sm" scope="col">Validation</th>
-                <th class="q-pa-sm" scope="col">Run / source</th>
+                <th scope="col">Status</th>
+                <th scope="col">Ticker</th>
+                <th scope="col">Trigger</th>
+                <th scope="col">Loss-sale date</th>
+                <th scope="col">Next eligible purchase</th>
+                <th scope="col">Validation</th>
+                <th scope="col">Run / source</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="row in filteredRestrictions" :key="restrictionKey(row)">
-                <th class="q-pa-sm" scope="row">{{ row.statusLabel }}</th>
-                <td class="q-pa-sm">{{ row.ticker }}</td>
-                <td class="q-pa-sm">{{ row.trigger }}</td>
-                <td class="q-pa-sm">{{ row.loss_sale_date }}</td>
-                <td class="q-pa-sm">{{ row.next_eligible_purchase_date }}</td>
-                <td class="q-pa-sm">{{ row.validation }}</td>
-                <td class="wrap-cell q-pa-sm">
+                <th scope="row">{{ row.statusLabel }}</th>
+                <td>{{ row.ticker }}</td>
+                <td>{{ row.trigger }}</td>
+                <td>{{ row.loss_sale_date }}</td>
+                <td>{{ row.next_eligible_purchase_date }}</td>
+                <td>{{ row.validation }}</td>
+                <td class="wrap-cell">
                   {{ row.run_id ?? 'No run ID returned' }}<br />{{ row.source }}
                 </td>
               </tr>
             </tbody>
-          </table>
+          </q-markup-table>
         </WorkspaceTableFrame>
         <p v-else class="empty-note q-mt-sm q-mb-none q-mx-none">
           {{
@@ -288,7 +305,7 @@
               : 'The API returned no current or proposed restrictions.'
           }}
         </p>
-      </section>
+      </q-card>
     </template>
   </section>
 </template>
@@ -299,7 +316,6 @@ import ApiActionError from '@/components/ApiActionError.vue';
 import WorkspacePageHeader from '@/components/WorkspacePageHeader.vue';
 import WorkspaceCapabilityNotice from '@/components/WorkspaceCapabilityNotice.vue';
 import WorkspaceEmptyState from '@/components/WorkspaceEmptyState.vue';
-import WorkspaceFilterPanel from '@/components/WorkspaceFilterPanel.vue';
 import WorkspaceTableFrame from '@/components/WorkspaceTableFrame.vue';
 
 import ResourceFreshnessNotice from '@/components/ResourceFreshnessNotice.vue';
@@ -365,40 +381,17 @@ onMounted(() => {
 </script>
 
 <style scoped>
-/* Grid gaps use Quasar's spacing scale; negative-margin gutters distort grid tracks. */
 .filter-panel,
-.coverage-card,
-.data-card,
-.empty-state {
-  border: 1px solid #dce6eb;
-  border-radius: 0.8rem;
-  background: #fff;
-  box-shadow: 0 4px 20px rgb(18 55 77 / 4.5%);
-}
-
-.filter-panel label {
-  min-width: min(19rem, 100%);
-  color: #466779;
-  font-size: 0.75rem;
-  font-weight: 700;
-}
 .coverage-card,
 .data-card {
   min-width: 0;
 }
 
-.section-heading h2,
-.empty-state h2 {
-  color: #10263d;
-  font-size: 1.05rem;
+.filter-panel label {
+  min-width: min(19rem, 100%);
 }
-.demo-badge {
-  border-radius: 2rem;
-  background: #fff1d2;
-  color: #77520d;
-  font-size: 0.68rem;
-  font-weight: 800;
-}
+
+/* negative-margin gutters distort grid tracks at the standard Quasar spacing scale. */
 .coverage-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -419,8 +412,7 @@ onMounted(() => {
 }
 .coverage-note,
 .warning-list,
-.empty-note,
-.state-message {
+.empty-note {
   color: #657d8b;
   font-size: 0.78rem;
   line-height: 1.5;
@@ -429,30 +421,10 @@ onMounted(() => {
 .warning-list {
   color: #765016;
 }
-.table-scroll {
-  overflow-x: auto;
-}
-table {
-  width: 100%;
+.wash-sales-table {
   min-width: 940px;
-  border-collapse: collapse;
-  font-size: 0.73rem;
 }
-th,
-td {
-  border-bottom: 1px solid #edf2f4;
-  text-align: left;
-  vertical-align: top;
-}
-thead th {
-  background: #f7fafb;
-  color: #526c7c;
-  font-size: 0.67rem;
-}
-tbody th {
-  color: #29475a;
-  font-weight: 750;
-}
+
 .wrap-cell {
   max-width: 14rem;
   overflow-wrap: anywhere;

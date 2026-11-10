@@ -5,25 +5,13 @@
   font-size: 0.82rem;
 }
 
-.notice-card,
-.validation-card,
-.success-card,
-.delete-panel,
-.revision-panel,
-.panel,
-.target-panel,
-.activation-panel {
+.success-card {
   border: 1px solid #dce6eb;
   border-radius: 0.8rem;
   background: #fff;
   box-shadow: 0 4px 20px rgb(18 55 77 / 4.5%);
 }
 
-.section-heading h2 {
-  color: #10263d;
-  font-size: 1.08rem;
-  letter-spacing: -0.025em;
-}
 .revision-controls {
   display: grid;
   grid-template-columns: minmax(14rem, 1.2fr) minmax(18rem, 2fr) auto;
@@ -39,53 +27,24 @@
   color: #29475a;
   font-size: 0.75rem;
 }
-.status-badge,
-.demo-badge {
-  border-radius: 999px;
-  background: #e7f2f2;
-  color: #126e6a;
-  font-size: 0.68rem;
-  font-weight: 800;
-  white-space: nowrap;
-}
-.status-warning {
-  background: #fff1d7;
-  color: #805916;
-}
-.status-ready {
-  background: #e7f2f2;
-  color: #126e6a;
-}
 .state-message,
-.success-message,
 .empty-note {
   color: #657d8b;
   font-size: 0.78rem;
   line-height: 1.5;
 }
-.success-message {
-  color: #137a60;
-}
-.notice-card,
 .delete-panel {
   border-color: #f2dcad;
   background: #fffaf0;
 }
-.notice-card p,
 .delete-panel p {
   color: #735019;
   font-size: 0.78rem;
   line-height: 1.5;
 }
-.validation-card,
 .success-card {
   font-size: 0.78rem;
   line-height: 1.5;
-}
-.validation-card {
-  border-color: #f2dcad;
-  background: #fffaf0;
-  color: #765016;
 }
 
 .success-card {
@@ -93,29 +52,11 @@
   background: #f1faf6;
   color: #17634e;
 }
-.table-scroll {
-  min-width: 0;
-  overflow-x: auto;
-  border: 1px solid #e6edf1;
-  border-radius: 0.65rem;
-}
 .editor-table {
-  width: 100%;
   min-width: 1020px;
-  border-collapse: collapse;
-  text-align: left;
-  font-size: 0.72rem;
-}
-.editor-table th {
-  background: #f5f8fa;
-  color: #536d7c;
-  font-size: 0.66rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 .editor-table td {
   min-width: 6rem;
-  border-top: 1px solid #edf2f4;
   vertical-align: top;
 }
 .editor-table tr:focus-within {
@@ -142,12 +83,6 @@
 .designation-cell {
   min-width: 12rem !important;
 }
-.designation-cell .q-checkbox,
-.toggle-field {
-  color: #526c7c;
-  font-size: 0.68rem;
-  font-weight: 600;
-}
 
 .reassignment-field {
   min-width: 10rem;
@@ -160,16 +95,8 @@
   color: #718691;
   text-align: center;
 }
-.delete-panel h3 {
-  color: #10263d;
-  font-size: 0.9rem;
-}
 .reparent-row {
   max-width: 30rem;
-}
-.inline-error {
-  color: #9b4242 !important;
-  font-weight: 700;
 }
 .field-grid {
   display: grid;
@@ -195,14 +122,6 @@
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
-}
-.form-issues {
-  border: 1px solid #e9c4c2;
-  border-radius: 0.6rem;
-  background: #fff6f5;
-  color: #8f4642;
-  font-size: 0.74rem;
-  line-height: 1.55;
 }
 .api-errors-label {
   color: #855319;

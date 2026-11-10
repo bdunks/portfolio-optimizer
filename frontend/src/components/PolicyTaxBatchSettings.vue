@@ -1,8 +1,12 @@
 <template>
-  <section class="panel settings-panel q-pa-md" :aria-labelledby="`${sectionId}-title`">
+  <q-card
+    tag="section"
+    class="panel settings-panel q-pa-md"
+    :aria-labelledby="`${sectionId}-title`"
+  >
     <div class="section-heading items-center row justify-between q-gutter-md q-mb-md">
       <div>
-        <h2 class="q-ma-none" :id="`${sectionId}-title`">Tax &amp; Batch Settings</h2>
+        <h2 class="q-ma-none text-h6" :id="`${sectionId}-title`">Tax &amp; Batch Settings</h2>
         <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
           Blank nullable values are sent as null; blank required values are never guessed as zero.
           Amounts remain exact API decimal strings.
@@ -336,7 +340,7 @@
         replacement ETF BUY legs.
       </p>
     </div>
-  </section>
+  </q-card>
 </template>
 
 <script setup lang="ts">

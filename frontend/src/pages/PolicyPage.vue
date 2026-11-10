@@ -77,18 +77,26 @@
 
     <ResourceFreshnessNotice :resources="['portfolio', 'policy']" />
 
-    <section class="revision-panel q-pa-md" aria-labelledby="revision-title">
+    <q-card
+      tag="section"
+      flat
+      bordered
+      class="revision-panel q-pa-md"
+      aria-labelledby="revision-title"
+    >
       <div class="section-heading items-center row justify-between q-gutter-md q-mb-md">
         <div>
-          <h2 class="q-ma-none" id="revision-title">Policy revision</h2>
+          <h2 class="q-ma-none text-subtitle1 text-blue-grey-10" id="revision-title">
+            Policy revision
+          </h2>
           <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
             Revisions are immutable after save. Editing a revision always creates a new revision
             from the selected source; unsaved form edits are never replaced by refreshes.
           </p>
         </div>
-        <span class="status-badge row inline no-wrap items-center q-py-xs q-px-sm">{{
-          revisionStatus
-        }}</span>
+        <q-badge rounded color="teal-1" text-color="teal-10">
+          {{ revisionStatus }}
+        </q-badge>
       </div>
       <div class="revision-controls items-end">
         <label class="field revision-select column no-wrap q-gutter-y-xs">
@@ -129,9 +137,11 @@
           Load latest revisions
         </q-btn>
       </div>
-      <div
+      <q-banner
         v-if="pendingRevisionId !== null"
-        class="notice-card q-pa-md column no-wrap q-gutter-y-sm"
+        dense
+        rounded
+        class="q-gutter-y-sm bg-amber-1 text-brown-10"
         role="alert"
       >
         <p class="q-mr-none q-mb-none q-ml-none">
@@ -175,23 +185,31 @@
             Discard edits and load
           </q-btn>
         </div>
-      </div>
-      <p v-if="dirty" class="state-message q-mt-md q-mb-none q-mx-none" role="status">
+      </q-banner>
+      <q-banner
+        v-if="dirty"
+        dense
+        rounded
+        class="q-mt-md q-mb-none q-mx-none bg-blue-grey-1 text-blue-grey-10"
+        role="status"
+      >
         Unsaved changes. This draft stays in memory while the workspace is open; reload would
         discard it. Activation is unavailable until this exact form is saved as a revision.
-      </p>
-      <p
+      </q-banner>
+      <q-banner
         v-else-if="savedRevisionId"
-        class="success-message q-mt-md q-mb-none q-mx-none"
+        dense
+        rounded
+        class="q-mt-md q-mb-none q-mx-none bg-green-1 text-green-10"
         role="status"
       >
         Current form matches saved revision {{ savedRevisionId }}. Only this saved content can be
         activated.
-      </p>
+      </q-banner>
       <p v-else-if="!loading && initialized" class="state-message q-mt-md q-mb-none q-mx-none">
         Save this configuration to create an immutable revision before activation.
       </p>
-    </section>
+    </q-card>
 
     <PolicySleevesEditor
       :draft="editorState.draft"
@@ -216,40 +234,56 @@
     />
 
     <PolicyTaxBatchSettings :settings="settings" @update:settings="updateSettings" />
-    <ul
+    <q-banner
       v-if="formIssues.length"
-      class="form-issues q-my-sm q-mx-none q-py-sm q-pl-lg q-pr-md"
+      dense
+      rounded
+      class="q-my-sm bg-red-1 text-red-10"
       role="alert"
       aria-label="Form fields that must be completed before saving"
     >
-      <li v-for="issue in formIssues" :key="issue">{{ issue }}</li>
-    </ul>
+      <ul class="q-ma-none q-pl-lg">
+        <li v-for="issue in formIssues" :key="issue">{{ issue }}</li>
+      </ul>
+    </q-banner>
 
-    <section class="activation-panel q-pa-md" aria-labelledby="activation-title">
+    <q-card
+      tag="section"
+      flat
+      bordered
+      class="activation-panel q-pa-md"
+      aria-labelledby="activation-title"
+    >
       <div class="section-heading items-center row justify-between q-gutter-md q-mb-md">
         <div>
-          <h2 class="q-ma-none" id="activation-title">Activation validation</h2>
+          <h2 class="q-ma-none text-subtitle1 text-blue-grey-10" id="activation-title">
+            Activation validation
+          </h2>
           <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
             Invalid exact target sums may be saved as drafts. Only a saved, unchanged revision can
             be activated; the backend remains authoritative.
           </p>
         </div>
-        <span
-          class="row inline no-wrap items-center q-py-xs q-px-sm"
-          :class="['status-badge', activationIssues.length ? 'status-warning' : 'status-ready']"
-          >{{ activationIssues.length ? 'Needs attention' : 'Target sums valid' }}</span
+        <q-badge
+          rounded
+          :color="activationIssues.length ? 'amber-1' : 'teal-1'"
+          :text-color="activationIssues.length ? 'brown-10' : 'teal-10'"
         >
+          {{ activationIssues.length ? 'Needs attention' : 'Target sums valid' }}
+        </q-badge>
       </div>
-      <div
+      <q-banner
         v-if="activationIssues.length"
-        class="validation-card q-my-md q-mx-none q-pa-md"
+        dense
+        rounded
+        class="q-my-md bg-amber-1 text-brown-10"
         role="status"
       >
         <strong>Activation errors for saved revision</strong>
         <ul class="q-my-sm q-mx-none q-pl-md">
           <li v-for="issue in activationIssues" :key="issue">{{ issue }}</li>
         </ul>
-      </div>
+      </q-banner>
       <p v-else class="success-card q-my-md q-mx-none q-pa-md">
         No target-sum errors are currently reported. Other backend validation can still reject
         activation.
@@ -278,7 +312,7 @@
         or ETF-consolidation preference; those controls are not invented here. Portfolio
         look-through suitability is stored only as the API's user-entered text.
       </p>
-    </section>
+    </q-card>
   </q-page>
 </template>
 

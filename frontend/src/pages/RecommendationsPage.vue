@@ -32,8 +32,16 @@
       submission controls exist on this screen.
     </WorkspaceCapabilityNotice>
 
-    <section class="run-controls q-pa-md" aria-label="Recommendation run controls">
-      <label class="trade-date-control column no-wrap q-gutter-y-xs">
+    <q-card
+      tag="section"
+      flat
+      bordered
+      class="run-controls q-pa-md"
+      aria-label="Recommendation run controls"
+    >
+      <label
+        class="trade-date-control column no-wrap q-gutter-y-xs text-caption text-weight-bold text-blue-grey-8"
+      >
         <span>Proposed trade date (optional)</span>
         <q-input
           outlined
@@ -56,7 +64,7 @@
         class="saved-run-form row items-end q-gutter-sm justify-end"
         @submit.prevent="openSavedRun"
       >
-        <label class="column no-wrap q-gutter-y-xs">
+        <label class="column no-wrap q-gutter-y-xs text-caption text-weight-bold text-blue-grey-8">
           <span>Open saved run ID</span>
           <q-input
             outlined
@@ -84,7 +92,7 @@
           {{ store.actionState.openSavedRun.pending ? 'Opening saved run…' : 'Open frozen run' }}
         </q-btn>
       </form>
-    </section>
+    </q-card>
 
     <div
       class="error-stack column no-wrap q-gutter-y-sm"
@@ -125,16 +133,18 @@
     </div>
 
     <ResourceFreshnessNotice />
-    <p
+    <q-banner
       v-if="portfolioLabelContext.revisionMismatch && !currentRunEffectsAreUsable"
-      class="state-message"
+      dense
+      rounded
+      class="q-my-sm bg-blue-grey-1 text-blue-grey-10"
       role="status"
     >
       Portfolio effects use policy revision
       {{ portfolioLabelContext.portfolioRevisionId ?? 'unavailable' }}; the active policy is
       {{ portfolioLabelContext.policyRevisionId ?? 'unavailable' }}. Cached values remain visible
       with API sleeve keys until matching policy labels are confirmed.
-    </p>
+    </q-banner>
 
     <WorkspaceEmptyState
       v-if="!currentRun"
@@ -170,15 +180,22 @@
         :provenance-label="provenanceLabel"
       />
 
-      <section
+      <q-card
+        tag="section"
+        flat
+        bordered
         v-if="!runPresentation.reviewMutationPending"
         class="effects-panel q-pa-md column no-wrap q-gutter-y-md"
         aria-labelledby="effects-title"
       >
         <header class="section-heading row items-start justify-between q-gutter-md">
           <div>
-            <h2 class="q-ma-none" id="effects-title">API allocation effects</h2>
-            <p class="q-mt-xs q-mb-none q-mx-none">{{ effectsDescription }}</p>
+            <h2 class="q-ma-none text-subtitle1 text-blue-grey-10" id="effects-title">
+              API allocation effects
+            </h2>
+            <p class="q-mt-xs q-mb-none q-mx-none text-body2 text-blue-grey-7">
+              {{ effectsDescription }}
+            </p>
           </div>
         </header>
         <AllocationTargets
@@ -191,17 +208,22 @@
           :labels="effectDisplay.labels"
           :show-no-current-basket="showNoCurrentBasket"
         />
-      </section>
+      </q-card>
 
-      <section
+      <q-card
+        tag="section"
+        flat
+        bordered
         v-if="currentRunGroupCount && !runPresentation.reviewMutationPending"
         class="review-panel q-pa-md"
         aria-labelledby="groups-title"
       >
         <header class="section-heading row items-start justify-between q-gutter-md">
           <div>
-            <h2 class="q-ma-none" id="groups-title">Ranked trade groups</h2>
-            <p class="q-mt-xs q-mb-none q-mx-none">
+            <h2 class="q-ma-none text-subtitle1 text-blue-grey-10" id="groups-title">
+              Ranked trade groups
+            </h2>
+            <p class="q-mt-xs q-mb-none q-mx-none text-body2 text-blue-grey-7">
               Priority rank is the API rank, not a precision score. Execution sequence and
               dependencies are shown separately.
             </p>
@@ -209,11 +231,17 @@
           <span>{{ filteredGroups.length }} shown / {{ currentRunGroupCount }} returned</span>
         </header>
 
-        <WorkspaceFilterPanel
-          label="Recommendation filters"
-          class="filter-panel row items-end q-gutter-sm q-pa-sm"
+        <q-card
+          tag="form"
+          flat
+          bordered
+          aria-label="Recommendation filters"
+          class="filter-panel row items-end q-gutter-sm q-pa-sm text-caption text-weight-bold text-blue-grey-8"
+          @submit.prevent
         >
-          <label class="column no-wrap q-gutter-y-xs">
+          <label
+            class="column no-wrap q-gutter-y-xs text-caption text-weight-bold text-blue-grey-8"
+          >
             <span>Sleeve</span>
             <q-select
               v-model="filters.sleeve"
@@ -232,7 +260,9 @@
               aria-label="Sleeve"
             />
           </label>
-          <label class="column no-wrap q-gutter-y-xs">
+          <label
+            class="column no-wrap q-gutter-y-xs text-caption text-weight-bold text-blue-grey-8"
+          >
             <span>Action</span>
             <q-select
               v-model="filters.action"
@@ -249,7 +279,9 @@
               aria-label="Action"
             />
           </label>
-          <label class="column no-wrap q-gutter-y-xs">
+          <label
+            class="column no-wrap q-gutter-y-xs text-caption text-weight-bold text-blue-grey-8"
+          >
             <span>Tax term</span>
             <q-select
               v-model="filters.term"
@@ -266,7 +298,9 @@
               aria-label="Tax term"
             />
           </label>
-          <label class="column no-wrap q-gutter-y-xs">
+          <label
+            class="column no-wrap q-gutter-y-xs text-caption text-weight-bold text-blue-grey-8"
+          >
             <span>Expected benefit</span>
             <q-select
               v-model="filters.benefit"
@@ -282,7 +316,9 @@
               aria-label="Expected benefit"
             />
           </label>
-          <label class="column no-wrap q-gutter-y-xs">
+          <label
+            class="column no-wrap q-gutter-y-xs text-caption text-weight-bold text-blue-grey-8"
+          >
             <span>Warnings</span>
             <q-select
               v-model="filters.warning"
@@ -299,7 +335,9 @@
               aria-label="Warnings"
             />
           </label>
-          <label class="column no-wrap q-gutter-y-xs">
+          <label
+            class="column no-wrap q-gutter-y-xs text-caption text-weight-bold text-blue-grey-8"
+          >
             <span>Group type</span>
             <q-select
               v-model="filters.groupType"
@@ -315,7 +353,9 @@
               aria-label="Group type"
             />
           </label>
-          <label class="column no-wrap q-gutter-y-xs">
+          <label
+            class="column no-wrap q-gutter-y-xs text-caption text-weight-bold text-blue-grey-8"
+          >
             <span>Sort by API priority rank</span>
             <q-select
               v-model="sortOrder"
@@ -331,14 +371,16 @@
               aria-label="Sort by API priority rank"
             />
           </label>
-        </WorkspaceFilterPanel>
+        </q-card>
 
         <fieldset
           class="selection-tools row items-end q-gutter-sm q-mb-md q-mr-none q-pa-md"
           :disabled="!canChangeSelection"
         >
           <legend class="q-py-none q-px-xs">Re-solve selected basket</legend>
-          <label class="top-n-control column no-wrap q-gutter-y-xs">
+          <label
+            class="top-n-control column no-wrap q-gutter-y-xs text-caption text-weight-bold text-blue-grey-8"
+          >
             <span>Top N groups by API rank</span>
             <q-input
               outlined
@@ -417,10 +459,10 @@
           class="shared-legs q-pt-md column no-wrap q-gutter-y-sm"
           aria-labelledby="shared-legs-title"
         >
-          <h3 class="q-mb-none q-mx-none" id="shared-legs-title">
+          <h3 class="q-mb-none q-mx-none text-subtitle2 text-blue-grey-9" id="shared-legs-title">
             Shared consolidated legs · each canonical leg shown once
           </h3>
-          <p class="q-mr-none q-mb-none q-ml-none">
+          <p class="q-mr-none q-mb-none q-ml-none text-body2 text-blue-grey-8">
             These API legs are referenced by multiple groups. A shared BUY cannot be toggled
             independently.
           </p>
@@ -432,12 +474,15 @@
             </p>
           </article>
         </section>
-        <section
+        <q-banner
           v-if="visibleUnlinkedLegs.length"
-          class="warning-banner q-mt-sm q-mb-none q-mx-none q-pa-md"
+          dense
+          rounded
+          class="q-mt-sm bg-amber-1 text-brown-10"
+          role="region"
           aria-label="Unlinked API legs"
         >
-          <h3 class="q-mt-xs q-mb-none q-mx-none">Unlinked API legs — not executable</h3>
+          <h3 class="q-ma-none text-subtitle2">Unlinked API legs — not executable</h3>
           <article v-for="leg in visibleUnlinkedLegs" :key="leg.leg_id" class="unlinked-leg-card">
             <RecommendationLegDetails :leg="leg" :id="legAnchor(leg.leg_id)" />
             <p>
@@ -445,17 +490,20 @@
               executable recommendation.
             </p>
           </article>
-        </section>
-      </section>
+        </q-banner>
+      </q-card>
 
-      <section
+      <q-card
+        tag="section"
+        flat
+        bordered
         v-if="!runPresentation.reviewMutationPending"
         class="export-panel row no-wrap justify-between q-gutter-md items-center q-pa-md"
         aria-label="Recommendation export"
       >
         <div>
-          <h2 class="q-ma-none">Export this API run</h2>
-          <p class="q-mt-xs q-mb-none q-mx-none">
+          <h2 class="q-ma-none text-subtitle1 text-blue-grey-10">Export this API run</h2>
+          <p class="q-mt-xs q-mb-none q-mx-none text-body2 text-blue-grey-7">
             Exports retain the API run, policy, source generation, as-of time, warnings, and
             demo/actionability metadata.
           </p>
@@ -484,7 +532,7 @@
         >
           Export JSON
         </q-btn>
-      </section>
+      </q-card>
     </template>
   </section>
 </template>
@@ -494,7 +542,6 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import ApiActionError from '@/components/ApiActionError.vue';
 import WorkspaceCapabilityNotice from '@/components/WorkspaceCapabilityNotice.vue';
 import WorkspaceEmptyState from '@/components/WorkspaceEmptyState.vue';
-import WorkspaceFilterPanel from '@/components/WorkspaceFilterPanel.vue';
 import WorkspacePageHeader from '@/components/WorkspacePageHeader.vue';
 import RecommendationLegDetails from '@/components/RecommendationLegDetails.vue';
 import RunSummary from '@/components/RunSummary.vue';
@@ -920,41 +967,6 @@ onMounted(() => {
 
 <style scoped>
 /* Grid gaps use Quasar's spacing scale; negative-margin gutters distort grid tracks. */
-.section-heading h2,
-.export-panel h2 {
-  color: #10263d;
-}
-
-.section-heading p,
-.export-panel p {
-  color: #61798a;
-  line-height: 1.5;
-}
-
-.warning-banner {
-  border-radius: 0.65rem;
-  line-height: 1.5;
-}
-.warning-banner {
-  border: 1px solid #e8d39a;
-  background: #fff8e7;
-  color: #70501b;
-}
-.run-controls,
-.effects-panel,
-.review-panel,
-.export-panel {
-  border: 1px solid #dce6eb;
-  border-radius: 0.8rem;
-  background: #fff;
-  box-shadow: 0 4px 20px rgb(18 55 77 / 4.5%);
-}
-
-label {
-  color: #526c7c;
-  font-size: 0.76rem;
-  font-weight: 650;
-}
 
 .read-only-note,
 .empty-inline,
@@ -964,16 +976,9 @@ label {
   line-height: 1.5;
 }
 
-.section-heading h2 {
-  font-size: 1.05rem;
-}
 .section-heading > span {
   color: #657d8b;
   font-size: 0.76rem;
-}
-.filter-panel {
-  border: 1px solid #eaf0f3;
-  border-radius: 0.65rem;
 }
 .filter-panel label {
   flex: 1 1 9rem;
@@ -996,11 +1001,6 @@ label {
   min-width: 0;
   gap: 8px;
 }
-.shared-legs h3,
-.warning-banner h3 {
-  color: #29475a;
-  font-size: 0.9rem;
-}
 .shared-legs {
   border-top: 1px solid #dce6eb;
 }
@@ -1011,9 +1011,6 @@ label {
 
 .export-panel > div {
   flex: 1 1 20rem;
-}
-.export-panel h2 {
-  font-size: 1rem;
 }
 
 @media (max-width: 760px) {

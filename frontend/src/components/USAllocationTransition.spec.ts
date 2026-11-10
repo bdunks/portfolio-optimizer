@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { mount } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
+import { QBanner, QCard, QChip } from 'quasar';
 import USAllocationTransition from './USAllocationTransition.vue';
 import type { USTransitionResponse } from '@/types/api';
 
@@ -57,6 +58,15 @@ describe('USAllocationTransition', () => {
     const wrapper = mount(USAllocationTransition, {
       props: { transition, labels: { fund: 'Synthetic fund', stocks: 'Synthetic equities' } },
     });
+    const cards = wrapper.findAllComponents(QCard);
+    expect(cards).toHaveLength(3);
+    expect(cards.map((card) => card.element.tagName.toLowerCase())).toEqual([
+      'article',
+      'article',
+      'article',
+    ]);
+    expect(cards.every((card) => card.classes().includes('q-pa-md'))).toBe(true);
+    expect(wrapper.find('section.transition-panel').exists()).toBe(true);
 
     expect(wrapper.findAll('.state-card')).toHaveLength(3);
     expect(wrapper.get('[data-state="current"]').text()).toContain('101.0100 USD');
@@ -66,6 +76,10 @@ describe('USAllocationTransition', () => {
     expect(wrapper.get('[data-state="current"]').text()).toContain(
       'Transition destination progress within US sleeve11.1100%',
     );
+    const unitChip = wrapper.findComponent(QChip);
+    expect(unitChip.text()).toBe('Within US sleeve + whole portfolio');
+    expect(unitChip.props('clickable')).toBe(false);
+    expect(unitChip.attributes('role')).toBeUndefined();
     expect(wrapper.get('[data-state="current"]').text()).toContain('12.1200% within US sleeve');
     expect(wrapper.get('[data-state="proposed"]').text()).toContain('13.1300% within US sleeve');
     expect(wrapper.text()).toContain('6.0600% of whole portfolio');
@@ -94,5 +108,18 @@ describe('USAllocationTransition', () => {
     expect(wrapper.text()).toContain('US transition data is unavailable');
     expect(wrapper.text()).not.toContain('0 USD');
     expect(wrapper.findAll('.state-card')).toHaveLength(0);
+  });
+  it('shows the current-basket comparison notice only when requested and keeps it polite', () => {
+    const wrapper = mount(USAllocationTransition, {
+      props: { transition, showNoCurrentBasket: true },
+    });
+    const banner = wrapper.getComponent(QBanner);
+    expect(banner.attributes('role')).toBe('status');
+    expect(banner.text()).toContain(
+      'No current proposed basket from a matching current optimizer run.',
+    );
+
+    const withoutNotice = mount(USAllocationTransition, { props: { transition } });
+    expect(withoutNotice.findAllComponents(QBanner)).toHaveLength(0);
   });
 });

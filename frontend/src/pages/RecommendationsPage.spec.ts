@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import type { OptimizerRecommendationsResponse, USTransitionResponse } from '@/types/api';
 
+import { QBanner, QCard, QMarkupTable } from 'quasar';
 import RecommendationsPage from './RecommendationsPage.vue';
 import { useWorkspaceStore } from '@/stores/workspace-store';
 
@@ -468,6 +469,34 @@ afterEach(() => {
 });
 
 describe('RecommendationsPage', () => {
+  it('keeps unlinked-leg warnings as a named neutral region, not an alert', async () => {
+    const base = makeRun();
+    const unlinkedRun = {
+      ...base,
+      consolidated_legs: [
+        ...base.consolidated_legs,
+        {
+          ...base.consolidated_legs[0]!,
+          leg_id: 'unlinked-api-leg',
+          group_ids: ['unknown-group'],
+          sequence: 99,
+        },
+      ],
+    };
+    const { pinia } = setup(unlinkedRun);
+    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    await flushPromises();
+
+    const warning = wrapper
+      .findAllComponents(QBanner)
+      .find((banner) => banner.attributes('aria-label') === 'Unlinked API legs');
+    expect(warning?.attributes('role')).toBe('region');
+    expect(warning?.text()).toContain('Unlinked API legs — not executable');
+    expect(warning?.text()).toContain('API group references are missing or inconsistent.');
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it('uses portfolio keys for allocation and nested transition when successful reads disagree', async () => {
     const { pinia, store } = setup();
     store.portfolio = portfolioWithTransition('portfolio-revision-a') as never;
@@ -489,6 +518,12 @@ describe('RecommendationsPage', () => {
     expect(wrapper.text()).toContain(
       'Portfolio effects use policy revision portfolio-revision-a; the active policy is active-policy-b.',
     );
+    const mismatchBanner = wrapper
+      .findAllComponents(QBanner)
+      .find((banner) =>
+        banner.text().includes('Portfolio effects use policy revision portfolio-revision-a'),
+      );
+    expect(mismatchBanner?.attributes('role')).toBe('status');
     const effects = wrapper.get('.effects-panel').text();
     expect(effects).toContain('us');
 
@@ -649,6 +684,14 @@ describe('RecommendationsPage', () => {
     vi.stubGlobal('fetch', fetcher);
     const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
     await flushPromises();
+    expect(wrapper.get('.run-controls').element.tagName).toBe('SECTION');
+    expect(wrapper.get('.effects-panel').element.tagName).toBe('SECTION');
+    expect(wrapper.get('.review-panel').element.tagName).toBe('SECTION');
+    expect(wrapper.get('.export-panel').element.tagName).toBe('SECTION');
+    expect(
+      wrapper.findAllComponents(QCard).some((card) => card.classes().includes('filter-panel')),
+    ).toBe(true);
+    expect(wrapper.get('.shared-leg-card').element.tagName).toBe('ARTICLE');
 
     expect(wrapper.text()).toContain('DEMO ONLY · non-actionable');
     expect(wrapper.text()).toContain('The real optimizer is unavailable');
@@ -1018,6 +1061,21 @@ describe('RecommendationsPage', () => {
     await flushPromises();
 
     const effects = wrapper.get('.effects-panel');
+    const allocation = effects.get('.allocation-panel');
+    const allocationMarkup = allocation.findComponent(QMarkupTable);
+    expect(allocationMarkup.exists()).toBe(true);
+    expect(allocationMarkup.element.querySelectorAll('table')).toHaveLength(1);
+    const allocationTable = allocationMarkup.element.querySelector('table');
+    expect(
+      allocationTable?.querySelector('caption')?.textContent?.replace(/\s+/g, ' ').trim(),
+    ).toBe('Current, proposed basket, and policy target allocation weights');
+    expect(allocationTable?.querySelectorAll('thead th[scope="col"]')).toHaveLength(
+      allocationTable?.querySelectorAll('thead th').length,
+    );
+    const allocationRegion = allocation.get(
+      '[role="region"][aria-label="Portfolio allocation weights"]',
+    );
+    expect(allocationRegion.attributes('tabindex')).toBe('0');
     expect(effects.text()).toContain('Current portfolio API values with active-policy labels');
     expect(effects.get('.allocation-panel').text()).toContain('Current US policy label');
     expect(effects.get('.allocation-panel').text()).not.toContain('Frozen US equity');

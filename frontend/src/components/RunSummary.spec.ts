@@ -1,5 +1,6 @@
 import { mount } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
+import { QBadge, QBanner, QCard } from 'quasar';
 import RunSummary from './RunSummary.vue';
 import type {
   FrozenRunDisplayContextResponse,
@@ -94,6 +95,12 @@ describe('RunSummary', () => {
         </div>
       `,
     });
+    const summaryCards = wrapper
+      .findAllComponents(QCard)
+      .filter((card) => card.classes().includes('run-summary'));
+    expect(summaryCards).toHaveLength(2);
+    expect(summaryCards.every((card) => card.props('tag') === 'section')).toBe(true);
+    expect(summaryCards.every((card) => card.props('flat') && card.props('bordered'))).toBe(true);
     const headings = wrapper.findAll('.run-summary h2');
     const ids = headings.map((heading) => heading.attributes('id'));
     expect(new Set(ids).size).toBe(2);
@@ -102,6 +109,43 @@ describe('RunSummary', () => {
     expect(wrapper.text()).toContain('3210.00');
     expect(wrapper.text()).not.toContain('active-policy-r99');
     expect(wrapper.text()).toContain('DEMO · non-actionable');
+    const statusBadges = wrapper.findAllComponents(QBadge);
+    expect(statusBadges).toHaveLength(2);
+    expect(statusBadges.map((badge) => badge.text())).toEqual([
+      'DEMO · non-actionable',
+      'DEMO · non-actionable',
+    ]);
+    expect(statusBadges.every((badge) => badge.attributes('role') === 'status')).toBe(true);
+    expect(statusBadges.every((badge) => badge.props('color') === 'amber-1')).toBe(true);
+  });
+
+  // Synthetic future API variants exercise existing wording; the current DEMO API schema stays unchanged.
+  it('preserves API actionability wording in status badges', () => {
+    const actionable = mount(RunSummary, {
+      props: {
+        mode: 'review',
+        run: {
+          ...fullRun,
+          demo: false,
+          actionable: true,
+        } as unknown as OptimizerRecommendationsResponse,
+      },
+    });
+    const actionableBadge = actionable.findComponent(QBadge);
+    expect(actionableBadge.text()).toBe('API-marked actionable · no order controls');
+    expect(actionableBadge.attributes('role')).toBe('status');
+
+    const nonActionable = mount(RunSummary, {
+      props: {
+        mode: 'review',
+        run: {
+          ...fullRun,
+          demo: false,
+          actionable: false,
+        } as unknown as OptimizerRecommendationsResponse,
+      },
+    });
+    expect(nonActionable.findComponent(QBadge).text()).toBe('NON-ACTIONABLE');
   });
 
   it('withholds previous financial values while a review update is pending', () => {
@@ -121,6 +165,12 @@ describe('RunSummary', () => {
     expect(wrapper.get('[role="status"]').text()).toContain(
       'Review update pending · prior run withheld',
     );
+    const pendingBanner = wrapper
+      .findAllComponents(QBanner)
+      .find((banner) =>
+        banner.text().includes('requested selection or annotation is being saved or re-solved'),
+      );
+    expect(pendingBanner?.attributes('role')).toBe('status');
     expect(wrapper.text()).not.toContain('999.00 USD');
   });
 
@@ -136,5 +186,33 @@ describe('RunSummary', () => {
     expect(wrapper.text()).toContain('tax_profile_incomplete');
     expect(wrapper.text()).toContain('the saved summary has no frozen policy data');
     expect(wrapper.text()).toContain('No order preview, approval, or submission controls');
+  });
+  it('keeps provenance polite and static warnings neutral instead of announcing them as alerts', () => {
+    const wrapper = mount(RunSummary, {
+      props: {
+        mode: 'review',
+        run: {
+          ...fullRun,
+          estimated_tax_benefit_status: 'optimizer_unavailable',
+        },
+        view: 'stale',
+        provenanceLabel: 'Stale/unverified run · read-only',
+      },
+    });
+    const banners = wrapper.findAllComponents(QBanner);
+    expect(banners.map((banner) => banner.attributes('role'))).toEqual([
+      'status',
+      'group',
+      'group',
+    ]);
+    expect(banners[0]?.classes()).toContain('bg-amber-1');
+    expect(banners[0]?.text()).toContain('Stale/unverified run · read-only');
+    expect(wrapper.get('[aria-label="DEMO solver output notice"]').text()).toContain(
+      'hypothetical and non-executable',
+    );
+    expect(wrapper.get('[aria-label="Tax estimate availability notice"]').text()).toContain(
+      'No production optimization or feasibility claim is made.',
+    );
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
   });
 });

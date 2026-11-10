@@ -1,8 +1,8 @@
 <template>
-  <section class="target-panel q-pa-md" :aria-labelledby="`${sectionId}-title`">
+  <q-card tag="section" class="target-panel q-pa-md" :aria-labelledby="`${sectionId}-title`">
     <div class="section-heading items-center row justify-between q-gutter-md q-mb-md">
       <div>
-        <h2 class="q-ma-none" :id="`${sectionId}-title`">Sleeves and allocation targets</h2>
+        <h2 class="q-ma-none text-h6" :id="`${sectionId}-title`">Sleeves and allocation targets</h2>
         <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
           Top-level targets and every populated nested allocation must total exactly 100%. Drift
           bands use percentage points. No tolerance, implicit cash sleeve, or normalization is
@@ -22,9 +22,10 @@
         >+ Add sleeve</q-btn
       >
     </div>
-    <div
+
+    <q-banner
       v-if="targetIssues.length"
-      class="validation-card q-my-md q-mx-none q-pa-md"
+      class="q-my-md rounded bg-amber-1 text-brown-10"
       role="status"
       aria-live="polite"
     >
@@ -35,25 +36,34 @@
       <p class="q-mt-xs q-mb-none q-mx-none">
         These client-side checks are guidance only; the backend response is authoritative.
       </p>
-    </div>
-    <div v-else class="success-card q-my-md q-mx-none q-pa-md" role="status">
+    </q-banner>
+    <q-banner v-else rounded class="q-my-md bg-green-1 text-green-10" role="status">
       Enabled top-level and nested target sums are exactly 100%.
-    </div>
-    <p v-if="deleteError && !pendingDeleteSleeve" class="inline-error" role="alert">
+    </q-banner>
+    <q-banner
+      v-if="deleteError && !pendingDeleteSleeve"
+      dense
+      rounded
+      class="q-my-sm bg-red-1 text-red-10"
+      role="alert"
+    >
       {{ deleteError }}
-    </p>
-    <WorkspaceTableFrame class="table-scroll" label="Sleeve allocation policy settings">
-      <table class="editor-table sleeves-table">
+    </q-banner>
+    <WorkspaceTableFrame label="Sleeve allocation policy settings">
+      <q-markup-table class="editor-table sleeves-table" wrap-cells>
+        <caption class="sr-only">
+          Configured sleeves and their allocation policy settings
+        </caption>
         <thead>
           <tr>
-            <th class="q-pa-sm">Order / sleeve key</th>
-            <th class="q-pa-sm">Name</th>
-            <th class="q-pa-sm">Parent</th>
-            <th class="q-pa-sm">Target (%)</th>
-            <th class="q-pa-sm">Drift band (pp)</th>
-            <th class="q-pa-sm">Designations</th>
-            <th class="q-pa-sm">Enabled</th>
-            <th class="q-pa-sm">Actions</th>
+            <th scope="col">Order / sleeve key</th>
+            <th scope="col">Name</th>
+            <th scope="col">Parent</th>
+            <th scope="col">Target (%)</th>
+            <th scope="col">Drift band (pp)</th>
+            <th scope="col">Designations</th>
+            <th scope="col">Enabled</th>
+            <th scope="col">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -62,7 +72,7 @@
             :key="`${sleeve.sleeve_key}-${index}`"
             :class="{ 'disabled-row': !sleeve.enabled }"
           >
-            <td class="q-pa-sm">
+            <td>
               <div class="order-tools row no-wrap q-gutter-xs q-mb-xs">
                 <q-btn
                   no-caps
@@ -95,7 +105,7 @@
               </div>
               <code class="sleeve-key">{{ sleeve.sleeve_key || 'new sleeve' }}</code>
             </td>
-            <td class="q-pa-sm">
+            <td>
               <label class="compact-field column no-wrap q-gutter-y-xs"
                 ><span class="sr-only">Sleeve name</span
                 ><q-input
@@ -110,7 +120,7 @@
                   placeholder="Display name"
               /></label>
             </td>
-            <td class="q-pa-sm">
+            <td>
               <label class="compact-field column no-wrap q-gutter-y-xs"
                 ><span class="sr-only">Parent sleeve</span>
                 <q-select
@@ -132,7 +142,7 @@
                 />
               </label>
             </td>
-            <td class="q-pa-sm">
+            <td>
               <label class="compact-field target-input column no-wrap q-gutter-y-xs"
                 ><span class="sr-only">Target percent</span
                 ><q-input
@@ -148,7 +158,7 @@
                   placeholder="0"
               /></label>
             </td>
-            <td class="q-pa-sm">
+            <td>
               <label class="compact-field target-input column no-wrap q-gutter-y-xs"
                 ><span class="sr-only">Drift band percentage points</span
                 ><q-input
@@ -164,7 +174,7 @@
                   placeholder="0"
               /></label>
             </td>
-            <td class="designation-cell q-pa-sm">
+            <td class="designation-cell text-caption text-weight-bold text-blue-grey-8">
               <q-checkbox
                 dense
                 color="primary"
@@ -196,9 +206,9 @@
                 @update:model-value="setSleeveRole(sleeve.sleeve_key, 'is_cash_sleeve', $event)"
               />
             </td>
-            <td class="q-pa-sm">
+            <td>
               <q-checkbox
-                class="toggle-field"
+                class="text-caption text-weight-bold text-blue-grey-8"
                 dense
                 color="primary"
                 :model-value="sleeve.enabled"
@@ -229,7 +239,7 @@
                 />
               </label>
             </td>
-            <td class="q-pa-sm">
+            <td>
               <q-btn
                 no-caps
                 type="button"
@@ -244,20 +254,22 @@
             </td>
           </tr>
           <tr v-if="sleeves.length === 0">
-            <td colspan="8" class="empty-cell q-pa-md">
+            <td colspan="8" class="empty-cell">
               No sleeves configured. Add a sleeve and enter its policy values.
             </td>
           </tr>
         </tbody>
-      </table>
+      </q-markup-table>
     </WorkspaceTableFrame>
-    <div
+    <q-card
+      tag="div"
       v-if="pendingDeleteSleeve"
+      bordered
       class="delete-panel q-pa-md column no-wrap q-gutter-y-sm"
       role="group"
       :aria-labelledby="`${sectionId}-delete-title`"
     >
-      <h3 class="q-mr-none q-mb-none q-ml-none" :id="`${sectionId}-delete-title`">
+      <h3 class="q-mr-none q-mb-none q-ml-none text-subtitle1" :id="`${sectionId}-delete-title`">
         Delete {{ pendingDeleteSleeve.display_name || pendingDeleteSleeve.sleeve_key }}
       </h3>
       <p class="q-mr-none q-mb-none q-ml-none">
@@ -314,9 +326,9 @@
           />
         </label>
       </div>
-      <p v-if="deleteError" class="inline-error q-mr-none q-mb-none q-ml-none" role="alert">
+      <q-banner v-if="deleteError" dense rounded class="q-my-sm bg-red-1 text-red-10" role="alert">
         {{ deleteError }}
-      </p>
+      </q-banner>
       <div class="button-row row q-gutter-sm items-center">
         <q-btn
           no-caps
@@ -340,8 +352,8 @@
           >Cancel</q-btn
         >
       </div>
-    </div>
-  </section>
+    </q-card>
+  </q-card>
 </template>
 
 <script setup lang="ts">

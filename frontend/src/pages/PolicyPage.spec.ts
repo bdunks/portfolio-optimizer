@@ -10,7 +10,7 @@ import type {
   PolicySettingsResponse,
 } from '@/types/api';
 import PolicyPage from './PolicyPage.vue';
-import { QCheckbox, QSelect } from 'quasar';
+import { QBadge, QBanner, QCard, QCheckbox, QSelect } from 'quasar';
 
 const settings: PolicySettingsResponse = {
   short_term_tax_rate: '0.2500',
@@ -251,6 +251,21 @@ describe('PolicyPage', () => {
       global: { plugins: [createPinia()] },
     });
     await flushPromises();
+    const revisionCard = wrapper.get('.revision-panel');
+    const activationCard = wrapper.get('.activation-panel');
+    expect(revisionCard.element.tagName).toBe('SECTION');
+    expect(revisionCard.attributes('aria-labelledby')).toBe('revision-title');
+    expect(activationCard.element.tagName).toBe('SECTION');
+    expect(activationCard.attributes('aria-labelledby')).toBe('activation-title');
+    expect(wrapper.findComponent(QCard).exists()).toBe(true);
+    const statusBadges = wrapper.findAllComponents(QBadge);
+    expect(statusBadges.map((badge) => badge.text())).toEqual([
+      'Editing source revision-active-synthetic',
+      'Target sums valid',
+    ]);
+    expect(statusBadges.every((badge) => badge.attributes('role') === 'status')).toBe(true);
+    expect(statusBadges.every((badge) => badge.props('color') === 'teal-1')).toBe(true);
+    expect(wrapper.get('.success-card').element.tagName).toBe('P');
 
     expect(wrapper.get('.workspace-page').classes()).toContain('policy-page');
     expect(wrapper.text()).toContain('Allocation Policy');
@@ -279,6 +294,12 @@ describe('PolicyPage', () => {
     expect(savedPayload?.settings.short_term_tax_rate).toBe('0.2500');
     expect(savedPayload?.settings.long_term_tax_rate).toBeNull();
     expect(wrapper.text()).toContain('top_level_target_sum');
+    const attentionBadge = wrapper
+      .findAllComponents(QBadge)
+      .find((badge) => badge.text() === 'Needs attention');
+    expect(attentionBadge?.attributes('role')).toBe('status');
+    expect(attentionBadge?.props('color')).toBe('amber-1');
+    expect(attentionBadge?.props('textColor')).toBe('brown-10');
     expect(wrapper.text()).toContain('Only this saved content can be activated');
     expect(activationCalls).toBe(0);
   });
@@ -563,7 +584,11 @@ describe('PolicyPage', () => {
     await setQuasarModelValue(wrapper, QCheckbox, 'Enabled', false);
 
     expect(wrapper.find('.delete-panel').exists()).toBe(false);
-    expect(wrapper.get('.inline-error[role="alert"]').text()).toContain(
+    const alertBanner = wrapper
+      .findAllComponents(QBanner)
+      .find((banner) => banner.attributes('role') === 'alert');
+    expect(alertBanner).toBeDefined();
+    expect(alertBanner!.text()).toContain(
       'Disable or reparent enabled child sleeves before disabling this parent.',
     );
   });

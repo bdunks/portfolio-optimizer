@@ -11,6 +11,7 @@
           outline
           color="primary"
           icon="sync"
+          class="overview-page-action"
           label="Sync portfolio"
           no-caps
           :loading="store.actionState.syncPortfolio.pending"
@@ -21,6 +22,7 @@
           unelevated
           color="primary"
           icon="play_arrow"
+          class="overview-page-action"
           label="Run DEMO recommendations"
           no-caps
           :loading="store.actionState.runOptimizer.pending"
@@ -59,12 +61,18 @@
     </div>
 
     <ResourceFreshnessNotice />
-    <p v-if="portfolioLabelContext.revisionMismatch" class="state-message" role="status">
+    <q-banner
+      v-if="portfolioLabelContext.revisionMismatch"
+      dense
+      rounded
+      class="q-my-sm bg-blue-grey-1 text-blue-grey-10"
+      role="status"
+    >
       Portfolio effects use policy revision
       {{ portfolioLabelContext.portfolioRevisionId ?? 'unavailable' }}; the active policy is
       {{ portfolioLabelContext.policyRevisionId ?? 'unavailable' }}. Cached values remain visible
       with API sleeve keys until matching policy labels are confirmed.
-    </p>
+    </q-banner>
     <WorkspaceCapabilityNotice label="DEMO analysis only.">
       Recommendations are non-actionable; no broker calls, OAuth, live writes, or orders are
       available.
@@ -73,40 +81,44 @@
     <section class="summary-grid" aria-label="Current portfolio summary">
       <q-card flat bordered class="summary-card">
         <q-card-section>
-          <p class="summary-label q-ma-none">Portfolio value</p>
-          <p class="summary-value q-mt-sm q-mb-none q-mx-none">
+          <p class="q-ma-none text-caption text-weight-bold text-blue-grey-8">Portfolio value</p>
+          <p class="q-mt-sm q-mb-none q-mx-none text-h6 text-weight-bold text-blue-grey-10">
             {{ formatUsd(portfolio?.portfolio_total_usd) }}
           </p>
-          <p class="summary-foot q-mt-xs q-mb-none q-mx-none">
+          <p class="q-mt-xs q-mb-none q-mx-none text-caption text-blue-grey-6">
             Value returned by the portfolio API
           </p>
         </q-card-section>
       </q-card>
       <q-card flat bordered class="summary-card">
         <q-card-section>
-          <p class="summary-label q-ma-none">Cash</p>
-          <p class="summary-value q-mt-sm q-mb-none q-mx-none">
+          <p class="q-ma-none text-caption text-weight-bold text-blue-grey-8">Cash</p>
+          <p class="q-mt-sm q-mb-none q-mx-none text-h6 text-weight-bold text-blue-grey-10">
             {{ formatUsd(portfolio?.cash_usd) }}
           </p>
-          <p class="summary-foot q-mt-xs q-mb-none q-mx-none">
+          <p class="q-mt-xs q-mb-none q-mx-none text-caption text-blue-grey-6">
             Cash balance returned by the portfolio API
           </p>
         </q-card-section>
       </q-card>
       <q-card flat bordered class="summary-card">
         <q-card-section>
-          <p class="summary-label q-ma-none">Positions</p>
-          <p class="summary-value q-mt-sm q-mb-none q-mx-none">{{ positionCount }}</p>
-          <p class="summary-foot q-mt-xs q-mb-none q-mx-none">Current API position count</p>
+          <p class="q-ma-none text-caption text-weight-bold text-blue-grey-8">Positions</p>
+          <p class="q-mt-sm q-mb-none q-mx-none text-h6 text-weight-bold text-blue-grey-10">
+            {{ positionCount }}
+          </p>
+          <p class="q-mt-xs q-mb-none q-mx-none text-caption text-blue-grey-6">
+            Current API position count
+          </p>
         </q-card-section>
       </q-card>
       <q-card flat bordered class="summary-card">
         <q-card-section>
-          <p class="summary-label q-ma-none">Risk tracking</p>
-          <p class="summary-value summary-value-small q-mt-sm q-mb-none q-mx-none">
+          <p class="q-ma-none text-caption text-weight-bold text-blue-grey-8">Risk tracking</p>
+          <p class="q-mt-sm q-mb-none q-mx-none text-subtitle1 text-weight-bold text-blue-grey-10">
             Not calculated
           </p>
-          <p class="summary-foot q-mt-xs q-mb-none q-mx-none">
+          <p class="q-mt-xs q-mb-none q-mx-none text-caption text-blue-grey-6">
             No risk estimate is available from this workflow
           </p>
         </q-card-section>
@@ -118,7 +130,7 @@
         <q-card-section>
           <div class="section-heading row justify-between q-gutter-md items-center q-mb-md">
             <div>
-              <h2 class="q-ma-none">Portfolio data</h2>
+              <h2 class="q-ma-none text-subtitle1 text-blue-grey-10">Portfolio data</h2>
               <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
                 Source status and coverage from the backend API
               </p>
@@ -174,7 +186,9 @@
           </p>
 
           <div class="coverage-block q-mt-md">
-            <h3 class="q-mt-none q-mb-sm q-mx-none">Data coverage</h3>
+            <h3 class="q-mt-none q-mb-sm q-mx-none text-subtitle2 text-blue-grey-8 text-uppercase">
+              Data coverage
+            </h3>
             <p v-if="coverageEntries.length === 0" class="empty-note q-ma-none">
               Coverage is unavailable until portfolio data loads.
             </p>
@@ -198,7 +212,7 @@
         <q-card-section>
           <div class="section-heading row justify-between q-gutter-md items-center q-mb-md">
             <div>
-              <h2 class="q-ma-none">Latest recommendations</h2>
+              <h2 class="q-ma-none text-subtitle1 text-blue-grey-10">Latest recommendations</h2>
               <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
                 Metrics are shown only for a run matching this current portfolio and active policy.
               </p>
@@ -249,7 +263,7 @@
         <q-card-section>
           <div class="section-heading row justify-between q-gutter-md items-center q-mb-md">
             <div>
-              <h2 class="q-ma-none">Active allocation policy</h2>
+              <h2 class="q-ma-none text-subtitle1 text-blue-grey-10">Active allocation policy</h2>
               <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
                 Policy settings and allowed securities supplied by the API
               </p>
@@ -263,7 +277,9 @@
             No active policy has been returned.
           </p>
           <template v-else>
-            <h3 class="q-mt-none q-mb-sm q-mx-none">Enabled sleeves and targets</h3>
+            <h3 class="q-mt-none q-mb-sm q-mx-none text-subtitle2 text-blue-grey-8 text-uppercase">
+              Enabled sleeves and targets
+            </h3>
             <ul v-if="enabledSleeves.length" class="policy-list q-ma-none q-pa-none">
               <li
                 class="row no-wrap justify-between items-center q-gutter-sm q-py-sm q-px-none"
@@ -276,7 +292,11 @@
             </ul>
             <p v-else class="empty-note q-ma-none">No enabled sleeves were returned.</p>
 
-            <h3 class="policy-subhead q-mt-md q-mb-sm q-mx-none">Allowed securities</h3>
+            <h3
+              class="policy-subhead q-mt-md q-mb-sm q-mx-none text-subtitle2 text-blue-grey-8 text-uppercase"
+            >
+              Allowed securities
+            </h3>
             <ul v-if="enabledSecurities.length" class="security-list q-ma-none q-pa-none">
               <li
                 class="row no-wrap items-center q-gutter-sm justify-start q-py-sm q-px-none"
@@ -493,38 +513,10 @@ onMounted(() => {
 .summary-card,
 .workspace-card {
   min-width: 0;
-  border-color: #dce6eb;
-  border-radius: 0.8rem;
-  background: #fff;
-  box-shadow: 0 4px 20px rgb(18 55 77 / 4.5%);
 }
 
 .summary-card {
   min-height: 7.2rem;
-}
-
-.summary-label {
-  color: #466779;
-  font-size: 0.75rem;
-  font-weight: 750;
-}
-
-.summary-value {
-  color: #172e41;
-  font-size: clamp(1.1rem, 2vw, 1.45rem);
-  font-weight: 820;
-  letter-spacing: -0.04em;
-  overflow-wrap: anywhere;
-}
-
-.summary-value-small {
-  font-size: 1rem;
-}
-
-.summary-foot {
-  color: #748894;
-  font-size: 0.68rem;
-  line-height: 1.4;
 }
 
 .content-grid {
@@ -533,22 +525,8 @@ onMounted(() => {
   gap: 16px;
 }
 
-.section-heading h2 {
-  color: #10263d;
-  font-size: 1.08rem;
-  letter-spacing: -0.025em;
-}
-
 .section-heading .section-subtitle {
   max-width: 40rem;
-}
-
-.account-card,
-.run-card,
-.allocation-card,
-.transition-card,
-.policy-card {
-  grid-column: span 1;
 }
 
 .transition-card {
@@ -572,14 +550,6 @@ onMounted(() => {
   font-size: 0.78rem;
   font-weight: 650;
   overflow-wrap: anywhere;
-}
-
-.coverage-block h3,
-.policy-card h3 {
-  color: #526c7c;
-  font-size: 0.76rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .coverage-list,
@@ -628,14 +598,6 @@ onMounted(() => {
   .content-grid {
     grid-template-columns: 1fr;
   }
-
-  .account-card,
-  .run-card,
-  .allocation-card,
-  .transition-card,
-  .policy-card {
-    grid-column: auto;
-  }
 }
 
 @media (max-width: 620px) {
@@ -648,7 +610,7 @@ onMounted(() => {
     justify-content: flex-start;
   }
 
-  .page-actions :deep(.q-btn) {
+  .page-actions :deep(.overview-page-action) {
     flex: 1 1 auto;
   }
 

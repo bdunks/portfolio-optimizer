@@ -5,7 +5,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import type { LotResponse, OptimizerRecommendationsResponse } from '@/types/api';
 import { useWorkspaceStore } from '@/stores/workspace-store';
 import TaxLotsPage from './TaxLotsPage.vue';
-import { QCheckbox, QSelect } from 'quasar';
+import { QBanner, QCard, QCheckbox, QMarkupTable, QSelect } from 'quasar';
 import { findQuasarComponent, setQuasarModelValue } from '@/test-utils/quasar-mount';
 
 const lot: LotResponse = {
@@ -114,7 +114,23 @@ describe('TaxLotsPage', () => {
     const store = useWorkspaceStore();
     const wrapper = mount(TaxLotsPage);
     await flushPromises();
+    const filters = findQuasarComponent(wrapper, QCard, 'Tax lot filters');
+    expect(filters.element.tagName).toBe('FORM');
+    expect(wrapper.get('.security-card').element.tagName).toBe('SECTION');
+    expect(wrapper.get('.security-card').attributes('aria-labelledby')).toBe('security-SYN');
+    expect(wrapper.get('.review-summary').element.tagName).toBe('SECTION');
 
+    const markupTables = wrapper.findAllComponents(QMarkupTable);
+    expect(markupTables).toHaveLength(1);
+    expect(markupTables[0]!.element.querySelectorAll('table')).toHaveLength(1);
+    const renderedTable = markupTables[0]!.element.querySelector('table');
+    const caption = renderedTable?.querySelector('caption')?.textContent;
+    expect(caption?.replace(/\s+/g, ' ').trim()).toBe('Tax lots for SYN');
+    expect(renderedTable?.querySelectorAll('thead th[scope="col"]')).toHaveLength(
+      renderedTable?.querySelectorAll('thead th').length,
+    );
+    const region = wrapper.get('[role="region"][aria-label="Tax lots for SYN"]');
+    expect(region.attributes('tabindex')).toBe('0');
     expect(wrapper.get('.workspace-page').classes()).toContain('workspace-page');
     expect(wrapper.text()).toContain('SYN');
     expect(wrapper.text()).toContain('BROKER-LOT-0007');
@@ -123,9 +139,17 @@ describe('TaxLotsPage', () => {
     expect(wrapper.text()).toContain('8.1875 USD / 5.3099%');
     expect(wrapper.text()).toContain('synthetic-quality-flag');
     expect(wrapper.text()).toContain('Fractional cleanup unsupported; not executable');
+    expect(wrapper.findAll('small.sub-value.block')).toHaveLength(2);
     expect(wrapper.text()).toContain('DEMO ONLY');
     expect(wrapper.text()).toContain('complete replacement set');
+    const noCurrentRun = wrapper
+      .findAllComponents(QBanner)
+      .find((banner) => banner.text().includes('No current DEMO run is available'));
+    expect(noCurrentRun?.attributes('role')).toBe('status');
 
+    expect(wrapper.get('.q-checkbox').classes()).toEqual(
+      expect.arrayContaining(['row', 'inline', 'no-wrap', 'items-center']),
+    );
     await setQuasarModelValue(wrapper, QCheckbox, 'Request SYN lot BROKER-LOT-0007', true);
     expect(wrapper.text()).toContain('Requested lot intent · 1');
     expect(wrapper.text()).toContain(

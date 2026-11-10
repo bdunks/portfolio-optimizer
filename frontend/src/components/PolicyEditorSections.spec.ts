@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { mount } from '@vue/test-utils';
 import { reactive } from 'vue';
-import { QCheckbox, QSelect } from 'quasar';
+import { QBanner, QCard, QCheckbox, QMarkupTable, QSelect } from 'quasar';
 import { findQuasarComponent, setQuasarModelValue } from '@/test-utils/quasar-mount';
 import { describe, expect, it } from 'vitest';
 import PolicyHoldingOverridesEditor from './PolicyHoldingOverridesEditor.vue';
@@ -51,6 +51,31 @@ function position(
   };
 }
 
+function expectRealMarkupTable(wrapper: ReturnType<typeof mount>, caption: string): void {
+  expectRealQuasarCard(wrapper);
+  const markup = wrapper.findComponent(QMarkupTable);
+  expect(markup.exists()).toBe(true);
+  expect(markup.attributes('tabindex')).toBe('0');
+  const tables = markup.element.querySelectorAll('table');
+  expect(tables).toHaveLength(1);
+  const table = tables.item(0);
+  expect(table.querySelector('caption')?.textContent?.replace(/\s+/g, ' ').trim()).toBe(caption);
+  const headers = table.querySelectorAll('thead th');
+  expect(headers.length).toBeGreaterThan(0);
+  expect(table.querySelectorAll('thead th[scope="col"]')).toHaveLength(headers.length);
+  const region = markup.element.closest('[role="region"]');
+  expect(region?.getAttribute('tabindex')).toBe('0');
+  expect(region?.getAttribute('aria-label')).toBeTruthy();
+}
+
+function expectRealQuasarCard(wrapper: ReturnType<typeof mount>, tagName = 'section'): void {
+  const card = wrapper.findComponent(QCard);
+  expect(card.exists()).toBe(true);
+  expect(card.element.tagName.toLowerCase()).toBe(tagName);
+  expect(card.classes()).toContain('q-card');
+  expect(card.classes()).toContain('q-pa-md');
+}
+
 describe('purpose-built policy editor sections', () => {
   it('keeps financial settings and batch limits as editable strings and preserves explicit booleans', async () => {
     const settings = reactive(createEmptyPolicySettings());
@@ -60,6 +85,7 @@ describe('purpose-built policy editor sections', () => {
         'onUpdate:settings': (next: EditablePolicySettings) => Object.assign(settings, next),
       },
     });
+    expectRealQuasarCard(wrapper);
     const field = (label: string) =>
       wrapper.findAll('label').find((candidate) => candidate.text().includes(label))!;
 
@@ -86,6 +112,9 @@ describe('purpose-built policy editor sections', () => {
         '<div><PolicyTaxBatchSettings :settings="first" /><PolicyTaxBatchSettings :settings="second" /></div>',
     };
     const wrapper = mount(host);
+    const cards = wrapper.findAllComponents(QCard);
+    expect(cards).toHaveLength(2);
+    expect(cards.map((card) => card.element.tagName.toLowerCase())).toEqual(['section', 'section']);
     const headings = wrapper.findAll('h2');
     const ids = headings.map((heading) => heading.attributes('id'));
     expect(new Set(ids).size).toBe(2);
@@ -128,6 +157,7 @@ describe('purpose-built policy editor sections', () => {
         },
       },
     });
+    expectRealMarkupTable(wrapper, 'Configured sleeves and their allocation policy settings');
 
     await wrapper.find('input[aria-label="Target percent"]').setValue('45.000000000000001');
     expect(draft.sleeves[0]?.target_pct).toBe('45.000000000000001');
@@ -151,6 +181,9 @@ describe('purpose-built policy editor sections', () => {
           checkbox.element.closest('tr')?.querySelector('.sleeve-key')?.textContent?.trim() ===
             'other',
       )!;
+    const designationCell = otherContainer.element.closest('td');
+    expect(designationCell?.classList.contains('text-caption')).toBe(true);
+    expect(designationCell?.classList.contains('text-blue-grey-8')).toBe(true);
     otherContainer.vm.$emit('update:modelValue', true);
     expect(draft.sleeves.find((item) => item.sleeve_key === 'us')?.is_direct_index_container).toBe(
       false,
@@ -172,6 +205,8 @@ describe('purpose-built policy editor sections', () => {
           button.element.closest('tr')?.querySelector('.sleeve-key')?.textContent?.trim() === 'us',
       )!
       .trigger('click');
+    const deletePanel = wrapper.get('.delete-panel.q-card[role="group"]');
+    expect(deletePanel.attributes('aria-labelledby')).toBe(deletePanel.get('h3').attributes('id'));
     await setQuasarModelValue(wrapper, QSelect, 'Holding reassignment destination', 'other');
     await setQuasarModelValue(wrapper, QSelect, 'New parent for Direct indexing', 'other');
     await setQuasarModelValue(wrapper, QSelect, 'New parent for Transition destination', 'other');
@@ -222,6 +257,11 @@ describe('purpose-built policy editor sections', () => {
         },
       },
     });
+    expectRealMarkupTable(wrapper, 'Configured ETF replacement candidates and policy settings');
+    const enabledToggle = findQuasarComponent(wrapper, QCheckbox, 'Enabled');
+    expect(enabledToggle.classes()).toEqual(
+      expect.arrayContaining(['text-caption', 'text-weight-bold', 'text-blue-grey-8']),
+    );
 
     await wrapper.find('button[aria-label="Move VTI down"]').trigger('click');
     expect(draft.allowedSecurities.map((item) => [item.ticker, item.priority])).toEqual([
@@ -261,6 +301,10 @@ describe('purpose-built policy editor sections', () => {
         },
       },
     });
+    expectRealMarkupTable(
+      wrapper,
+      'Current API sleeve resolutions and explicit overrides by ticker',
+    );
 
     expect(wrapper.text()).toContain('us → direct');
     expect(findQuasarComponent(wrapper, QSelect, 'Explicit override for OLD').text()).toContain(
@@ -344,5 +388,50 @@ describe('purpose-built policy editor sections', () => {
     sleeveWrapper.unmount();
     replacementWrapper.unmount();
     overrideWrapper.unmount();
+  });
+  it('renders policy feedback as explicit polite or assertive Quasar banners', async () => {
+    const loading = mount(PolicyHoldingOverridesEditor, {
+      props: {
+        draft: createEmptyPolicyDraft(),
+        positions: null,
+        portfolioAvailable: false,
+        portfolioLoading: true,
+      },
+    });
+    const loadingBanner = loading.getComponent(QBanner);
+    expect(loadingBanner.attributes('role')).toBe('status');
+    expect(loadingBanner.text()).toContain('Loading the current single-account holding list');
+
+    const invalidDraft = reactive(createEmptyPolicyDraft());
+    invalidDraft.sleeves = [sleeve('us')];
+    const validation = mount(PolicySleevesEditor, {
+      props: {
+        draft: invalidDraft,
+        positions: null,
+        targetIssues: ['Enabled targets must sum exactly 100%'],
+        sourceRevisionId: null,
+      },
+    });
+    const validationBanner = validation.getComponent(QBanner);
+    expect(validationBanner.attributes('role')).toBe('status');
+    expect(validationBanner.attributes('aria-live')).toBe('polite');
+    expect(validationBanner.text()).toContain('Enabled targets must sum exactly 100%');
+
+    const errorDraft = reactive(createEmptyPolicyDraft());
+    errorDraft.sleeves = [sleeve('parent'), sleeve('child', { parent_sleeve_key: 'parent' })];
+    const editor = mount(PolicySleevesEditor, {
+      props: {
+        draft: errorDraft,
+        positions: null,
+        targetIssues: [],
+        sourceRevisionId: null,
+      },
+    });
+    await setQuasarModelValue(editor, QCheckbox, 'Enabled', false);
+    const alertBanner = editor
+      .findAllComponents(QBanner)
+      .find((banner) => banner.attributes('role') === 'alert');
+    expect(alertBanner).toBeDefined();
+    expect(alertBanner!.text()).toContain('Disable or reparent enabled child sleeves');
   });
 });

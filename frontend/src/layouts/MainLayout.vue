@@ -16,32 +16,30 @@
           @click="toggleDrawer"
         />
         <q-toolbar-title class="brand-title row no-wrap items-center q-gutter-sm">
-          <span class="brand-mark" aria-hidden="true">PO</span>
+          <span class="brand-mark row inline no-wrap flex-center" aria-hidden="true">PO</span>
           <span>Portfolio Optimizer</span>
         </q-toolbar-title>
         <span class="header-context">Single-account workspace</span>
       </q-toolbar>
     </q-header>
 
-    <q-drawer
-      v-model="drawerOpen"
-      show-if-above
-      bordered
-      :breakpoint="1024"
-      class="workspace-drawer"
-    >
+    <q-drawer v-model="drawerOpen" show-if-above bordered :breakpoint="1024" class="bg-white">
       <div class="drawer-brand row no-wrap items-center q-gutter-sm q-py-lg q-px-md">
-        <span class="brand-mark" aria-hidden="true">PO</span>
-        <div>
+        <span class="brand-mark row inline no-wrap flex-center" aria-hidden="true">PO</span>
+        <div class="column no-wrap">
           <strong>Portfolio Optimizer</strong>
           <small class="q-mt-xs">Local decision support</small>
         </div>
       </div>
       <nav aria-label="Primary navigation">
         <q-list padding>
-          <q-item-label header>Workspace</q-item-label>
+          <q-item-label header class="text-overline text-weight-bold text-blue-grey-8"
+            >Workspace</q-item-label
+          >
           <q-item
             v-for="link in workspaceLinks"
+            class="rounded-borders"
+            :class="route.path === link.to ? 'text-white' : 'text-blue-grey-9'"
             :key="link.to"
             clickable
             :to="link.to"
@@ -55,7 +53,11 @@
             </q-item-section>
             <q-item-section>
               <q-item-label>{{ link.label }}</q-item-label>
-              <q-item-label caption>{{ link.caption }}</q-item-label>
+              <q-item-label
+                caption
+                :class="route.path === link.to ? 'text-white' : 'text-blue-grey-7'"
+                >{{ link.caption }}</q-item-label
+              >
             </q-item-section>
           </q-item>
         </q-list>
@@ -67,7 +69,13 @@
     </q-drawer>
 
     <q-page-container>
-      <q-banner class="demo-banner" role="status" aria-label="Demo-only application notice">
+      <q-banner
+        dense
+        rounded
+        class="demo-banner bg-amber-1 text-brown-10"
+        role="status"
+        aria-label="Demo-only application notice"
+      >
         <strong>DEMO ONLY</strong>
         <span
           >All analysis is non-actionable. No broker connection, OAuth, live writes, or
@@ -122,10 +130,8 @@ function closeDrawerOnSmallScreen(): void {
 }
 
 .brand-mark {
-  display: inline-grid;
   width: 2rem;
   height: 2rem;
-  place-items: center;
   border-radius: 0.55rem;
   background: linear-gradient(145deg, #31b8b0, #007775);
   color: #fff;
@@ -138,51 +144,19 @@ function closeDrawerOnSmallScreen(): void {
   font-size: 0.78rem;
 }
 
-.workspace-drawer {
-  background: linear-gradient(170deg, #10263e, #132f49 70%, #0d263c);
-  color: #d5e3eb;
-}
-
-.drawer-brand strong,
-.drawer-brand small {
-  display: block;
-}
-
 .drawer-brand strong {
-  color: #fff;
+  color: #10263d;
   font-size: 0.9rem;
 }
 
 .drawer-brand small {
-  color: #9fb6c4;
+  color: #546e7a;
   font-size: 0.68rem;
 }
 
-.workspace-drawer :deep(.q-item-label--header) {
-  color: #83a2b3;
-  font-size: 0.68rem;
-  font-weight: 800;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
-.workspace-drawer :deep(.q-item) {
-  border-radius: 0.55rem;
-  color: #cfdee7;
-}
-
-.workspace-drawer :deep(.workspace-nav-active) {
+.workspace-nav-active {
   background: #2a4c67;
-  color: #fff;
   box-shadow: inset 3px 0 0 #5bc5b7;
-}
-
-.workspace-drawer :deep(.q-item__label--caption) {
-  color: #9cb2c0;
-}
-
-.workspace-drawer :deep(.workspace-nav-active .q-item__label--caption) {
-  color: #c3d9e1;
 }
 
 .drawer-footer {
@@ -199,19 +173,6 @@ function closeDrawerOnSmallScreen(): void {
 .drawer-footer span {
   color: #b9ced9;
   line-height: 1.45;
-}
-
-.demo-banner {
-  border: 1px solid #f2dcad;
-  background: #fff7e8;
-  color: #765016;
-  font-size: 0.8rem;
-}
-
-.demo-banner strong {
-  flex: 0 0 auto;
-  font-size: 0.7rem;
-  letter-spacing: 0.05em;
 }
 
 .skip-link {

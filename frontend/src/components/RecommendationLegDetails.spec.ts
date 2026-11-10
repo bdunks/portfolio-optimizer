@@ -1,4 +1,5 @@
 import { mount } from '@vue/test-utils';
+import { QCard } from 'quasar';
 import { describe, expect, it } from 'vitest';
 import RecommendationLegDetails from './RecommendationLegDetails.vue';
 import type { RecommendationLegResponse } from '@/types/api';
@@ -35,6 +36,13 @@ describe('RecommendationLegDetails', () => {
     });
 
     const cards = wrapper.findAll('article.leg-card');
+    const quasarCards = wrapper.findAllComponents(QCard);
+    expect(quasarCards).toHaveLength(2);
+    expect(quasarCards.map((card) => card.element.tagName.toLowerCase())).toEqual([
+      'article',
+      'article',
+    ]);
+    expect(quasarCards.every((card) => card.classes().includes('q-pa-md'))).toBe(true);
     const headingIds = cards.map((card) => card.find('h3').attributes('id'));
     expect(new Set(headingIds).size).toBe(2);
     expect(cards.map((card) => card.attributes('aria-labelledby'))).toEqual(headingIds);

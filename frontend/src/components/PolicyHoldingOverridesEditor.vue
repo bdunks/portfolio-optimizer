@@ -1,8 +1,8 @@
 <template>
-  <section class="panel q-pa-md" :aria-labelledby="`${sectionId}-title`">
+  <q-card tag="section" class="panel q-pa-md" :aria-labelledby="`${sectionId}-title`">
     <div class="section-heading row items-center justify-between q-gutter-md q-mb-md">
       <div>
-        <h2 class="q-ma-none" :id="`${sectionId}-title`">Explicit holding overrides</h2>
+        <h2 class="q-ma-none text-h6" :id="`${sectionId}-title`">Explicit holding overrides</h2>
         <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
           “Use default resolution” removes an override. The API resolves approved ETFs by configured
           assignment and individual equities plus VB/VXF by the direct-index container unless
@@ -10,33 +10,36 @@
         </p>
       </div>
     </div>
-    <p
+    <q-banner
       v-if="portfolioLoading && !portfolioAvailable"
-      class="state-message q-mt-md q-mb-none q-mx-none"
+      class="q-mt-md q-mb-none q-mx-none rounded bg-blue-grey-1 text-blue-grey-10"
       role="status"
     >
       Loading the current single-account holding list…
-    </p>
+    </q-banner>
     <p v-else-if="!portfolioAvailable" class="empty-note q-mt-md q-mb-none q-mx-none">
       Current holdings are unavailable. Existing saved overrides remain editable below; no holdings
       are guessed.
     </p>
-    <WorkspaceTableFrame class="table-scroll" label="Holding sleeve overrides">
-      <table class="editor-table override-table">
+    <WorkspaceTableFrame label="Holding sleeve overrides">
+      <q-markup-table class="editor-table override-table" wrap-cells>
+        <caption class="sr-only">
+          Current API sleeve resolutions and explicit overrides by ticker
+        </caption>
         <thead>
           <tr>
-            <th class="q-pa-sm">Ticker</th>
-            <th class="q-pa-sm">Current API resolution</th>
-            <th class="q-pa-sm">Explicit override</th>
+            <th scope="col">Ticker</th>
+            <th scope="col">Current API resolution</th>
+            <th scope="col">Explicit override</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="holding in overrideHoldings" :key="holding.ticker">
-            <td class="q-pa-sm">
+            <td>
               <strong>{{ holding.ticker }}</strong>
             </td>
-            <td class="q-pa-sm">{{ holding.currentLabel }}</td>
-            <td class="q-pa-sm">
+            <td>{{ holding.currentLabel }}</td>
+            <td>
               <label class="compact-field override-select column no-wrap q-gutter-y-xs"
                 ><span class="sr-only">Explicit override for {{ holding.ticker }}</span>
                 <q-select
@@ -69,14 +72,14 @@
             </td>
           </tr>
           <tr v-if="overrideHoldings.length === 0">
-            <td colspan="3" class="empty-cell q-pa-md">
+            <td colspan="3" class="empty-cell">
               No current holdings or explicit overrides have been returned.
             </td>
           </tr>
         </tbody>
-      </table>
+      </q-markup-table>
     </WorkspaceTableFrame>
-  </section>
+  </q-card>
 </template>
 
 <script setup lang="ts">

@@ -1,9 +1,9 @@
 <template>
-  <article :id="id" class="leg-card q-pa-md" :aria-labelledby="headingId">
-    <h3 class="q-ma-none" :id="headingId">
+  <q-card tag="article" :id="id" class="leg-card q-pa-md" :aria-labelledby="headingId">
+    <h3 class="q-ma-none text-subtitle1" :id="headingId">
       Sequence {{ leg.sequence }} · {{ leg.side }} {{ leg.ticker ?? 'ticker unavailable' }}
     </h3>
-    <dl class="leg-facts q-mt-md q-mb-sm q-mx-none">
+    <dl class="leg-facts q-mt-md q-mb-sm q-mx-none text-caption text-blue-grey-10 text-weight-bold">
       <div class="q-pa-sm">
         <dt>Leg ID</dt>
         <dd class="q-mt-xs q-mb-none q-mx-none">{{ leg.leg_id }}</dd>
@@ -37,7 +37,7 @@
     <p class="leg-status q-mt-sm q-mb-none q-mx-none">
       {{ leg.selected ? 'Selected in this API basket' : 'Not selected in this API basket' }}
     </p>
-  </article>
+  </q-card>
 </template>
 
 <script setup lang="ts">
@@ -57,16 +57,8 @@ const headingId = `recommendation-leg-${useId()}`;
 /* Grid gaps use Quasar's spacing scale; negative-margin gutters distort grid tracks. */
 .leg-card {
   min-width: 0;
-  border: 1px solid #eaf0f3;
-  border-radius: 0.6rem;
-  background: #fbfdfe;
   /* Anchor navigation needs scroll clearance; Quasar margin utilities do not affect scrolling. */
   scroll-margin-top: 16px;
-}
-
-.leg-card h3 {
-  color: #29475a;
-  font-size: 0.9rem;
 }
 
 .leg-facts {
@@ -87,9 +79,6 @@ const headingId = `recommendation-leg-${useId()}`;
 }
 
 .leg-facts dd {
-  color: #29475a;
-  font-size: 0.78rem;
-  font-weight: 700;
   overflow-wrap: anywhere;
 }
 

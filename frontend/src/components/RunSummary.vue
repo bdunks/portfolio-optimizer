@@ -4,12 +4,21 @@
     class="overview-run-summary column no-wrap q-gutter-y-sm"
     aria-label="Run summary and frozen context"
   >
-    <p v-if="pending" class="pending-message q-mr-none q-mb-none q-ml-none q-pa-md" role="status">
+    <q-banner
+      v-if="pending"
+      dense
+      rounded
+      class="q-mr-none q-mb-none q-ml-none bg-teal-1 text-teal-10"
+      role="status"
+    >
       A review update is awaiting API confirmation. Prior run metrics and basket effects are
       withheld.
-    </p>
+    </q-banner>
     <template v-else>
-      <dl v-if="record && showMetrics" class="overview-metrics q-mr-none q-mb-none q-ml-none">
+      <dl
+        v-if="record && showMetrics"
+        class="overview-metrics q-mr-none q-mb-none q-ml-none text-caption text-blue-grey-10 text-weight-bold"
+      >
         <div class="q-pa-sm">
           <dt>Realized short-term P/L (estimated)</dt>
           <dd class="q-mt-xs q-mb-none q-mx-none">
@@ -86,17 +95,27 @@
     </template>
   </section>
 
-  <section
+  <q-card
     v-else-if="record || pending"
+    flat
+    bordered
+    tag="section"
     class="run-summary q-pa-md column no-wrap q-gutter-y-md"
     :aria-labelledby="headingId"
   >
     <h2 v-if="pending" :id="headingId" class="sr-only">Run summary pending</h2>
-    <p
+    <q-banner
       v-if="mode === 'review' && provenanceLabel"
-      class="provenance-banner row q-gutter-y-sm q-gutter-x-md q-mr-none q-mb-none q-pa-md"
+      class="provenance-banner q-gutter-y-sm q-gutter-x-md"
       :data-view="view ?? 'unknown'"
       role="status"
+      dense
+      rounded
+      :class="
+        view === 'stale' || view === 'unverified'
+          ? 'bg-amber-1 text-brown-10'
+          : 'bg-blue-grey-1 text-blue-grey-10'
+      "
     >
       <strong>{{ provenanceLabel }}</strong>
       <span>Run {{ record?.run_id ?? 'Unavailable' }}</span>
@@ -104,12 +123,18 @@
       <span>Source generation {{ record?.source_generation ?? 'Unavailable' }}</span>
       <span>As of {{ record?.as_of ?? 'Unavailable' }}</span>
       <span>Proposed trade date {{ record?.proposed_trade_date ?? 'Unavailable' }}</span>
-    </p>
+    </q-banner>
 
-    <p v-if="pending" class="pending-message q-mr-none q-mb-none q-ml-none q-pa-md" role="status">
+    <q-banner
+      v-if="pending"
+      dense
+      rounded
+      class="q-mr-none q-mb-none q-ml-none bg-teal-1 text-teal-10"
+      role="status"
+    >
       The requested selection or annotation is being saved or re-solved. Previous basket effects are
       withheld until the API responds; no unconfirmed selection is shown as active.
-    </p>
+    </q-banner>
     <template v-else-if="record">
       <div class="run-title-row row no-wrap items-center justify-between q-gutter-md">
         <div>
@@ -135,7 +160,7 @@
             policy.
           </p>
         </div>
-        <span class="demo-badge row inline no-wrap items-center q-py-xs q-px-sm">
+        <q-badge rounded color="amber-1" text-color="brown-10">
           {{
             record.demo
               ? 'DEMO · non-actionable'
@@ -143,25 +168,33 @@
                 ? 'API-marked actionable · no order controls'
                 : 'NON-ACTIONABLE'
           }}
-        </span>
+        </q-badge>
       </div>
 
-      <p
+      <q-banner
         v-if="mode === 'review' && record.solver_version === 'DEMO'"
-        class="warning-banner q-mr-none q-mb-none q-ml-none q-pa-md"
+        dense
+        rounded
+        class="q-mr-none q-mb-none q-ml-none bg-amber-1 text-brown-10"
+        role="group"
+        aria-label="DEMO solver output notice"
       >
         DEMO solver output is not a real optimizer feasibility result. Treat every value as
         hypothetical and non-executable.
-      </p>
-      <p
+      </q-banner>
+      <q-banner
         v-if="mode === 'review' && record.estimated_tax_benefit_status === 'optimizer_unavailable'"
-        class="warning-banner q-mr-none q-mb-none q-ml-none q-pa-md"
+        dense
+        rounded
+        class="q-mr-none q-mb-none q-ml-none bg-amber-1 text-brown-10"
+        role="group"
+        aria-label="Tax estimate availability notice"
       >
         The real optimizer is unavailable. No production optimization or feasibility claim is made.
-      </p>
+      </q-banner>
 
       <dl
-        class="q-mr-none q-mb-none q-ml-none"
+        class="q-mr-none q-mb-none q-ml-none text-caption text-blue-grey-10 text-weight-bold"
         :class="mode === 'saved' ? 'saved-metrics' : 'metric-grid'"
       >
         <template v-if="mode === 'saved'">
@@ -336,7 +369,7 @@
         <li v-for="warning in record.warnings" :key="warning">{{ warning }}</li>
       </ul>
     </template>
-  </section>
+  </q-card>
 </template>
 
 <script setup lang="ts">
@@ -397,44 +430,6 @@ function formatJson(value: unknown): string {
 /* Grid gaps use Quasar's spacing scale; negative-margin gutters distort grid tracks. */
 .run-summary {
   min-width: 0;
-  border: 1px solid #dce6eb;
-  border-radius: 0.8rem;
-  background: #fff;
-  box-shadow: 0 4px 20px rgb(18 55 77 / 4.5%);
-}
-
-.provenance-banner,
-.pending-message,
-.warning-banner {
-  border-radius: 0.65rem;
-  line-height: 1.5;
-}
-
-.provenance-banner {
-  border: 1px solid #dce6eb;
-  background: #f7fafb;
-  color: #35586c;
-  font-size: 0.78rem;
-}
-
-.provenance-banner[data-view='stale'],
-.provenance-banner[data-view='unverified'] {
-  border-color: #e8d39a;
-  background: #fff8e7;
-}
-
-.pending-message {
-  border: 1px solid #9dcbd0;
-  background: #eef9fa;
-  color: #245a62;
-  font-size: 0.8rem;
-}
-
-.warning-banner {
-  border: 1px solid #e8d39a;
-  background: #fff8e7;
-  color: #70501b;
-  font-size: 0.78rem;
 }
 
 .run-title-row h2 {
@@ -445,16 +440,6 @@ function formatJson(value: unknown): string {
 .run-title-row p {
   color: #61798a;
   line-height: 1.5;
-}
-
-.demo-badge {
-  flex: 0 0 auto;
-  border-radius: 999px;
-  background: #fff1d2;
-  color: #77520d;
-  font-size: 0.68rem;
-  font-weight: 800;
-  white-space: nowrap;
 }
 
 .metric-grid,
@@ -483,9 +468,6 @@ function formatJson(value: unknown): string {
 .metric-grid dd,
 .saved-metrics dd,
 .overview-metrics dd {
-  color: #29475a;
-  font-size: 0.78rem;
-  font-weight: 700;
   overflow-wrap: anywhere;
 }
 
@@ -553,10 +535,6 @@ function formatJson(value: unknown): string {
   .run-title-row {
     flex-direction: column;
     align-items: stretch;
-  }
-
-  .provenance-banner {
-    display: grid;
   }
 
   .metric-grid,

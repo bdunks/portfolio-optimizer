@@ -2,45 +2,52 @@
   <section class="transition-panel column no-wrap q-gutter-y-md" aria-labelledby="transition-title">
     <header class="panel-heading row no-wrap justify-between items-start q-gutter-md">
       <div>
-        <h2 class="q-ma-none" id="transition-title">US Equities Transition</h2>
-        <p class="q-mt-xs q-mb-none q-mx-none">
+        <h2 class="q-ma-none text-h6" id="transition-title">US Equities Transition</h2>
+        <p class="q-mt-xs q-mb-none q-mx-none text-body2">
           {{ transition?.label ?? 'US sleeve' }} · API-reported values; percentages identify both
           within-sleeve and whole-portfolio units.
         </p>
       </div>
-      <span class="unit-badge q-py-xs q-px-sm">Within US sleeve + whole portfolio</span>
+      <q-chip dense :clickable="false" color="teal-1" text-color="teal-10" class="q-ma-none">
+        Within US sleeve + whole portfolio
+      </q-chip>
     </header>
 
-    <p
+    <q-banner
       v-if="showNoCurrentBasket"
-      class="comparison-note q-mr-none q-mb-none q-ml-none q-py-sm q-px-md"
+      dense
+      rounded
+      class="q-my-sm bg-amber-1 text-brown-10"
       role="status"
     >
       No current proposed basket from a matching current optimizer run. Values shown below come only
       from the portfolio API; historical or stale runs are not overlaid.
-    </p>
+    </q-banner>
 
-    <p
+    <q-banner
       v-if="transition && transition.transition_destination_sleeve_key === null"
-      class="comparison-note q-mr-none q-mb-none q-ml-none q-py-sm q-px-md"
+      dense
+      rounded
+      class="q-my-sm bg-amber-1 text-brown-10"
       role="status"
     >
       No transition destination is designated in this policy; progress is unavailable and no ETF or
       ticker is inferred.
-    </p>
+    </q-banner>
 
     <p v-if="!transition" class="empty-state q-mr-none q-mb-none q-ml-none">
       US transition data is unavailable from the portfolio API.
     </p>
 
     <div v-else class="state-grid">
-      <article
+      <q-card
+        tag="article"
         v-for="state in states"
         :key="state.key"
         class="state-card q-pa-md"
         :data-state="state.key"
       >
-        <h3 class="q-mt-none q-mb-md q-mx-none">{{ state.title }}</h3>
+        <h3 class="q-mt-none q-mb-md q-mx-none text-subtitle1">{{ state.title }}</h3>
         <dl class="state-summary q-mr-none q-mb-none q-ml-none column no-wrap q-gutter-y-sm">
           <div class="row no-wrap justify-between q-gutter-md q-pb-xs">
             <dt>US sleeve value</dt>
@@ -67,7 +74,7 @@
           </div>
         </dl>
 
-        <h4 class="q-mt-md q-mb-sm q-mx-none">US sleeve components</h4>
+        <h4 class="q-mt-md q-mb-sm q-mx-none text-caption text-uppercase">US sleeve components</h4>
         <ul v-if="childKeys.length" class="component-list q-ma-none q-pa-none">
           <li
             class="q-py-sm q-px-none column no-wrap q-gutter-y-xs"
@@ -83,7 +90,7 @@
           </li>
         </ul>
         <p v-else class="empty-state q-ma-none">No US sleeve component values were returned.</p>
-      </article>
+      </q-card>
     </div>
   </section>
 </template>
@@ -162,32 +169,6 @@ function childValue(state: TransitionState, childKey: string): string | null {
 <style scoped>
 /* Grid gaps use Quasar's spacing scale; negative-margin gutters distort grid tracks. */
 
-.panel-heading h2 {
-  color: #10263d;
-  font-size: 1.2rem;
-}
-
-.panel-heading p {
-  color: #61798a;
-  line-height: 1.5;
-}
-
-.unit-badge {
-  flex: 0 0 auto;
-  border-radius: 999px;
-  background: #e4f5f2;
-  color: #086f6e;
-  font-size: 0.72rem;
-  font-weight: 700;
-}
-
-.comparison-note {
-  border-left: 3px solid #d19536;
-  background: #fff7e9;
-  color: #765016;
-  line-height: 1.5;
-}
-
 .state-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -196,15 +177,6 @@ function childValue(state: TransitionState, childKey: string): string | null {
 
 .state-card {
   min-width: 0;
-  border: 1px solid #dce6eb;
-  border-radius: 0.75rem;
-  background: #fff;
-  box-shadow: 0 4px 20px rgb(18 55 77 / 4.5%);
-}
-
-.state-card h3 {
-  color: #056b70;
-  font-size: 0.95rem;
 }
 
 .state-summary div {
@@ -222,13 +194,6 @@ function childValue(state: TransitionState, childKey: string): string | null {
   font-size: 0.8rem;
   font-weight: 700;
   overflow-wrap: anywhere;
-}
-
-.state-card h4 {
-  color: #526c7c;
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 
 .component-list {

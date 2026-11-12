@@ -1,5 +1,8 @@
 <template>
-  <q-page class="workspace-page overview-page q-my-none q-mx-auto q-pa-md">
+  <section
+    class="workspace-page overview-page tw:mx-auto tw:w-full tw:max-w-[1800px] tw:gap-4 tw:px-4 tw:py-4"
+    aria-labelledby="overview-title"
+  >
     <WorkspacePageHeader
       eyebrow="Workspace overview"
       title="Overview"
@@ -7,37 +10,55 @@
       subtitle="Current account state and API-supplied allocation context for a single local workspace."
     >
       <template #actions>
-        <q-btn
-          outline
-          color="primary"
-          icon="sync"
-          class="overview-page-action"
-          label="Sync portfolio"
-          no-caps
-          :loading="store.actionState.syncPortfolio.pending"
-          :disable="store.actionState.syncPortfolio.pending"
+        <Button
+          type="button"
+          variant="outline"
+          class="overview-page-action tw:min-w-0 tw:whitespace-normal"
+          :disabled="store.actionState.syncPortfolio.pending"
+          :aria-busy="store.actionState.syncPortfolio.pending"
           @click="syncPortfolio"
-        />
-        <q-btn
-          unelevated
-          color="primary"
-          icon="play_arrow"
-          class="overview-page-action"
-          label="Run DEMO recommendations"
-          no-caps
-          :loading="store.actionState.runOptimizer.pending"
-          :disable="!canRunOptimizer"
+        >
+          <LoaderCircle
+            v-if="store.actionState.syncPortfolio.pending"
+            aria-hidden="true"
+            data-icon="inline-start"
+            class="tw:animate-spin"
+          />
+          <RefreshCw v-else aria-hidden="true" data-icon="inline-start" />
+          {{ store.actionState.syncPortfolio.pending ? 'Syncing portfolio…' : 'Sync portfolio' }}
+        </Button>
+        <Button
+          type="button"
+          variant="default"
+          class="overview-page-action tw:min-w-0 tw:whitespace-normal"
+          :disabled="!canRunOptimizer"
+          :aria-busy="store.actionState.runOptimizer.pending"
           @click="runOptimizer"
-        />
+        >
+          <LoaderCircle
+            v-if="store.actionState.runOptimizer.pending"
+            aria-hidden="true"
+            data-icon="inline-start"
+            class="tw:animate-spin"
+          />
+          <Play v-else aria-hidden="true" data-icon="inline-start" />
+          {{
+            store.actionState.runOptimizer.pending
+              ? 'Running recommendations…'
+              : 'Run DEMO recommendations'
+          }}
+        </Button>
       </template>
     </WorkspacePageHeader>
 
-    <p v-if="!canRunOptimizer" class="run-help q-ma-none q-pl-md">
-      Recommendations require a ready portfolio snapshot and a valid active policy. Nothing runs
-      automatically.
-    </p>
+    <Alert v-if="!canRunOptimizer" role="status" aria-live="polite" class="tw:border-border">
+      <AlertDescription>
+        Recommendations require a ready portfolio snapshot and a valid active policy. Nothing runs
+        automatically.
+      </AlertDescription>
+    </Alert>
 
-    <div class="error-stack column no-wrap q-gutter-y-sm" aria-label="Workspace request errors">
+    <div class="tw:grid tw:gap-2" aria-label="Workspace request errors">
       <ApiActionError
         :error="store.actionState.loadHealth.error"
         title="Application health could not be loaded"
@@ -61,116 +82,172 @@
     </div>
 
     <ResourceFreshnessNotice />
-    <q-banner
+    <Alert
       v-if="portfolioLabelContext.revisionMismatch"
-      dense
-      rounded
-      class="q-my-sm bg-blue-grey-1 text-blue-grey-10"
       role="status"
+      aria-live="polite"
+      class="tw:border-border"
     >
-      Portfolio effects use policy revision
-      {{ portfolioLabelContext.portfolioRevisionId ?? 'unavailable' }}; the active policy is
-      {{ portfolioLabelContext.policyRevisionId ?? 'unavailable' }}. Cached values remain visible
-      with API sleeve keys until matching policy labels are confirmed.
-    </q-banner>
+      <AlertDescription>
+        Portfolio effects use policy revision
+        {{ portfolioLabelContext.portfolioRevisionId ?? 'unavailable' }}; the active policy is
+        {{ portfolioLabelContext.policyRevisionId ?? 'unavailable' }}. Cached values remain visible
+        with API sleeve keys until matching policy labels are confirmed.
+      </AlertDescription>
+    </Alert>
     <WorkspaceCapabilityNotice label="DEMO analysis only.">
       Recommendations are non-actionable; no broker calls, OAuth, live writes, or orders are
       available.
     </WorkspaceCapabilityNotice>
 
-    <section class="summary-grid" aria-label="Current portfolio summary">
-      <q-card flat bordered class="summary-card">
-        <q-card-section>
-          <p class="q-ma-none text-caption text-weight-bold text-blue-grey-8">Portfolio value</p>
-          <p class="q-mt-sm q-mb-none q-mx-none text-h6 text-weight-bold text-blue-grey-10">
+    <section
+      class="summary-grid overview-summary-grid tw:grid tw:grid-cols-1 tw:gap-4 tw:sm:grid-cols-2 tw:xl:grid-cols-4"
+      aria-label="Current portfolio summary"
+    >
+      <Card class="summary-card tw:min-w-0">
+        <CardHeader class="tw:gap-1 tw:pb-2">
+          <CardTitle
+            role="heading"
+            aria-level="2"
+            class="tw:text-sm tw:font-medium tw:text-muted-foreground"
+          >
+            Portfolio value
+          </CardTitle>
+        </CardHeader>
+        <CardContent class="tw:grid tw:gap-1">
+          <p class="tw:m-0! tw:text-2xl tw:font-semibold tw:tracking-tight tw:tabular-nums">
             {{ formatUsd(portfolio?.portfolio_total_usd) }}
           </p>
-          <p class="q-mt-xs q-mb-none q-mx-none text-caption text-blue-grey-6">
-            Value returned by the portfolio API
-          </p>
-        </q-card-section>
-      </q-card>
-      <q-card flat bordered class="summary-card">
-        <q-card-section>
-          <p class="q-ma-none text-caption text-weight-bold text-blue-grey-8">Cash</p>
-          <p class="q-mt-sm q-mb-none q-mx-none text-h6 text-weight-bold text-blue-grey-10">
+          <CardDescription>Value returned by the portfolio API</CardDescription>
+        </CardContent>
+      </Card>
+      <Card class="summary-card tw:min-w-0">
+        <CardHeader class="tw:gap-1 tw:pb-2">
+          <CardTitle
+            role="heading"
+            aria-level="2"
+            class="tw:text-sm tw:font-medium tw:text-muted-foreground"
+          >
+            Cash
+          </CardTitle>
+        </CardHeader>
+        <CardContent class="tw:grid tw:gap-1">
+          <p class="tw:m-0! tw:text-2xl tw:font-semibold tw:tracking-tight tw:tabular-nums">
             {{ formatUsd(portfolio?.cash_usd) }}
           </p>
-          <p class="q-mt-xs q-mb-none q-mx-none text-caption text-blue-grey-6">
-            Cash balance returned by the portfolio API
-          </p>
-        </q-card-section>
-      </q-card>
-      <q-card flat bordered class="summary-card">
-        <q-card-section>
-          <p class="q-ma-none text-caption text-weight-bold text-blue-grey-8">Positions</p>
-          <p class="q-mt-sm q-mb-none q-mx-none text-h6 text-weight-bold text-blue-grey-10">
+          <CardDescription>Cash balance returned by the portfolio API</CardDescription>
+        </CardContent>
+      </Card>
+      <Card class="summary-card tw:min-w-0">
+        <CardHeader class="tw:gap-1 tw:pb-2">
+          <CardTitle
+            role="heading"
+            aria-level="2"
+            class="tw:text-sm tw:font-medium tw:text-muted-foreground"
+          >
+            Positions
+          </CardTitle>
+        </CardHeader>
+        <CardContent class="tw:grid tw:gap-1">
+          <p class="tw:m-0! tw:text-2xl tw:font-semibold tw:tracking-tight tw:tabular-nums">
             {{ positionCount }}
           </p>
-          <p class="q-mt-xs q-mb-none q-mx-none text-caption text-blue-grey-6">
-            Current API position count
-          </p>
-        </q-card-section>
-      </q-card>
-      <q-card flat bordered class="summary-card">
-        <q-card-section>
-          <p class="q-ma-none text-caption text-weight-bold text-blue-grey-8">Risk tracking</p>
-          <p class="q-mt-sm q-mb-none q-mx-none text-subtitle1 text-weight-bold text-blue-grey-10">
-            Not calculated
-          </p>
-          <p class="q-mt-xs q-mb-none q-mx-none text-caption text-blue-grey-6">
-            No risk estimate is available from this workflow
-          </p>
-        </q-card-section>
-      </q-card>
+          <CardDescription>Current API position count</CardDescription>
+        </CardContent>
+      </Card>
+      <Card class="summary-card tw:min-w-0">
+        <CardHeader class="tw:gap-1 tw:pb-2">
+          <CardTitle
+            role="heading"
+            aria-level="2"
+            class="tw:text-sm tw:font-medium tw:text-muted-foreground"
+          >
+            Risk tracking
+          </CardTitle>
+        </CardHeader>
+        <CardContent class="tw:grid tw:gap-1">
+          <p class="tw:m-0! tw:text-2xl tw:font-semibold tw:tracking-tight">Not calculated</p>
+          <CardDescription>No risk estimate is available from this workflow</CardDescription>
+        </CardContent>
+      </Card>
     </section>
 
-    <section class="content-grid items-start">
-      <q-card flat bordered class="workspace-card account-card">
-        <q-card-section>
-          <div class="section-heading row justify-between q-gutter-md items-center q-mb-md">
-            <div>
-              <h2 class="q-ma-none text-subtitle1 text-blue-grey-10">Portfolio data</h2>
-              <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
-                Source status and coverage from the backend API
-              </p>
-            </div>
-            <q-badge
-              :color="portfolio?.status === 'ready' ? 'positive' : 'warning'"
-              text-color="dark"
-            >
-              {{ portfolioStatusLabel }}
-            </q-badge>
+    <section class="content-grid tw:grid tw:items-start tw:gap-4 tw:lg:grid-cols-2">
+      <Card class="workspace-card account-card tw:min-w-0">
+        <CardHeader
+          class="tw:gap-3 tw:md:flex tw:md:flex-row tw:md:items-start tw:md:justify-between"
+        >
+          <div class="tw:grid tw:gap-2">
+            <h2 class="tw:m-0! tw:text-lg! tw:font-semibold! tw:leading-tight!">Portfolio data</h2>
+            <CardDescription>Source status and coverage from the backend API</CardDescription>
           </div>
-
-          <dl class="data-list q-ma-none column no-wrap q-gutter-y-none">
-            <div class="q-py-sm q-px-none">
-              <dt>Account</dt>
-              <dd class="q-ma-none">{{ accountLabel }}</dd>
+          <Badge as="span" variant="secondary" class="tw:shrink-0">
+            {{ portfolioStatusLabel }}
+          </Badge>
+        </CardHeader>
+        <CardContent class="tw:grid tw:gap-4">
+          <dl class="data-list tw:m-0! tw:grid tw:gap-0">
+            <div
+              class="tw:grid tw:grid-cols-1 tw:gap-1 tw:border-b tw:border-border tw:py-3 tw:sm:grid-cols-[minmax(10rem,0.8fr)_minmax(0,1.2fr)] tw:sm:gap-2"
+            >
+              <dt class="tw:text-sm tw:text-muted-foreground">Account</dt>
+              <dd class="tw:m-0! tw:break-words tw:text-sm tw:font-medium">{{ accountLabel }}</dd>
             </div>
-            <div class="q-py-sm q-px-none">
-              <dt>Source</dt>
-              <dd class="q-ma-none">
+            <div
+              class="tw:grid tw:grid-cols-1 tw:gap-1 tw:border-b tw:border-border tw:py-3 tw:sm:grid-cols-[minmax(10rem,0.8fr)_minmax(0,1.2fr)] tw:sm:gap-2"
+            >
+              <dt class="tw:text-sm tw:text-muted-foreground">Application status</dt>
+              <dd class="tw:m-0! tw:break-words tw:text-sm tw:font-medium">
+                {{ store.health?.status ?? 'Unavailable' }}
+              </dd>
+            </div>
+            <div
+              class="tw:grid tw:grid-cols-1 tw:gap-1 tw:border-b tw:border-border tw:py-3 tw:sm:grid-cols-[minmax(10rem,0.8fr)_minmax(0,1.2fr)] tw:sm:gap-2"
+            >
+              <dt class="tw:text-sm tw:text-muted-foreground">Database schema</dt>
+              <dd class="tw:m-0! tw:break-words tw:text-sm tw:font-medium">
+                {{
+                  store.health ? (store.health.schema_ready ? 'Ready' : 'Not ready') : 'Unavailable'
+                }}
+              </dd>
+            </div>
+            <div
+              class="tw:grid tw:grid-cols-1 tw:gap-1 tw:border-b tw:border-border tw:py-3 tw:sm:grid-cols-[minmax(10rem,0.8fr)_minmax(0,1.2fr)] tw:sm:gap-2"
+            >
+              <dt class="tw:text-sm tw:text-muted-foreground">Source</dt>
+              <dd class="tw:m-0! tw:break-words tw:text-sm tw:font-medium">
                 {{ portfolio?.status === 'ready' ? portfolio.source : 'Unavailable' }}
               </dd>
             </div>
-            <div class="q-py-sm q-px-none">
-              <dt>Data as of</dt>
-              <dd class="q-ma-none">{{ portfolio?.as_of ?? 'Unavailable' }}</dd>
+            <div
+              class="tw:grid tw:grid-cols-1 tw:gap-1 tw:border-b tw:border-border tw:py-3 tw:sm:grid-cols-[minmax(10rem,0.8fr)_minmax(0,1.2fr)] tw:sm:gap-2"
+            >
+              <dt class="tw:text-sm tw:text-muted-foreground">Data as of</dt>
+              <dd class="tw:m-0! tw:break-words tw:text-sm tw:font-medium">
+                {{ portfolio?.as_of ?? 'Unavailable' }}
+              </dd>
             </div>
-            <div class="q-py-sm q-px-none">
-              <dt>Sync generation</dt>
-              <dd class="q-ma-none">
+            <div
+              class="tw:grid tw:grid-cols-1 tw:gap-1 tw:border-b tw:border-border tw:py-3 tw:sm:grid-cols-[minmax(10rem,0.8fr)_minmax(0,1.2fr)] tw:sm:gap-2"
+            >
+              <dt class="tw:text-sm tw:text-muted-foreground">Sync generation</dt>
+              <dd class="tw:m-0! tw:break-words tw:text-sm tw:font-medium">
                 {{ portfolio ? String(portfolio.sync.generation) : 'Unavailable' }}
               </dd>
             </div>
-            <div class="q-py-sm q-px-none">
-              <dt>Last completed sync</dt>
-              <dd class="q-ma-none">{{ portfolio?.sync.completed_at ?? 'Unavailable' }}</dd>
+            <div
+              class="tw:grid tw:grid-cols-1 tw:gap-1 tw:border-b tw:border-border tw:py-3 tw:sm:grid-cols-[minmax(10rem,0.8fr)_minmax(0,1.2fr)] tw:sm:gap-2"
+            >
+              <dt class="tw:text-sm tw:text-muted-foreground">Last completed sync</dt>
+              <dd class="tw:m-0! tw:break-words tw:text-sm tw:font-medium">
+                {{ portfolio?.sync.completed_at ?? 'Unavailable' }}
+              </dd>
             </div>
-            <div class="q-py-sm q-px-none">
-              <dt>Last sync error</dt>
-              <dd class="q-ma-none">
+            <div
+              class="tw:grid tw:grid-cols-1 tw:gap-1 tw:border-b tw:border-border tw:py-3 tw:sm:grid-cols-[minmax(10rem,0.8fr)_minmax(0,1.2fr)] tw:sm:gap-2"
+            >
+              <dt class="tw:text-sm tw:text-muted-foreground">Last sync error</dt>
+              <dd class="tw:m-0! tw:break-words tw:text-sm tw:font-medium">
                 <template v-if="portfolio?.sync.last_error_code">
                   {{ portfolio.sync.last_error_code }}:
                   {{ portfolio.sync.last_error_summary ?? 'No summary returned' }}
@@ -180,52 +257,81 @@
             </div>
           </dl>
 
-          <p v-if="portfolio?.status === 'not_synced'" class="empty-note q-ma-none">
-            The current portfolio snapshot has not been synchronized. Use Sync portfolio to request
-            the configured local demo snapshot.
-          </p>
+          <Alert v-if="portfolio?.status === 'not_synced'" role="status" aria-live="polite">
+            <AlertDescription>
+              The current portfolio snapshot has not been synchronized. Use Sync portfolio to
+              request the configured local demo snapshot.
+            </AlertDescription>
+          </Alert>
 
-          <div class="coverage-block q-mt-md">
-            <h3 class="q-mt-none q-mb-sm q-mx-none text-subtitle2 text-blue-grey-8 text-uppercase">
+          <section class="coverage-block tw:grid tw:gap-3" aria-labelledby="coverage-title">
+            <h3
+              id="coverage-title"
+              class="tw:m-0! tw:text-sm! tw:font-semibold! tw:leading-tight! tw:uppercase tw:tracking-wide"
+            >
               Data coverage
             </h3>
-            <p v-if="coverageEntries.length === 0" class="empty-note q-ma-none">
-              Coverage is unavailable until portfolio data loads.
-            </p>
-            <ul v-else class="coverage-list q-ma-none q-pa-none">
+            <Empty
+              v-if="coverageEntries.length === 0"
+              role="status"
+              aria-live="polite"
+              class="tw:border-border tw:p-4"
+            >
+              <EmptyHeader class="tw:max-w-none">
+                <EmptyTitle role="heading" aria-level="4">Coverage unavailable</EmptyTitle>
+                <EmptyDescription
+                  >Coverage is unavailable until portfolio data loads.</EmptyDescription
+                >
+              </EmptyHeader>
+            </Empty>
+            <ul v-else class="coverage-list tw:m-0! tw:grid tw:list-none tw:gap-0 tw:p-0!">
               <li
-                class="row no-wrap justify-between items-center q-gutter-sm q-py-sm q-px-none"
                 v-for="[key, covered] in coverageEntries"
                 :key="key"
+                class="tw:flex tw:min-w-0 tw:flex-wrap tw:items-center tw:justify-between tw:gap-2 tw:border-b tw:border-border tw:py-3"
               >
-                <span>{{ key }}</span>
-                <strong :class="covered ? 'coverage-yes' : 'coverage-no'">{{
-                  covered ? 'Available' : 'Unavailable'
-                }}</strong>
+                <span class="tw:min-w-0 tw:break-all tw:text-sm">{{ key }}</span>
+                <Badge as="span" :variant="covered ? 'secondary' : 'outline'" class="tw:shrink-0">
+                  {{ covered ? 'Available' : 'Unavailable' }}
+                </Badge>
               </li>
             </ul>
-          </div>
-        </q-card-section>
-      </q-card>
+          </section>
+        </CardContent>
+      </Card>
 
-      <q-card flat bordered class="workspace-card run-card">
-        <q-card-section>
-          <div class="section-heading row justify-between q-gutter-md items-center q-mb-md">
-            <div>
-              <h2 class="q-ma-none text-subtitle1 text-blue-grey-10">Latest recommendations</h2>
-              <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
-                Metrics are shown only for a run matching this current portfolio and active policy.
-              </p>
-            </div>
-            <q-badge v-if="currentRunMatches" color="warning" text-color="dark"
-              >DEMO · non-actionable</q-badge
-            >
+      <Card class="workspace-card run-card tw:min-w-0">
+        <CardHeader
+          class="tw:gap-3 tw:md:flex tw:md:flex-row tw:md:items-start tw:md:justify-between"
+        >
+          <div class="tw:grid tw:gap-2">
+            <h2 class="tw:m-0! tw:text-lg! tw:font-semibold! tw:leading-tight!">
+              Latest recommendations
+            </h2>
+            <CardDescription>
+              Metrics are shown only for a run matching this current portfolio and active policy.
+            </CardDescription>
           </div>
-
-          <p v-if="!currentRunMatches" class="empty-note q-ma-none">
-            No current matching recommendation run. Saved or stale runs are not used as current
-            portfolio comparisons.
-          </p>
+          <Badge v-if="currentRunMatches" as="span" variant="outline" class="tw:shrink-0">
+            DEMO · non-actionable
+          </Badge>
+        </CardHeader>
+        <CardContent class="tw:grid tw:gap-4">
+          <Empty
+            v-if="!currentRunMatches"
+            role="status"
+            aria-live="polite"
+            class="tw:border-border tw:p-4"
+          >
+            <EmptyHeader class="tw:max-w-none">
+              <EmptyTitle role="heading" aria-level="3"
+                >No current matching recommendation run</EmptyTitle
+              >
+              <EmptyDescription>
+                Saved or stale runs are not used as current portfolio comparisons.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
           <RunSummary
             v-if="store.currentRun || store.currentRunSummary"
             mode="overview"
@@ -236,87 +342,136 @@
             :show-metrics="currentRunMatches"
             :view="store.currentRunView"
           />
-        </q-card-section>
-      </q-card>
+        </CardContent>
+      </Card>
 
-      <q-card flat bordered class="workspace-card allocation-card">
-        <q-card-section>
+      <Card class="workspace-card allocation-card tw:min-w-0">
+        <CardContent class="tw:pt-4">
           <AllocationTargets
             :allocation="allocation"
             :labels="effectLabels"
             :show-no-current-basket="!currentRunAllocationAvailable"
           />
-        </q-card-section>
-      </q-card>
+        </CardContent>
+      </Card>
 
-      <q-card flat bordered class="workspace-card transition-card">
-        <q-card-section>
+      <Card class="workspace-card transition-card tw:min-w-0 tw:lg:col-span-full">
+        <CardContent class="tw:pt-4">
           <USAllocationTransition
             :transition="usTransition"
             :labels="effectLabels"
             :show-no-current-basket="!currentRunTransitionAvailable"
           />
-        </q-card-section>
-      </q-card>
+        </CardContent>
+      </Card>
 
-      <q-card flat bordered class="workspace-card policy-card">
-        <q-card-section>
-          <div class="section-heading row justify-between q-gutter-md items-center q-mb-md">
-            <div>
-              <h2 class="q-ma-none text-subtitle1 text-blue-grey-10">Active allocation policy</h2>
-              <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
-                Policy settings and allowed securities supplied by the API
-              </p>
-            </div>
-            <q-badge :color="activePolicy ? 'positive' : 'warning'" text-color="dark">
-              {{ activePolicy ? `Revision ${activePolicy.revision_number}` : 'No active policy' }}
-            </q-badge>
-          </div>
-
-          <p v-if="!activePolicy" class="empty-note q-ma-none">
-            No active policy has been returned.
-          </p>
-          <template v-else>
-            <h3 class="q-mt-none q-mb-sm q-mx-none text-subtitle2 text-blue-grey-8 text-uppercase">
-              Enabled sleeves and targets
-            </h3>
-            <ul v-if="enabledSleeves.length" class="policy-list q-ma-none q-pa-none">
-              <li
-                class="row no-wrap justify-between items-center q-gutter-sm q-py-sm q-px-none"
-                v-for="sleeve in enabledSleeves"
-                :key="sleeve.sleeve_key"
-              >
-                <span>{{ sleeve.display_name }}</span>
-                <strong>{{ formatPercent(sleeve.target_pct) }}</strong>
-              </li>
-            </ul>
-            <p v-else class="empty-note q-ma-none">No enabled sleeves were returned.</p>
-
-            <h3
-              class="policy-subhead q-mt-md q-mb-sm q-mx-none text-subtitle2 text-blue-grey-8 text-uppercase"
+      <Card class="workspace-card policy-card tw:min-w-0">
+        <CardHeader
+          class="tw:gap-3 tw:md:flex tw:md:flex-row tw:md:items-start tw:md:justify-between"
+        >
+          <div class="tw:grid tw:gap-2">
+            <h2 class="tw:m-0! tw:text-lg! tw:font-semibold! tw:leading-tight!">
+              Active allocation policy
+            </h2>
+            <CardDescription
+              >Policy settings and allowed securities supplied by the API</CardDescription
             >
-              Allowed securities
-            </h3>
-            <ul v-if="enabledSecurities.length" class="security-list q-ma-none q-pa-none">
-              <li
-                class="row no-wrap items-center q-gutter-sm justify-start q-py-sm q-px-none"
-                v-for="security in enabledSecurities"
-                :key="`${security.sleeve_key}:${security.ticker}`"
+          </div>
+          <Badge as="span" :variant="activePolicy ? 'secondary' : 'outline'" class="tw:shrink-0">
+            {{ activePolicy ? `Revision ${activePolicy.revision_number}` : 'No active policy' }}
+          </Badge>
+        </CardHeader>
+        <CardContent class="tw:grid tw:gap-4">
+          <Empty
+            v-if="!activePolicy"
+            role="status"
+            aria-live="polite"
+            class="tw:border-border tw:p-4"
+          >
+            <EmptyHeader class="tw:max-w-none">
+              <EmptyTitle role="heading" aria-level="3">No active policy returned</EmptyTitle>
+              <EmptyDescription
+                >Allocation targets are unavailable until a policy loads.</EmptyDescription
               >
-                <strong>{{ security.ticker }}</strong>
-                <span>{{ policyLabels[security.sleeve_key] ?? security.sleeve_key }}</span>
-              </li>
-            </ul>
-            <p v-else class="empty-note q-ma-none">No enabled allowed securities were returned.</p>
+            </EmptyHeader>
+          </Empty>
+          <template v-else>
+            <section class="tw:grid tw:gap-3" aria-labelledby="enabled-sleeves-title">
+              <h3
+                id="enabled-sleeves-title"
+                class="tw:m-0! tw:text-sm! tw:font-semibold! tw:leading-tight! tw:uppercase tw:tracking-wide"
+              >
+                Enabled sleeves and targets
+              </h3>
+              <ul
+                v-if="enabledSleeves.length"
+                class="policy-list tw:m-0! tw:grid tw:list-none tw:gap-0 tw:p-0!"
+              >
+                <li
+                  v-for="sleeve in enabledSleeves"
+                  :key="sleeve.sleeve_key"
+                  class="tw:flex tw:min-w-0 tw:flex-wrap tw:items-center tw:justify-between tw:gap-2 tw:border-b tw:border-border tw:py-3"
+                >
+                  <span class="tw:min-w-0 tw:break-words tw:text-sm">{{
+                    sleeve.display_name
+                  }}</span>
+                  <span class="tw:shrink-0 tw:font-medium tw:tabular-nums">{{
+                    formatPercent(sleeve.target_pct)
+                  }}</span>
+                </li>
+              </ul>
+              <Empty v-else role="status" aria-live="polite" class="tw:border-border tw:p-4">
+                <EmptyHeader class="tw:max-w-none">
+                  <EmptyTitle role="heading" aria-level="4">No enabled sleeves returned</EmptyTitle>
+                </EmptyHeader>
+              </Empty>
+            </section>
+
+            <section class="tw:grid tw:gap-3" aria-labelledby="allowed-securities-title">
+              <h3
+                id="allowed-securities-title"
+                class="policy-subhead tw:m-0! tw:text-sm! tw:font-semibold! tw:leading-tight! tw:text-muted-foreground tw:uppercase tw:tracking-wide"
+              >
+                Allowed securities
+              </h3>
+              <ul
+                v-if="enabledSecurities.length"
+                class="security-list tw:m-0! tw:grid tw:list-none tw:gap-0 tw:p-0!"
+              >
+                <li
+                  v-for="security in enabledSecurities"
+                  :key="`${security.sleeve_key}:${security.ticker}`"
+                  class="tw:flex tw:min-w-0 tw:flex-wrap tw:items-center tw:gap-2 tw:border-b tw:border-border tw:py-3"
+                >
+                  <strong class="tw:min-w-20 tw:font-semibold">{{ security.ticker }}</strong>
+                  <span class="tw:min-w-0 tw:break-words tw:text-sm">
+                    {{ policyLabels[security.sleeve_key] ?? security.sleeve_key }}
+                  </span>
+                </li>
+              </ul>
+              <Empty v-else role="status" aria-live="polite" class="tw:border-border tw:p-4">
+                <EmptyHeader class="tw:max-w-none">
+                  <EmptyTitle role="heading" aria-level="4">
+                    No enabled allowed securities returned
+                  </EmptyTitle>
+                </EmptyHeader>
+              </Empty>
+            </section>
           </template>
-        </q-card-section>
-      </q-card>
+        </CardContent>
+      </Card>
     </section>
-  </q-page>
+  </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted } from 'vue';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
+import { LoaderCircle, Play, RefreshCw } from '@lucide/vue';
 import { useRouter } from 'vue-router';
 import AllocationTargets from '@/components/AllocationTargets.vue';
 import ApiActionError from '@/components/ApiActionError.vue';
@@ -325,7 +480,7 @@ import WorkspacePageHeader from '@/components/WorkspacePageHeader.vue';
 import WorkspaceCapabilityNotice from '@/components/WorkspaceCapabilityNotice.vue';
 import { formatPercent, formatUsd } from '@/utils/display-values';
 import USAllocationTransition from '@/components/USAllocationTransition.vue';
-import { useWorkspaceStore } from '@/stores/workspace-store';
+import { useWorkspace } from '@/composables/use-workspace';
 import { displayCount } from './overview-state';
 
 import { completeFrozenRunSleeveLabels } from './run-context';
@@ -336,7 +491,7 @@ import {
 } from '@/stores/workspace-selectors';
 import ResourceFreshnessNotice from '@/components/ResourceFreshnessNotice.vue';
 
-const store = useWorkspaceStore();
+const store = useWorkspace();
 const router = useRouter();
 const portfolio = computed(() => store.portfolio);
 const activePolicy = computed(() => store.policy?.active ?? null);
@@ -490,142 +645,3 @@ onMounted(() => {
   void store.ensureInitialWorkspace();
 });
 </script>
-
-<style scoped>
-/* Grid gaps use Quasar's spacing scale; negative-margin gutters distort grid tracks. */
-.run-help,
-.empty-note {
-  color: #657d8b;
-  font-size: 0.8rem;
-  line-height: 1.55;
-}
-
-.run-help {
-  border-left: 3px solid #d4a24f;
-}
-
-.summary-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.summary-card,
-.workspace-card {
-  min-width: 0;
-}
-
-.summary-card {
-  min-height: 7.2rem;
-}
-
-.content-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.section-heading .section-subtitle {
-  max-width: 40rem;
-}
-
-.transition-card {
-  grid-column: 1 / -1;
-}
-
-.data-list > div {
-  display: grid;
-  grid-template-columns: minmax(10rem, 0.8fr) minmax(0, 1.2fr);
-  gap: 8px;
-  border-bottom: 1px solid #eaf0f3;
-}
-
-.data-list dt {
-  color: #647c8b;
-  font-size: 0.75rem;
-}
-
-.data-list dd {
-  color: #29475a;
-  font-size: 0.78rem;
-  font-weight: 650;
-  overflow-wrap: anywhere;
-}
-
-.coverage-list,
-.policy-list,
-.security-list {
-  list-style: none;
-}
-
-.coverage-list li,
-.policy-list li,
-.security-list li {
-  border-bottom: 1px solid #edf2f4;
-  color: #405f71;
-  font-size: 0.76rem;
-  overflow-wrap: anywhere;
-}
-
-.coverage-yes,
-.coverage-no {
-  font-size: 0.7rem;
-}
-
-.coverage-yes {
-  color: #137a60;
-}
-
-.coverage-no {
-  color: #9b6060;
-}
-
-.policy-list strong {
-  color: #067777;
-  white-space: nowrap;
-}
-
-.security-list strong {
-  min-width: 5rem;
-  color: #087574;
-}
-
-@media (max-width: 980px) {
-  .summary-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .content-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 620px) {
-  .section-heading {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .page-actions {
-    justify-content: flex-start;
-  }
-
-  .page-actions :deep(.overview-page-action) {
-    flex: 1 1 auto;
-  }
-
-  .summary-grid {
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-  }
-
-  .summary-card {
-    min-height: 6.5rem;
-  }
-
-  .data-list > div {
-    grid-template-columns: 1fr;
-    gap: 4px;
-  }
-}
-</style>

@@ -1,11 +1,8 @@
 import { computed, reactive, ref } from 'vue';
 import { defineStore } from 'pinia';
-import type { SyncResponseDTO } from '../types/api';
-import { api, ApiError, type ApiClient } from '../services/api';
-import { createWorkspacePolicyLifecycle } from './workspace-policy';
+import type { PolicyDraftInput, PolicyRevisionResponse } from '../types/api';
+import { ApiError, type ActivityQuery, type LotQuery } from '../services/api';
 import { createWorkspacePolicyEditor } from './workspace-policy-editor';
-import { createWorkspaceResources } from './workspace-resources';
-import { createWorkspaceReview } from './workspace-review';
 
 export type WorkspaceAction =
   | 'loadHealth'
@@ -26,6 +23,10 @@ export type WorkspaceAction =
   | 'exportRun';
 
 type ActionStatus = { pending: boolean; error: ApiError | null; pendingCount: number };
+type PolicyMutations = {
+  savePolicyDraft: (payload: PolicyDraftInput) => Promise<PolicyRevisionResponse>;
+  activatePolicy: (revisionId: string) => Promise<PolicyRevisionResponse>;
+};
 
 const actionNames: WorkspaceAction[] = [
   'loadHealth',
@@ -56,7 +57,7 @@ function asApiError(error: unknown): ApiError {
   return new ApiError('unexpected_error', message);
 }
 
-export function createWorkspaceStore(client: ApiClient = api) {
+export function createWorkspaceStore() {
   return defineStore('workspace', () => {
     const actionState = reactive(
       Object.fromEntries(actionNames.map((name) => [name, newActionStatus()])) as Record<
@@ -68,8 +69,24 @@ export function createWorkspaceStore(client: ApiClient = api) {
       WorkspaceAction,
       number
     >;
-    const lastSync = ref<SyncResponseDTO | null>(null);
-    let syncSequence = 0;
+    const lotFilters = ref<LotQuery>({});
+    const activityFilters = ref<ActivityQuery>({});
+    const currentRunId = ref<string | null>(null);
+    const currentRunSummaryId = ref<string | null>(null);
+    const currentRunView = ref<'current' | 'saved' | 'stale' | null>(null);
+    const reviewMutationCount = ref(0);
+    const reviewMutationPending = computed(() => reviewMutationCount.value > 0);
+    const proposedRunIsStale = computed(() => currentRunView.value === 'stale');
+    const observedSourceGeneration = ref<number | null>(null);
+    const lotReviewIntent = ref<
+      { broker_lot_id: string; ticker: string; source_generation: number }[]
+    >([]);
+    const lotReviewIntentGeneration = ref<number | null>(null);
+    const lotReviewIntentDirty = ref(false);
+    const lotReviewIntentNotice = ref<string | null>(null);
+    const lotReviewIntentConfirmedRunId = ref<string | null>(null);
+    let policyMutations: PolicyMutations | null = null;
+    let portfolioSyncSequence = 0;
 
     const workspaceResourceLoadPending = computed(
       () =>
@@ -95,62 +112,56 @@ export function createWorkspaceStore(client: ApiClient = api) {
       }
     }
 
-    const review = createWorkspaceReview(client, perform);
-    const resources = createWorkspaceResources(client, perform, {
-      observeSourceGeneration: review.observeSourceGeneration,
-      observeActivePolicyRevision: review.observeActivePolicyRevision,
+    const policyEditor = createWorkspacePolicyEditor({
+      saveDraft: (payload) =>
+        policyMutations
+          ? policyMutations.savePolicyDraft(payload)
+          : Promise.reject(
+              new ApiError('workspace_not_ready', 'Workspace mutations are not initialized'),
+            ),
+      activateRevision: (revisionId) =>
+        policyMutations
+          ? policyMutations.activatePolicy(revisionId)
+          : Promise.reject(
+              new ApiError('workspace_not_ready', 'Workspace mutations are not initialized'),
+            ),
     });
 
-    async function refreshWorkspace(): Promise<void> {
-      await perform('refreshWorkspace', async () => {
-        await Promise.allSettled([
-          resources.loadHealth(),
-          resources.loadPortfolio(),
-          resources.loadPolicy(),
-          resources.loadLots(),
-          resources.loadWashSales(),
-          resources.loadActivity(),
-        ]);
-      });
+    function bindPolicyMutations(mutations: PolicyMutations): void {
+      policyMutations = mutations;
     }
 
-    const policyLifecycle = createWorkspacePolicyLifecycle(
-      client,
-      perform,
-      resources,
-      refreshWorkspace,
-      review.observeActivePolicyRevision,
-    );
+    function beginPortfolioSync(): number {
+      portfolioSyncSequence += 1;
+      return portfolioSyncSequence;
+    }
 
-    const policyEditor = createWorkspacePolicyEditor({
-      saveDraft: policyLifecycle.savePolicyDraft,
-      activateRevision: policyLifecycle.activatePolicy,
-    });
-
-    async function syncPortfolio(): Promise<SyncResponseDTO> {
-      const sequence = ++syncSequence;
-      return perform('syncPortfolio', async () => {
-        const result = await client.syncPortfolio();
-        if (sequence === syncSequence) {
-          lastSync.value = result;
-          review.observeSourceGeneration(result.generation);
-          await refreshWorkspace();
-        }
-        return result;
-      });
+    function isCurrentPortfolioSync(sequence: number): boolean {
+      return sequence === portfolioSyncSequence;
     }
 
     return {
-      ...resources,
-      ...review,
-      ...policyLifecycle,
+      lotFilters,
+      activityFilters,
+      currentRunId,
+      currentRunSummaryId,
+      currentRunView,
+      proposedRunIsStale,
+      reviewMutationCount,
+      reviewMutationPending,
+      observedSourceGeneration,
+      lotReviewIntent,
+      lotReviewIntentGeneration,
+      lotReviewIntentDirty,
+      lotReviewIntentNotice,
+      lotReviewIntentConfirmedRunId,
       policyEditor,
-      lastSync,
       actionState,
-
       workspaceResourceLoadPending,
-      refreshWorkspace,
-      syncPortfolio,
+      performWorkspaceAction: perform,
+      bindPolicyMutations,
+      beginPortfolioSync,
+      isCurrentPortfolioSync,
     };
   });
 }

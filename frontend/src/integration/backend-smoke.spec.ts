@@ -1,9 +1,12 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createPinia } from 'pinia';
+import { createPinia, setActivePinia } from 'pinia';
 import { flushPromises, type VueWrapper } from '@vue/test-utils';
-import { mountWithQuasar } from '@/test-utils/quasar-mount';
+import { getTestQueryClient, mountWithWorkspace } from '@/test-utils/workspace-mount';
+import { mountWorkspaceHarness } from '@/test-utils/workspace-harness';
+import { workspaceQueryKeys } from '@/composables/queries/workspace-queries';
+import type { QueryClient } from '@tanstack/vue-query';
 import {
   availableLoopbackPort,
   startIsolatedBackend,
@@ -14,13 +17,35 @@ import { createMemoryHistory, createRouter } from 'vue-router';
 import App from '@/App.vue';
 import routes from '@/router/routes';
 import { useWorkspaceStore } from '@/stores/workspace-store';
+import type { useWorkspace } from '@/composables/use-workspace';
 import type { OptimizerRecommendationsResponse } from '@/types/api';
+import type {
+  ActivityPageResponse,
+  HealthResponse,
+  PolicyResponse,
+  WashSalesResponse,
+} from '@/types/api';
+import type { PortfolioResponse } from '@/services/api';
 
 type MountedWorkspace = {
   pinia: ReturnType<typeof createPinia>;
   router: ReturnType<typeof createRouter>;
   wrapper: VueWrapper;
+  queryClient: QueryClient;
+  workspaceFacade: ReturnType<typeof useWorkspace>;
 };
+
+function policyResource(workspace: MountedWorkspace | null): PolicyResponse | undefined {
+  return workspace?.queryClient.getQueryData<PolicyResponse>(workspaceQueryKeys.policy);
+}
+
+function portfolioResource(workspace: MountedWorkspace | null): PortfolioResponse | undefined {
+  return workspace?.queryClient.getQueryData<PortfolioResponse>(workspaceQueryKeys.portfolio);
+}
+
+function healthResource(workspace: MountedWorkspace | null): HealthResponse | undefined {
+  return workspace?.queryClient.getQueryData<HealthResponse>(workspaceQueryKeys.health);
+}
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
@@ -28,14 +53,22 @@ function delay(milliseconds: number): Promise<void> {
 
 async function mountWorkspace(): Promise<MountedWorkspace> {
   const pinia = createPinia();
+  setActivePinia(pinia);
   const router = createRouter({ history: createMemoryHistory(), routes });
   await router.push('/');
   await router.isReady();
-  const wrapper = mountWithQuasar(App, {
+  const wrapper = mountWithWorkspace(App, {
     global: { plugins: [pinia, router] },
   });
   await flushPromises();
-  return { pinia, router, wrapper };
+  const { workspace } = mountWorkspaceHarness();
+  return {
+    pinia,
+    router,
+    wrapper,
+    queryClient: getTestQueryClient(wrapper),
+    workspaceFacade: workspace,
+  };
 }
 
 async function visit(workspace: MountedWorkspace, path: string): Promise<void> {
@@ -167,11 +200,13 @@ describe('isolated local backend smoke', () => {
       });
       workspace = await mountWorkspace();
       await waitFor(() => {
-        const store = useWorkspaceStore(workspace!.pinia);
         return (
-          store.health?.status === 'ok' &&
-          store.portfolio?.status === 'ready' &&
-          store.policy?.active != null
+          workspace!.queryClient.getQueryData<HealthResponse>(workspaceQueryKeys.health)?.status ===
+            'ok' &&
+          workspace!.queryClient.getQueryData<PortfolioResponse>(workspaceQueryKeys.portfolio)
+            ?.status === 'ready' &&
+          workspace!.queryClient.getQueryData<PolicyResponse>(workspaceQueryKeys.policy)?.active !=
+            null
         );
       }, 'initial health, portfolio, and policy API responses');
       expect(workspace.wrapper.find('h1').text()).toBe('Overview');
@@ -199,9 +234,17 @@ describe('isolated local backend smoke', () => {
         'real tax-lot API response',
       );
       expect(workspace.wrapper.text()).toContain('DEMO-VB-LOT-1');
+      const taxLotRegion = workspace.wrapper.get('[role="region"][aria-label="Tax lots for VB"]');
+      expect(taxLotRegion.find('table[data-slot="table"]').exists()).toBe(true);
+      expect(taxLotRegion.find('tbody th[scope="row"]').text()).toContain('DEMO-VB-LOT-1');
+      expect(
+        taxLotRegion.find('[role="checkbox"][aria-label="Request VB lot DEMO-VB-LOT-1"]').exists(),
+      ).toBe(true);
       await visit(workspace, '/wash-sales');
       await waitFor(
-        () => useWorkspaceStore(workspace!.pinia).washSales !== null,
+        () =>
+          workspace!.queryClient.getQueryData<WashSalesResponse>(workspaceQueryKeys.washSales) !=
+          null,
         'real wash-sales API response',
       );
       expect(workspace.wrapper.find('h1').text()).toBe('Wash Sales');
@@ -209,20 +252,39 @@ describe('isolated local backend smoke', () => {
       await visit(workspace, '/activity');
       expect(workspace.wrapper.find('h1').text()).toBe('Activity');
       await waitFor(
-        () => useWorkspaceStore(workspace!.pinia).activity !== null,
+        () =>
+          workspace!.queryClient
+            .getQueryCache()
+            .findAll({ queryKey: ['workspace', 'activity'] })
+            .some((query) => query.state.data != null),
         'real seeded activity API response',
       );
-      await workspace.wrapper.findAll('input[type="search"]')[0]!.setValue('stage-e-no-match');
-      await workspace.wrapper.get('form.filter-panel').trigger('submit');
+      const activityFilters = workspace.wrapper.get('form[aria-label="Activity filters"]');
+      const eventTypeLabel = activityFilters
+        .findAll('label')
+        .find((label) => label.text().trim() === 'Event type');
+      expect(eventTypeLabel).toBeDefined();
+      const eventTypeInput = activityFilters
+        .findAll('input')
+        .find((input) => input.element.id === eventTypeLabel?.attributes('for'));
+      expect(eventTypeInput).toBeDefined();
+      await eventTypeInput!.setValue('stage-e-no-match');
+      await activityFilters.trigger('submit');
       await waitFor(
-        () => useWorkspaceStore(workspace!.pinia).activity?.total === 0,
+        () =>
+          workspace!.queryClient
+            .getQueryCache()
+            .findAll({ queryKey: ['workspace', 'activity'] })
+            .some((query) => (query.state.data as ActivityPageResponse | undefined)?.total === 0),
         'filtered zero-event activity response',
       );
       expect(workspace.wrapper.text()).toContain('No activity events returned');
 
       await visit(workspace, '/policy');
       await waitFor(
-        () => useWorkspaceStore(workspace!.pinia).policy?.active != null,
+        () =>
+          workspace!.queryClient.getQueryData<PolicyResponse>(workspaceQueryKeys.policy)?.active !=
+          null,
         'seed policy API response',
       );
       expect(workspace.wrapper.text()).toContain('Tax & Batch Settings');
@@ -232,15 +294,19 @@ describe('isolated local backend smoke', () => {
         'persistent policy editor initialization',
       );
       const initialSource = lifecycleStore.policyEditor.state.sourceRevisionId;
-      expect(initialSource).toBe(lifecycleStore.policy?.active?.id);
-      await lifecycleStore.runOptimizer();
+      expect(initialSource).toBe(policyResource(workspace)?.active?.id);
+      await workspace.workspaceFacade.runOptimizer();
       expect(lifecycleStore.currentRunView).toBe('current');
-      const findRetainedLossInput = () =>
-        workspace!.wrapper
-          .findAll('.settings-group input')
-          .find((input) =>
-            input.element.closest('.field')?.textContent?.includes('Target retained net loss'),
-          );
+      const findRetainedLossInput = () => {
+        const taxSettings = workspace!.wrapper.find('[data-policy-tax-settings-root]');
+        const label = taxSettings
+          .findAll('label')
+          .find((candidate) => candidate.text().includes('Target retained net loss'));
+        if (!label) return undefined;
+        const inputId = label.attributes('for');
+        if (!inputId) return undefined;
+        return taxSettings.find(`input[data-slot="input"][id="${inputId}"]`);
+      };
       const retainedLossInput = findRetainedLossInput();
       expect(retainedLossInput).toBeDefined();
       const exactRetainedLoss = '2345.670000000000001';
@@ -299,7 +365,7 @@ describe('isolated local backend smoke', () => {
       await waitFor(
         () =>
           !lifecycleStore.policyEditor.state.pendingSave &&
-          (lifecycleStore.policy?.drafts.some(
+          (policyResource(workspace)?.drafts.some(
             (draft) => draft.settings.target_retained_net_loss_usd === exactRetainedLoss,
           ) ??
             false),
@@ -340,13 +406,12 @@ describe('isolated local backend smoke', () => {
       await waitFor(
         () =>
           !lifecycleStore.policyEditor.state.pendingActivation &&
-          useWorkspaceStore(workspace!.pinia).policy?.active?.settings
-            .target_retained_net_loss_usd === exactRetainedLoss,
+          policyResource(workspace)?.active?.settings.target_retained_net_loss_usd ===
+            exactRetainedLoss,
         'policy activation and refreshed active revision after route exit',
       );
       expect(lifecycleStore.currentRunView).toBe('stale');
-      const savedValue = useWorkspaceStore(workspace.pinia).policy?.active?.settings
-        .target_retained_net_loss_usd;
+      const savedValue = policyResource(workspace)?.active?.settings.target_retained_net_loss_usd;
       expect(savedValue).toBe(exactRetainedLoss);
       await visit(workspace, '/policy');
       await waitFor(
@@ -364,32 +429,22 @@ describe('isolated local backend smoke', () => {
       await visit(workspace, '/policy');
       await waitFor(
         () =>
-          useWorkspaceStore(workspace!.pinia).policy?.active?.settings
-            .target_retained_net_loss_usd === exactRetainedLoss,
+          policyResource(workspace)?.active?.settings.target_retained_net_loss_usd ===
+          exactRetainedLoss,
         'restarted backend persisted active policy',
       );
-      expect(
-        useWorkspaceStore(workspace.pinia).policy?.active?.settings.target_retained_net_loss_usd,
-      ).toBe(exactRetainedLoss);
+      expect(policyResource(workspace)?.active?.settings.target_retained_net_loss_usd).toBe(
+        exactRetainedLoss,
+      );
       await waitFor(() => {
-        const retainedLossInput = workspace!.wrapper
-          .findAll('.settings-group input')
-          .find((input) =>
-            input.element.closest('.field')?.textContent?.includes('Target retained net loss'),
-          );
+        const retainedLossInput = findRetainedLossInput();
         return (
           (retainedLossInput?.element as HTMLInputElement | undefined)?.value === exactRetainedLoss
         );
       }, 'policy page reload of persisted target retained loss setting');
-      expect(
-        (
-          workspace.wrapper
-            .findAll('.settings-group input')
-            .find((input) =>
-              input.element.closest('.field')?.textContent?.includes('Target retained net loss'),
-            )?.element as HTMLInputElement | undefined
-        )?.value,
-      ).toBe(exactRetainedLoss);
+      expect((findRetainedLossInput()?.element as HTMLInputElement | undefined)?.value).toBe(
+        exactRetainedLoss,
+      );
 
       const decimalStore = useWorkspaceStore(workspace.pinia);
       await waitFor(
@@ -426,7 +481,7 @@ describe('isolated local backend smoke', () => {
         'reopened exponent-decimal policy revision',
       );
       await waitFor(
-        () => reopenedStore.portfolio?.status === 'ready',
+        () => portfolioResource(workspace)?.status === 'ready',
         'ready holdings for exact reassignment identity capture',
       );
       expect(reopenedStore.policyEditor.state.draft.settings.cash_reserve_usd).toBe('0.00000001');
@@ -455,8 +510,8 @@ describe('isolated local backend smoke', () => {
       const targetParent = reassignmentEditor.state.draft.sleeves.find(
         (sleeve) => sleeve.sleeve_key === 'us_equities',
       )!;
-      const heldTickers = reopenedStore
-        .portfolio!.positions.filter(
+      const heldTickers = portfolioResource(workspace)!
+        .positions.filter(
           (position) =>
             position.sleeve_key === retiredSleeve.sleeve_key ||
             position.sub_sleeve_key === retiredSleeve.sleeve_key,
@@ -558,11 +613,10 @@ describe('isolated local backend smoke', () => {
 
       await visit(workspace, '/');
       await waitFor(() => {
-        const store = useWorkspaceStore(workspace!.pinia);
         return (
-          store.health?.status === 'ok' &&
-          store.portfolio?.status === 'ready' &&
-          store.policy?.active != null
+          healthResource(workspace)?.status === 'ok' &&
+          portfolioResource(workspace)?.status === 'ready' &&
+          policyResource(workspace)?.active != null
         );
       }, 'ready portfolio and active policy before running');
       const runButton = workspace.wrapper
@@ -574,11 +628,11 @@ describe('isolated local backend smoke', () => {
       await waitFor(
         () =>
           workspace!.router.currentRoute.value.path === '/recommendations' &&
-          useWorkspaceStore(workspace!.pinia).currentRun !== null,
+          workspace!.workspaceFacade.currentRun !== null,
         'real DEMO run response and recommendations navigation',
       );
       expect(workspace.router.currentRoute.value.path).toBe('/recommendations');
-      const store = useWorkspaceStore(workspace.pinia);
+      const store = workspace.workspaceFacade;
       const firstRun = store.currentRun;
       expect(firstRun).not.toBeNull();
       expect(firstRun).toMatchObject({
@@ -599,13 +653,21 @@ describe('isolated local backend smoke', () => {
       await waitFor(
         () =>
           workspace!.wrapper
-            .findAll('button.reopen-button')
-            .some((button) => button.element.closest('li')?.textContent?.includes(firstRunId)),
+            .findAll('button')
+            .some(
+              (button) =>
+                button.text().trim() === 'Reopen saved optimizer run' &&
+                button.element.closest('li')?.textContent?.includes(firstRunId),
+            ),
         'saved run event from Activity API',
       );
       const firstRunReopenButton = workspace.wrapper
-        .findAll('button.reopen-button')
-        .find((button) => button.element.closest('li')?.textContent?.includes(firstRunId));
+        .findAll('button')
+        .find(
+          (button) =>
+            button.text().trim() === 'Reopen saved optimizer run' &&
+            button.element.closest('li')?.textContent?.includes(firstRunId),
+        );
       expect(firstRunReopenButton).toBeDefined();
       await firstRunReopenButton!.trigger('click');
       await flushPromises();
@@ -651,6 +713,16 @@ describe('isolated local backend smoke', () => {
       assertCanonicalLegGraph(store.currentRun!);
 
       const groupId = store.currentRun!.groups[0]!.group_id;
+
+      const groupTriggerSelector = `[data-slot="collapsible-trigger"][aria-label="Recommendation group ${groupId}"]`;
+      const openRecommendationGroup = async (): Promise<void> => {
+        const trigger = workspace!.wrapper.get(groupTriggerSelector);
+        if (trigger.attributes('aria-expanded') !== 'true') {
+          await trigger.trigger('click');
+          await flushPromises();
+        }
+      };
+      await openRecommendationGroup();
       await workspace.wrapper
         .get(`[role="checkbox"][aria-label="Select recommendation group ${groupId}"]`)
         .trigger('click');
@@ -686,8 +758,8 @@ describe('isolated local backend smoke', () => {
       await waitFor(
         () =>
           Boolean(
-            useWorkspaceStore(workspace!.pinia)
-              .currentRun?.consolidated_legs.find((leg) => leg.side === 'SELL')
+            workspace!.workspaceFacade.currentRun?.consolidated_legs
+              .find((leg) => leg.side === 'SELL')
               ?.selected_lots.some((lot) => lot.broker_lot_id === 'DEMO-VB-LOT-1' && lot.selected),
           ),
         'successful full lot-intent DEMO re-solve',
@@ -774,6 +846,7 @@ describe('isolated local backend smoke', () => {
       expect(csvExport).toContain(run!.run_id);
       expect(csvExport).toContain('DEMO-VB-LOT-1');
       expect(requests).toContain(`GET /api/v1/optimizer/runs/${run!.run_id}/export?format=json`);
+      await openRecommendationGroup();
       const rejectionPanel = workspace.wrapper.get(
         `[aria-label="Notes and rejection for ${groupId}"]`,
       );
@@ -808,6 +881,7 @@ describe('isolated local backend smoke', () => {
         rejected: true,
         rejection_reason: 'Integration rejection reason',
       });
+      await openRecommendationGroup();
       const restorePanel = workspace.wrapper.get(
         `[aria-label="Notes and rejection for ${groupId}"]`,
       );

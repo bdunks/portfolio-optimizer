@@ -8,7 +8,7 @@ function styles(directory: string): Array<{ file: string; css: string }> {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const file = join(directory, entry.name);
     if (entry.isDirectory()) return styles(file);
-    if (!/\.(vue|css|scss)$/.test(file) || file.endsWith('quasar.variables.scss')) return [];
+    if (!/\.(vue|css|scss)$/.test(file)) return [];
     const source = readFileSync(file, 'utf8');
     const blocks = file.endsWith('.vue')
       ? [...source.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/g)].map((match) => match[1]!)
@@ -17,7 +17,7 @@ function styles(directory: string): Array<{ file: string; css: string }> {
   });
 }
 
-describe('Quasar-first spacing', () => {
+describe('Standalone workspace spacing', () => {
   it('uses utilities instead of custom margins and padding, except accessible hidden content', () => {
     for (const { file, css } of styles(sourceDirectory)) {
       postcss.parse(css).walkDecls(/^(margin|padding)(-|$)/, (declaration) => {
@@ -32,7 +32,7 @@ describe('Quasar-first spacing', () => {
     }
   });
 
-  it('keeps justified grid gaps on the unmodified Quasar spacing scale', () => {
+  it('keeps grid gaps on the shared workspace spacing scale', () => {
     for (const { file, css } of styles(sourceDirectory)) {
       postcss.parse(css).walkDecls(/^(gap|row-gap|column-gap)$/, (declaration) => {
         expect(css, file).toContain('negative-margin gutters distort grid tracks');
@@ -41,7 +41,5 @@ describe('Quasar-first spacing', () => {
         }
       });
     }
-    const variables = readFileSync(join(sourceDirectory, 'css/quasar.variables.scss'), 'utf8');
-    expect(variables).not.toMatch(/\$(space(?:-[\w-]+)?|spaces|flex-gutter(?:-[\w-]+)?)\s*:/);
   });
 });

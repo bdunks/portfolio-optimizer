@@ -1,19 +1,20 @@
 // @vitest-environment jsdom
-import { flushPromises, mount } from '@vue/test-utils';
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createPinia, setActivePinia } from 'pinia';
+import { createPinia, getActivePinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
+import { Select } from '@/components/ui/select';
+import { workspaceQueryKeys } from '@/composables/queries/workspace-queries';
+import { mountWorkspaceHarness } from '@/test-utils/workspace-harness';
+import { getTestQueryClientForPinia } from '@/test-utils/workspace-mount';
 import type {
-  FrozenRunDisplayContextResponse,
   ActivityEventResponse,
   ActivityPageResponse,
+  FrozenRunDisplayContextResponse,
   OptimizerRecommendationsResponse,
   OptimizerRunResponse,
 } from '@/types/api';
 import ActivityPage from './ActivityPage.vue';
-import { useWorkspaceStore } from '@/stores/workspace-store';
-import { QBadge, QBanner, QCard, QSelect } from 'quasar';
-import { findQuasarComponent, setQuasarModelValue } from '@/test-utils/quasar-mount';
 
 const frozenDisplayContext: FrozenRunDisplayContextResponse = {
   available: true,
@@ -132,44 +133,75 @@ function testRouter() {
   });
 }
 
+const mountedPages: VueWrapper[] = [];
+
 beforeEach(() => {
   vi.unstubAllGlobals();
   setActivePinia(createPinia());
+  mountWorkspaceHarness();
 });
 
 afterEach(() => {
+  mountedPages.splice(0).forEach((wrapper) => wrapper.unmount());
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
 
+async function mountActivityPage() {
+  const router = testRouter();
+  await router.push('/activity');
+  await router.isReady();
+  const wrapper = mount(ActivityPage, { global: { plugins: [router] } });
+  mountedPages.push(wrapper);
+  await flushPromises();
+  return { router, wrapper };
+}
+
+async function setPageLimit(wrapper: VueWrapper, limit: number): Promise<void> {
+  const select = wrapper.findComponent(Select);
+  if (!select.exists()) throw new Error('Activity page-size select was not found');
+  select.vm.$emit('update:modelValue', String(limit));
+  await flushPromises();
+}
+
+async function refreshActivity(wrapper: VueWrapper): Promise<void> {
+  const refreshButton = wrapper
+    .findAll('button')
+    .find((button) => button.text().trim() === 'Refresh activity');
+  if (!refreshButton) throw new Error('Activity refresh button was not found');
+  await refreshButton.trigger('click');
+  await flushPromises();
+}
+
 describe('ActivityPage', () => {
-  it('filters API events and paginates by the returned page limit', async () => {
+  it('filters API events, preserves server pagination, and clears to the first 25-row page', async () => {
     vi.stubEnv('TZ', 'America/Los_Angeles');
     expect(new Date('2025-02-01T00:00:00').getTimezoneOffset()).toBe(480);
     const fetcher = vi.fn<typeof fetch>((input) => {
       const url = requestUrl(input);
       const offset = Number(url.searchParams.get('offset') ?? '0');
       const limit = Number(url.searchParams.get('limit') ?? '25');
-      return Promise.resolve(jsonResponse(activityPage([runEvent], 51, offset, limit)));
+      const responseOffset = offset === 50 ? 51 : offset;
+      return Promise.resolve(jsonResponse(activityPage([runEvent], 51, responseOffset, limit)));
     });
     vi.stubGlobal('fetch', fetcher);
-    const router = testRouter();
-    await router.push('/activity');
-    await router.isReady();
-    const wrapper = mount(ActivityPage, { global: { plugins: [router] } });
-    await flushPromises();
-    expect(wrapper.get('.workspace-page').classes()).toContain('activity-page');
-    const filterCard = findQuasarComponent(wrapper, QCard, 'Activity filters');
-    expect(filterCard.element.tagName).toBe('FORM');
-    expect(wrapper.get('li.event-card').element.tagName).toBe('LI');
+    const { wrapper } = await mountActivityPage();
 
-    const searchInputs = wrapper.findAll('input[type="search"]');
-    await searchInputs[0]!.setValue('optimizer_run');
-    await searchInputs[1]!.setValue('complete');
-    await searchInputs[2]!.setValue('correlation-synthetic');
-    await wrapper.find('input[type="datetime-local"]').setValue('2025-02-01T00:00');
-    await setQuasarModelValue(wrapper, QSelect, 'Rows per page', 50);
-    await wrapper.get('form').trigger('submit');
+    expect(wrapper.get('.workspace-page').classes()).toContain('activity-page');
+    expect(wrapper.get('form[aria-label="Activity filters"]')).toBeDefined();
+    expect(wrapper.get('input[type="datetime-local"]#activity-since').attributes('step')).toBe(
+      'any',
+    );
+    expect(wrapper.get('li > .event-card').element.tagName).toBe('DIV');
+    expect(wrapper.get('[aria-label="Activity events"]').element.tagName).toBe('OL');
+    expect(wrapper.get('[data-slot="badge"]').attributes('data-variant')).toBe('secondary');
+
+    await wrapper.get('#activity-event-type').setValue(' optimizer_run ');
+    await wrapper.get('#activity-status').setValue(' complete ');
+    await wrapper.get('#activity-correlation-id').setValue(' correlation-synthetic ');
+    await wrapper.get('#activity-since').setValue('2025-02-01T00:00');
+    await setPageLimit(wrapper, 50);
+    await wrapper.get('form[aria-label="Activity filters"]').trigger('submit');
     await flushPromises();
 
     const filtered = requestUrl(fetcher.mock.calls[1]![0]);
@@ -180,30 +212,44 @@ describe('ActivityPage', () => {
     expect(filtered.searchParams.get('limit')).toBe('50');
     expect(wrapper.text()).toContain('page 1 of 2');
 
-    const completeStatus = wrapper
-      .findAllComponents(QBadge)
-      .find((badge) => badge.text() === 'complete');
-    expect(completeStatus?.attributes('role')).toBe('status');
-    expect(completeStatus?.props('color')).toBe('blue-grey-1');
-    expect(completeStatus?.props('textColor')).toBe('blue-grey-10');
-    await wrapper
-      .findAll('button')
-      .find((button) => button.text().includes('Next page'))!
-      .trigger('click');
+    await wrapper.get('button[aria-label="Next page"]').trigger('click');
     await flushPromises();
     const nextPageRequest = requestUrl(fetcher.mock.calls[2]![0]);
     expect(nextPageRequest.searchParams.get('offset')).toBe('50');
     expect(nextPageRequest.searchParams.get('limit')).toBe('50');
+    expect(wrapper.text()).toContain('page 2 of 2');
+
+    await refreshActivity(wrapper);
+    const refreshRequest = requestUrl(fetcher.mock.calls[3]![0]);
+    expect(refreshRequest.searchParams.get('offset')).toBe('51');
+
+    const clearFiltersButton = wrapper
+      .findAll('button')
+      .find((button) => button.text() === 'Clear filters');
+    expect(clearFiltersButton).toBeDefined();
+    await clearFiltersButton!.trigger('click');
+    await flushPromises();
+    const clearRequest = requestUrl(fetcher.mock.calls[4]![0]);
+    expect(clearRequest.searchParams.get('offset')).toBe('0');
+    expect(clearRequest.searchParams.get('limit')).toBe('25');
+    expect(clearRequest.searchParams.has('event_type')).toBe(false);
+    expect(clearRequest.searchParams.has('status')).toBe(false);
+    expect(clearRequest.searchParams.has('correlation_id')).toBe(false);
+    expect(clearRequest.searchParams.has('since')).toBe(false);
+    expect(clearRequest.searchParams.has('until')).toBe(false);
   });
 
-  it('restores saved filters and datetime inputs when the page is remounted', async () => {
-    const store = useWorkspaceStore();
-    store.activityFilters = {
+  it('restores saved filters and UTC date inputs while preserving unedited offset bounds verbatim', async () => {
+    vi.stubEnv('TZ', 'America/Los_Angeles');
+    const { workspace } = mountWorkspaceHarness();
+    const savedSince = '2025-02-01T00:00:00.987+05:30';
+    const savedUntil = '2025-02-03T12:30:45.123456-07:00';
+    workspace.activityFilters = {
       event_type: 'sync',
       status: 'failed',
       correlation_id: 'restored-correlation',
-      since: '2025-02-01T00:00:00Z',
-      until: '2025-02-03T12:30:45.123Z',
+      since: savedSince,
+      until: savedUntil,
       offset: 25,
       limit: 50,
     };
@@ -214,24 +260,18 @@ describe('ActivityPage', () => {
       return Promise.resolve(jsonResponse(activityPage([runEvent], 51, offset, limit)));
     });
     vi.stubGlobal('fetch', fetcher);
-    const router = testRouter();
-    await router.push('/activity');
-    await router.isReady();
-    const wrapper = mount(ActivityPage, { global: { plugins: [router] } });
-    await flushPromises();
+    const { wrapper } = await mountActivityPage();
 
-    const searchInputs = wrapper.findAll('input[type="search"]');
-    expect(searchInputs.map((input) => (input.element as HTMLInputElement).value)).toEqual([
-      'sync',
-      'failed',
-      'restored-correlation',
-    ]);
-    const dateInputs = wrapper.findAll('input[type="datetime-local"]');
-    expect(dateInputs.map((input) => (input.element as HTMLInputElement).value)).toEqual([
-      '2025-02-01T00:00',
-      '2025-02-03T12:30:45.123',
-    ]);
-    expect(findQuasarComponent(wrapper, QSelect, 'Rows per page').text()).toContain('50');
+    expect([
+      (wrapper.get('#activity-event-type').element as HTMLInputElement).value,
+      (wrapper.get('#activity-status').element as HTMLInputElement).value,
+      (wrapper.get('#activity-correlation-id').element as HTMLInputElement).value,
+    ]).toEqual(['sync', 'failed', 'restored-correlation']);
+    expect([
+      (wrapper.get('#activity-since').element as HTMLInputElement).value,
+      (wrapper.get('#activity-until').element as HTMLInputElement).value,
+    ]).toEqual(['2025-01-31T18:30:00.987', '2025-02-03T19:30:45.123']);
+    expect(wrapper.get('button[aria-label="Rows per page"]').text()).toContain('50');
     expect(wrapper.text()).toContain('Since (UTC)');
     expect(wrapper.text()).toContain('Until (UTC)');
 
@@ -239,17 +279,40 @@ describe('ActivityPage', () => {
     expect(restoredRequest.searchParams.get('event_type')).toBe('sync');
     expect(restoredRequest.searchParams.get('status')).toBe('failed');
     expect(restoredRequest.searchParams.get('correlation_id')).toBe('restored-correlation');
-    expect(restoredRequest.searchParams.get('since')).toBe('2025-02-01T00:00:00Z');
-    expect(restoredRequest.searchParams.get('until')).toBe('2025-02-03T12:30:45.123Z');
+    expect(restoredRequest.searchParams.get('since')).toBe(savedSince);
+    expect(restoredRequest.searchParams.get('until')).toBe(savedUntil);
     expect(restoredRequest.searchParams.get('offset')).toBe('25');
     expect(restoredRequest.searchParams.get('limit')).toBe('50');
+
+    await wrapper.get('#activity-since').setValue('2025-02-02T08:09');
+    await wrapper.get('form[aria-label="Activity filters"]').trigger('submit');
+    await flushPromises();
+    const editedRequest = requestUrl(fetcher.mock.calls[1]![0]);
+    expect(editedRequest.searchParams.get('since')).toBe('2025-02-02T08:09:00Z');
+    expect(editedRequest.searchParams.get('until')).toBe(savedUntil);
   });
 
-  it('reopens a saved optimizer run through the store and exposes only returned summary settings', async () => {
+  it('reopens only a qualifying saved optimizer run through the store and exposes the returned read-only summary', async () => {
+    const arrayDetailsEvent: ActivityEventResponse = {
+      ...runEvent,
+      id: 'event-array-details',
+      details: ['saved-run-synthetic'],
+    };
+    const emptyRunIdEvent: ActivityEventResponse = {
+      ...runEvent,
+      id: 'event-empty-run-id',
+      details: { run_id: '' },
+    };
+    const otherEventType: ActivityEventResponse = {
+      ...runEvent,
+      id: 'event-other-type',
+      event_type: 'optimizer_run_saved',
+    };
+    const events = [arrayDetailsEvent, emptyRunIdEvent, otherEventType, runEvent];
     const fetcher = vi.fn<typeof fetch>((input) => {
       const url = requestUrl(input);
       if (url.pathname === '/api/v1/activity') {
-        return Promise.resolve(jsonResponse(activityPage([runEvent])));
+        return Promise.resolve(jsonResponse(activityPage(events)));
       }
       if (url.pathname === '/api/v1/optimizer/runs/saved-run-synthetic') {
         return Promise.resolve(jsonResponse(savedRun));
@@ -260,22 +323,25 @@ describe('ActivityPage', () => {
       return Promise.reject(new Error(`Unhandled local API request: ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const router = testRouter();
-    const store = useWorkspaceStore();
-    store.policy = {
+    const { workspace, queryClient } = mountWorkspaceHarness();
+    const pinia = getActivePinia();
+    if (!pinia) throw new Error('ActivityPage test has no active Pinia instance');
+    getTestQueryClientForPinia(pinia).setQueryData(workspaceQueryKeys.policy, {
       active: {
         id: 'policy-current',
         sleeves: [{ sleeve_key: 'us', display_name: 'Current US renamed' }],
       },
       drafts: [],
       superseded: [],
-    } as never;
-    await router.push('/activity');
-    await router.isReady();
-    const wrapper = mount(ActivityPage, { global: { plugins: [router] } });
-    await flushPromises();
+    });
+    expect(workspace).toBeDefined();
+    expect(queryClient).toBeDefined();
+    const { router, wrapper } = await mountActivityPage();
 
     expect(wrapper.findAll('button.reopen-button')).toHaveLength(1);
+    expect(
+      wrapper.findAll('button').some((button) => /order preview|submit order/i.test(button.text())),
+    ).toBe(false);
     await wrapper.get('button.reopen-button').trigger('click');
     await flushPromises();
 
@@ -287,7 +353,7 @@ describe('ActivityPage', () => {
     expect(summaryCard.text()).toContain('63.0000%');
     expect(summaryCard.text()).toContain('3210.00');
     expect(summaryCard.text()).not.toContain('Current US renamed');
-    expect(store.currentRunSummary?.frozen_display_context).toEqual(frozenDisplayContext);
+    expect(workspace.currentRunSummary?.frozen_display_context).toEqual(frozenDisplayContext);
     expect(wrapper.text()).toContain('loss_budget_usd');
     expect(wrapper.text()).toContain('25.00');
     expect(wrapper.text()).toContain('Synthetic saved-run warning');
@@ -296,7 +362,7 @@ describe('ActivityPage', () => {
     ).toBe(false);
   });
 
-  it('shows event error details, retries an API failure, and reports an empty response', async () => {
+  it('shows raw error details, retries a failed API request, and reports an empty response', async () => {
     let calls = 0;
     const fetcher = vi.fn<typeof fetch>(() => {
       calls += 1;
@@ -317,28 +383,24 @@ describe('ActivityPage', () => {
       return Promise.resolve(jsonResponse(activityPage([], 0)));
     });
     vi.stubGlobal('fetch', fetcher);
-    const router = testRouter();
-    await router.push('/activity');
-    await router.isReady();
-    const wrapper = mount(ActivityPage, { global: { plugins: [router] } });
-    await flushPromises();
+    const { wrapper } = await mountActivityPage();
 
     expect(wrapper.text()).toContain('activity_unavailable');
     expect(wrapper.text()).toContain('Synthetic activity API error');
-    await wrapper.get('button').trigger('click');
-    await flushPromises();
+    await refreshActivity(wrapper);
     expect(wrapper.text()).toContain('Synthetic failure detail');
-    expect(wrapper.text()).toContain('error');
-    const errorStatus = wrapper.findAllComponents(QBadge).find((badge) => badge.text() === 'error');
-    expect(errorStatus?.attributes('role')).toBe('status');
-    expect(errorStatus?.props('color')).toBe('red-1');
-    expect(errorStatus?.props('textColor')).toBe('red-10');
-    await wrapper.get('button.primary-button').trigger('click');
-    await flushPromises();
+    const errorStatus = wrapper.get('[data-slot="badge"]');
+    expect(errorStatus.attributes('role')).toBe('status');
+    expect(errorStatus.attributes('data-variant')).toBe('destructive');
+    expect(wrapper.get('time').text()).toBe(errorEvent.created_at);
+    expect(wrapper.text()).toContain(errorEvent.correlation_id);
+
+    await refreshActivity(wrapper);
     expect(wrapper.text()).toContain('No activity events returned');
     expect(calls).toBe(3);
   });
-  it('announces activity loading politely and then presents the empty result', async () => {
+
+  it('announces loading politely and then presents the empty result', async () => {
     let resolveActivity!: (response: Response) => void;
     const fetcher = vi.fn<typeof fetch>(
       () =>
@@ -347,34 +409,25 @@ describe('ActivityPage', () => {
         }),
     );
     vi.stubGlobal('fetch', fetcher);
-    const router = testRouter();
-    await router.push('/activity');
-    await router.isReady();
-    const wrapper = mount(ActivityPage, { global: { plugins: [router] } });
-    await flushPromises();
+    const { wrapper } = await mountActivityPage();
 
-    const loadingBanner = wrapper
-      .findAllComponents(QBanner)
-      .find((banner) => banner.text().includes('Loading activity from the local API'));
-    expect(loadingBanner?.attributes('role')).toBe('status');
-    expect(loadingBanner?.text()).toContain('Loading activity from the local API');
+    const loadingAlert = wrapper
+      .findAll('[role="status"]')
+      .find((notice) => notice.text().includes('Loading activity from the local API'));
+    expect(loadingAlert?.attributes('aria-live')).toBe('polite');
+    expect(loadingAlert?.text()).toContain('Loading activity from the local API');
 
     resolveActivity(jsonResponse(activityPage([], 0)));
     await flushPromises();
     expect(
       wrapper
-        .findAllComponents(QBanner)
-        .some((banner) => banner.text().includes('Loading activity from the local API')),
+        .findAll('[role="status"]')
+        .some((notice) => notice.text().includes('Loading activity from the local API')),
     ).toBe(false);
-    expect(
-      wrapper
-        .findAllComponents(QBanner)
-        .some(
-          (banner) =>
-            banner.attributes('role') === 'status' &&
-            banner.text().includes('No activity events returned'),
-        ),
-    ).toBe(true);
-    wrapper.unmount();
+    const emptyState = wrapper
+      .findAll('[role="status"]')
+      .find((notice) => notice.text().includes('No activity events returned'));
+    expect(emptyState).toBeDefined();
+    expect(emptyState?.attributes('aria-live')).toBe('polite');
   });
 });

@@ -1,3 +1,5 @@
+import { flushPromises } from '@vue/test-utils';
+import { onlineManager } from '@tanstack/query-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import type {
@@ -6,7 +8,15 @@ import type {
   PortfolioNotSyncedResponse,
   PortfolioReadyResponse,
 } from '../types/api';
+import { workspaceQueryKeys } from '../composables/queries/workspace-queries';
 import { useWorkspaceStore } from './workspace-store';
+import {
+  mountWorkspaceHarness,
+  seedCurrentRunForTest,
+  seedCurrentRunSummaryForTest,
+  currentRunForTest,
+  currentRunSummaryForTest,
+} from '../test-utils/workspace-harness';
 
 function portfolioResponse(cash: string): PortfolioNotSyncedResponse {
   return {
@@ -258,15 +268,232 @@ afterEach(() => {
 });
 
 describe('workspace store', () => {
+  it('owns run payloads in the Query cache instead of Pinia state', async () => {
+    const { workspace, queryClient } = mountWorkspaceHarness();
+    const run = demoRun('query-owned-run');
+
+    seedCurrentRunForTest(workspace, run);
+    await flushPromises();
+
+    expect(workspace.currentRun).toEqual(run);
+    expect(queryClient.getQueryData(workspaceQueryKeys.currentRun(run.run_id))).toEqual(run);
+    expect('currentRun' in useWorkspaceStore()).toBe(false);
+  });
+
+  it('keeps the serialized review queue and accepted run across facade remounts', async () => {
+    const firstResponse = deferred<Response>();
+    const runId = 'shared-review-run';
+    const initial = {
+      ...demoRun(runId),
+      groups: ['group-1', 'group-2'].map((group_id) => ({
+        group_id,
+        selected: true,
+        rejected: false,
+        note: null,
+        rejection_reason: null,
+      })),
+    } as unknown as OptimizerRecommendationsResponse;
+    const firstResult = { ...initial, warnings: ['first accepted'] };
+    const secondResult = { ...initial, warnings: ['second accepted'] };
+    const requestOrder: string[] = [];
+    const fetcher = vi.fn<typeof fetch>((input) => {
+      const url = requestAddress(input);
+      if (url.pathname.endsWith('/recommendations/group-1')) {
+        requestOrder.push('group-1');
+        return firstResponse.promise;
+      }
+      if (url.pathname.endsWith('/recommendations/group-2')) {
+        requestOrder.push('group-2');
+        return responsePromise(secondResult);
+      }
+      return Promise.reject(new Error(`Unhandled fake route: ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    const firstHarness = mountWorkspaceHarness();
+    const firstFacade = firstHarness.workspace;
+    seedCurrentRunForTest(firstFacade, initial);
+    firstFacade.currentRunView = 'current';
+    firstFacade.observeSourceGeneration(1);
+
+    const firstWrite = firstFacade.annotateGroup(runId, 'group-1', { note: 'first' });
+    await flushPromises();
+    expect(requestOrder).toEqual(['group-1']);
+    firstHarness.wrapper.unmount();
+
+    const secondHarness = mountWorkspaceHarness();
+    const secondFacade = secondHarness.workspace;
+    expect(secondHarness.queryClient).toBe(firstHarness.queryClient);
+    expect(secondFacade.reviewMutationPending).toBe(true);
+    const secondWrite = secondFacade.annotateGroup(runId, 'group-2', { note: 'second' });
+    await flushPromises();
+    expect(requestOrder).toEqual(['group-1']);
+
+    firstResponse.resolve(jsonResponse(firstResult));
+    await firstWrite;
+    await vi.waitFor(() => expect(requestOrder).toEqual(['group-1', 'group-2']));
+    await secondWrite;
+
+    expect(currentRunForTest(secondFacade)).toEqual(secondResult);
+    expect(secondHarness.queryClient.getQueryData(workspaceQueryKeys.currentRun(runId))).toEqual(
+      secondResult,
+    );
+    expect(secondFacade.reviewMutationPending).toBe(false);
+    expect('currentRun' in useWorkspaceStore()).toBe(false);
+  });
+
+  it('loads saved summary and recommendations into the Query cache and keeps them read-only', async () => {
+    const runId = 'saved-query-run';
+    const summary = { ...demoRun(runId), orders_count: 4 };
+    const recommendations = demoRun(runId);
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      const url = requestAddress(input);
+      if (url.pathname === `/api/v1/optimizer/runs/${runId}` && init?.method === 'GET')
+        return responsePromise(summary);
+      if (
+        url.pathname === `/api/v1/optimizer/runs/${runId}/recommendations` &&
+        init?.method === 'GET'
+      )
+        return responsePromise(recommendations);
+      return Promise.reject(new Error(`Unhandled fake route: ${init?.method} ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const { workspace, queryClient } = mountWorkspaceHarness();
+
+    await workspace.openSavedRun(runId);
+
+    expect(workspace.currentRunView).toBe('saved');
+    expect(queryClient.getQueryData(workspaceQueryKeys.currentRun(runId))).toEqual(recommendations);
+    expect(queryClient.getQueryData(workspaceQueryKeys.currentRunSummary(runId))).toEqual(summary);
+    await expect(
+      workspace.annotateGroup(runId, 'group-1', { note: 'not allowed' }),
+    ).rejects.toMatchObject({
+      code: 'run_context_changed',
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect('currentRun' in useWorkspaceStore()).toBe(false);
+    expect('currentRunSummary' in useWorkspaceStore()).toBe(false);
+  });
+
+  it('runs review mutations offline and rejects changed-context responses', async () => {
+    const runId = 'offline-review-run';
+    const initial = {
+      ...demoRun(runId),
+      groups: [
+        {
+          group_id: 'group-1',
+          selected: true,
+          rejected: false,
+          note: null,
+          rejection_reason: null,
+        },
+      ],
+    } as unknown as OptimizerRecommendationsResponse;
+    const staleResponse = deferred<Response>();
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      const url = requestAddress(input);
+      if (url.pathname.endsWith('/recommendations/group-1')) {
+        return staleResponse.promise;
+      }
+      if (url.pathname === '/api/v1/optimizer/runs' && init?.method === 'POST') {
+        return responsePromise(demoRun('offline-replacement-run'), 201);
+      }
+      return Promise.reject(new Error(`Unhandled fake route: ${init?.method} ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    const { workspace } = mountWorkspaceHarness();
+    seedCurrentRunForTest(workspace, initial);
+    workspace.currentRunView = 'current';
+    workspace.observeSourceGeneration(1);
+
+    const wasOnline = onlineManager.isOnline();
+    let annotationPromise: Promise<OptimizerRecommendationsResponse> | null = null;
+    onlineManager.setOnline(false);
+    try {
+      annotationPromise = workspace.annotateGroup(runId, 'group-1', { note: 'offline request' });
+      await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+      expect(workspace.reviewMutationPending).toBe(true);
+
+      await workspace.runOptimizer();
+      expect(currentRunForTest(workspace)?.run_id).toBe('offline-replacement-run');
+      expect(workspace.reviewMutationPending).toBe(true);
+
+      staleResponse.resolve(jsonResponse(initial));
+      await expect(annotationPromise).rejects.toMatchObject({ code: 'run_context_changed' });
+      expect(currentRunForTest(workspace)?.run_id).toBe('offline-replacement-run');
+      expect(workspace.reviewMutationPending).toBe(false);
+    } finally {
+      onlineManager.setOnline(wasOnline);
+      staleResponse.resolve(jsonResponse(initial));
+      await annotationPromise?.catch(() => undefined);
+    }
+  });
+
+  it('retains run and summary caches when saved loading completes unmounted', async () => {
+    const runId = 'saved-after-unmount';
+    const summary = { ...demoRun(runId), orders_count: 3 };
+    const recommendations = demoRun(runId);
+    const recommendationsResponse = deferred<Response>();
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      const url = requestAddress(input);
+      if (url.pathname === `/api/v1/optimizer/runs/${runId}` && init?.method === 'GET') {
+        return responsePromise(summary);
+      }
+      if (
+        url.pathname === `/api/v1/optimizer/runs/${runId}/recommendations` &&
+        init?.method === 'GET'
+      ) {
+        return recommendationsResponse.promise;
+      }
+      return Promise.reject(new Error(`Unhandled fake route: ${init?.method} ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    const firstHarness = mountWorkspaceHarness();
+    const { workspace, queryClient } = firstHarness;
+    const originalDefaults = queryClient.getDefaultOptions();
+    queryClient.setDefaultOptions({
+      ...originalDefaults,
+      queries: { ...originalDefaults.queries, gcTime: 1 },
+    });
+    let opening: Promise<OptimizerRecommendationsResponse> | null = null;
+    try {
+      opening = workspace.openSavedRun(runId);
+      await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+      firstHarness.wrapper.unmount();
+
+      recommendationsResponse.resolve(jsonResponse(recommendations));
+      await opening;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      expect(queryClient.getQueryData(workspaceQueryKeys.currentRun(runId))).toEqual(
+        recommendations,
+      );
+      expect(queryClient.getQueryData(workspaceQueryKeys.currentRunSummary(runId))).toEqual(
+        summary,
+      );
+
+      const { workspace: remounted } = mountWorkspaceHarness();
+      await flushPromises();
+      expect(remounted.currentRun?.run_id).toBe(runId);
+      expect(remounted.currentRunSummary?.run_id).toBe(runId);
+      expect(remounted.currentRunView).toBe('saved');
+    } finally {
+      recommendationsResponse.resolve(jsonResponse(recommendations));
+      await opening?.catch(() => undefined);
+      queryClient.setDefaultOptions(originalDefaults);
+    }
+  });
+
   it('deduplicates the shared initial load across route consumers', async () => {
     const fetcher = installDefaultApi();
-    const store = useWorkspaceStore();
+    const { workspace: store } = mountWorkspaceHarness();
 
     const first = store.ensureInitialWorkspace();
     const second = store.ensureInitialWorkspace();
 
     expect(store.initialWorkspacePending).toBe(true);
-    expect(fetcher).toHaveBeenCalledTimes(3);
     await Promise.all([first, second]);
     expect(store.initialWorkspacePending).toBe(false);
     expect(fetcher).toHaveBeenCalledTimes(3);
@@ -326,16 +553,16 @@ describe('workspace store', () => {
       return Promise.reject(new Error(`Unhandled fake route: ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const store = useWorkspaceStore();
+    const { workspace: store, queryClient } = mountWorkspaceHarness();
     const cachedPolicy = {
       active: { id: 'policy-demo' },
       drafts: [],
       superseded: [],
     } as unknown as PolicyResponse;
-    store.portfolio = readyPortfolio(1);
-    store.policy = cachedPolicy;
+    queryClient.setQueryData(workspaceQueryKeys.portfolio, readyPortfolio(1));
+    queryClient.setQueryData(workspaceQueryKeys.policy, cachedPolicy);
 
-    store.currentRun = demoRun('generation-1-run');
+    seedCurrentRunForTest(store, demoRun('generation-1-run'));
     store.currentRunView = 'current';
 
     await expect(store.syncPortfolio()).resolves.toMatchObject({ generation: 2 });
@@ -345,7 +572,7 @@ describe('workspace store', () => {
 
     expect(store.lastSync?.generation).toBe(2);
     expect(store.currentRunView).toBe('stale');
-    expect(store.policy).toBe(cachedPolicy);
+    expect(store.policy).toEqual(cachedPolicy);
 
     expect(store.resourceFreshness.portfolio.status).toBe('fresh');
     expect(store.resourceFreshness.policy.status).toBe('stale');
@@ -355,9 +582,93 @@ describe('workspace store', () => {
     });
   });
 
+  it('shares portfolio sync ordering across workspace facades', async () => {
+    const staleSync = deferred<Response>();
+    const latestSync = deferred<Response>();
+    let syncCalls = 0;
+    const fetcher = vi.fn<typeof fetch>((input) => {
+      const url = requestAddress(input);
+      if (url.pathname === '/api/v1/portfolio/sync') {
+        syncCalls += 1;
+        return syncCalls === 1 ? staleSync.promise : latestSync.promise;
+      }
+      if (url.pathname === '/health')
+        return responsePromise({
+          status: 'ok',
+          schema_ready: true,
+          broker_mode: 'fake',
+          live_broker_enabled: false,
+          order_submission_enabled: false,
+        });
+      if (url.pathname === '/api/v1/portfolio') return responsePromise(readyPortfolio(2));
+      if (url.pathname === '/api/v1/policy')
+        return responsePromise({ active: null, drafts: [], superseded: [] });
+      if (url.pathname === '/api/v1/lots')
+        return responsePromise({
+          items: [],
+          total: 0,
+          offset: 0,
+          limit: 100,
+          source_generation: 2,
+        });
+      if (url.pathname === '/api/v1/wash-sales')
+        return responsePromise({
+          demo: true,
+          source: 'FakeBroker',
+          history: [],
+          acquisitions: [],
+          current_restrictions: [],
+          proposed_restrictions: [],
+          warnings: [],
+        });
+      if (url.pathname === '/api/v1/activity')
+        return responsePromise({ items: [], total: 0, offset: 0, limit: 100 });
+      return Promise.reject(new Error(`Unhandled fake route: ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    const firstFacade = mountWorkspaceHarness().workspace;
+    const secondFacade = mountWorkspaceHarness().workspace;
+    const oldRequest = firstFacade.syncPortfolio();
+    const newRequest = secondFacade.syncPortfolio();
+    await vi.waitFor(() => expect(syncCalls).toBe(2));
+
+    latestSync.resolve(
+      jsonResponse({
+        generation: 2,
+        status: 'complete',
+        as_of: '2026-01-02T00:00:00Z',
+        coverage: {},
+        account: 'DEMO',
+        demo: true,
+      }),
+    );
+    await newRequest;
+    expect(firstFacade.lastSync?.generation).toBe(2);
+    const refreshCalls = () =>
+      fetcher.mock.calls.filter(
+        ([input]) => requestAddress(input).pathname !== '/api/v1/portfolio/sync',
+      );
+    expect(refreshCalls()).toHaveLength(6);
+
+    staleSync.resolve(
+      jsonResponse({
+        generation: 1,
+        status: 'complete',
+        as_of: '2026-01-01T00:00:00Z',
+        coverage: {},
+        account: 'DEMO',
+        demo: true,
+      }),
+    );
+    await oldRequest;
+    expect(firstFacade.lastSync?.generation).toBe(2);
+    expect(refreshCalls()).toHaveLength(6);
+  });
+
   it('refreshes resources independently and exposes per-action status', async () => {
     const fetcher = installDefaultApi();
-    const store = useWorkspaceStore();
+    const { workspace: store } = mountWorkspaceHarness();
 
     await store.refreshWorkspace();
 
@@ -419,9 +730,10 @@ describe('workspace store', () => {
       return Promise.reject(new Error(`Unhandled fake route: ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const store = useWorkspaceStore();
+    const { workspace: store } = mountWorkspaceHarness();
 
     const oldRefresh = store.refreshWorkspace();
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(6));
     const newerPortfolio = store.loadPortfolio();
     const newerLots = store.loadLots({ ticker: 'NEW' });
     await Promise.all([newerPortfolio, newerLots]);
@@ -445,9 +757,329 @@ describe('workspace store', () => {
     expect(fetcher).toHaveBeenCalledTimes(8);
   });
 
+  it('returns each uncached overlapping load result while only publishing the latest response', async () => {
+    const olderResponse = deferred<Response>();
+    const newerResponse = deferred<Response>();
+    let portfolioCalls = 0;
+    const fetcher = vi.fn<typeof fetch>((input) => {
+      if (requestAddress(input).pathname !== '/api/v1/portfolio')
+        return Promise.reject(new Error(`Unhandled fake route: ${requestAddress(input).pathname}`));
+      portfolioCalls += 1;
+      return portfolioCalls === 1 ? olderResponse.promise : newerResponse.promise;
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const { workspace: store, queryClient } = mountWorkspaceHarness();
+    const { workspace: newerFacade } = mountWorkspaceHarness();
+
+    const olderLoad = store.loadPortfolio();
+    const newerLoad = newerFacade.loadPortfolio();
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    expect(store.actionState.loadPortfolio.pendingCount).toBe(2);
+    expect(queryClient.getQueryData(workspaceQueryKeys.portfolio)).toBeUndefined();
+
+    newerResponse.resolve(jsonResponse(readyPortfolio(2)));
+    await expect(newerLoad).resolves.toMatchObject({ sync: { generation: 2 } });
+    expect(store.actionState.loadPortfolio.pendingCount).toBe(1);
+    expect(store.observedSourceGeneration).toBe(2);
+
+    olderResponse.resolve(jsonResponse(readyPortfolio(1)));
+    await expect(olderLoad).resolves.toMatchObject({ sync: { generation: 1 } });
+    expect(store.actionState.loadPortfolio.pendingCount).toBe(0);
+    expect(store.portfolio?.sync.generation).toBe(2);
+    expect(store.observedSourceGeneration).toBe(2);
+  });
+
+  it('returns an older cached-resource failure and keeps latest resource state authoritative', async () => {
+    const olderResponse = deferred<Response>();
+    const newerResponse = deferred<Response>();
+    let portfolioCalls = 0;
+    const fetcher = vi.fn<typeof fetch>((input) => {
+      if (requestAddress(input).pathname !== '/api/v1/portfolio')
+        return Promise.reject(new Error(`Unhandled fake route: ${requestAddress(input).pathname}`));
+      portfolioCalls += 1;
+      return portfolioCalls === 1 ? olderResponse.promise : newerResponse.promise;
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const { workspace: store, queryClient } = mountWorkspaceHarness();
+    queryClient.setQueryData(workspaceQueryKeys.portfolio, readyPortfolio(1));
+
+    const olderLoad = store.loadPortfolio();
+    const newerLoad = store.loadPortfolio();
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    expect(store.actionState.loadPortfolio.pendingCount).toBe(2);
+
+    newerResponse.resolve(jsonResponse(readyPortfolio(2)));
+    await newerLoad;
+    expect(store.actionState.loadPortfolio.pendingCount).toBe(1);
+    expect(store.resourceFreshness.portfolio.status).toBe('fresh');
+
+    olderResponse.resolve(
+      jsonResponse(
+        {
+          code: 'portfolio_unavailable',
+          message: 'The older portfolio read failed',
+          details: {},
+          correlation_id: 'older-portfolio-failure',
+        },
+        503,
+      ),
+    );
+    await expect(olderLoad).rejects.toMatchObject({
+      code: 'portfolio_unavailable',
+      correlationId: 'older-portfolio-failure',
+    });
+    expect(store.actionState.loadPortfolio.pendingCount).toBe(0);
+    expect(store.actionState.loadPortfolio.error).toBeNull();
+    expect(store.portfolio?.sync.generation).toBe(2);
+    expect(store.resourceFreshness.portfolio.status).toBe('fresh');
+  });
+
+  it('sequences filtered lot reads resource-wide and preserves intent after an older null-generation response', async () => {
+    const olderResponse = deferred<Response>();
+    const newerResponse = deferred<Response>();
+    let lotCalls = 0;
+    const fetcher = vi.fn<typeof fetch>((input) => {
+      if (requestAddress(input).pathname !== '/api/v1/lots')
+        return Promise.reject(new Error(`Unhandled fake route: ${requestAddress(input).pathname}`));
+      lotCalls += 1;
+      return lotCalls === 1 ? olderResponse.promise : newerResponse.promise;
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const { workspace: store, queryClient } = mountWorkspaceHarness();
+
+    store.observeSourceGeneration(2);
+    expect(store.setLotReviewIntent('LOT-2', 'AAPL', 2, true)).toBe(true);
+    const olderLoad = store.loadLots({ ticker: 'OLD' });
+    const newerLoad = store.loadLots({ ticker: 'NEW' });
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    expect(store.actionState.loadLots.pendingCount).toBe(2);
+
+    newerResponse.resolve(
+      jsonResponse({ items: [], total: 2, offset: 0, limit: 100, source_generation: 2 }),
+    );
+    await expect(newerLoad).resolves.toMatchObject({ total: 2, source_generation: 2 });
+    expect(store.actionState.loadLots.pendingCount).toBe(1);
+
+    olderResponse.resolve(
+      jsonResponse({ items: [], total: 1, offset: 0, limit: 100, source_generation: null }),
+    );
+    await expect(olderLoad).resolves.toMatchObject({ total: 1, source_generation: null });
+
+    expect(store.observedSourceGeneration).toBe(2);
+    expect(store.lotReviewIntent).toMatchObject([
+      { broker_lot_id: 'LOT-2', ticker: 'AAPL', source_generation: 2 },
+    ]);
+    expect(queryClient.getQueryData(workspaceQueryKeys.lots({ ticker: 'OLD' }))).toBeUndefined();
+    expect(queryClient.getQueryData(workspaceQueryKeys.lots({ ticker: 'NEW' }))).toMatchObject({
+      total: 2,
+    });
+    expect(store.actionState.loadLots.pendingCount).toBe(0);
+  });
+
+  it('orders equivalent filtered lot keys by resource request order despite property insertion order', async () => {
+    const olderResponse = deferred<Response>();
+    const newerResponse = deferred<Response>();
+    let lotCalls = 0;
+    const fetcher = vi.fn<typeof fetch>((input) => {
+      if (requestAddress(input).pathname !== '/api/v1/lots')
+        return Promise.reject(new Error(`Unhandled fake route: ${requestAddress(input).pathname}`));
+      lotCalls += 1;
+      return lotCalls === 1 ? olderResponse.promise : newerResponse.promise;
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const { workspace: store, queryClient } = mountWorkspaceHarness();
+    const olderFilters = { ticker: 'AAPL', offset: 0, limit: 25 };
+    const newerFilters = { limit: 25, offset: 0, ticker: 'AAPL' };
+
+    const olderLoad = store.loadLots(olderFilters);
+    const newerLoad = store.loadLots(newerFilters);
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+
+    newerResponse.resolve(
+      jsonResponse({ items: [], total: 2, offset: 0, limit: 25, source_generation: 2 }),
+    );
+    await expect(newerLoad).resolves.toMatchObject({ total: 2 });
+    olderResponse.resolve(
+      jsonResponse({ items: [], total: 1, offset: 0, limit: 25, source_generation: 1 }),
+    );
+    await expect(olderLoad).resolves.toMatchObject({ total: 1 });
+
+    expect(queryClient.getQueryData(workspaceQueryKeys.lots(olderFilters))).toMatchObject({
+      total: 2,
+    });
+    expect(queryClient.getQueryData(workspaceQueryKeys.lots(newerFilters))).toMatchObject({
+      total: 2,
+    });
+    expect(store.observedSourceGeneration).toBe(2);
+    expect(store.actionState.loadLots.pendingCount).toBe(0);
+  });
+
+  it('publishes an unseen filtered load failure after immediate unmount for the next observer', async () => {
+    const failedResponse = deferred<Response>();
+    const fetcher = vi.fn<typeof fetch>((input) => {
+      if (requestAddress(input).pathname !== '/api/v1/lots')
+        return Promise.reject(new Error(`Unhandled fake route: ${requestAddress(input).pathname}`));
+      return failedResponse.promise;
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const { workspace: store, queryClient, wrapper } = mountWorkspaceHarness();
+    const filters = { ticker: 'UNSEEN' };
+
+    const load = store.loadLots(filters);
+    wrapper.unmount();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+
+    failedResponse.resolve(
+      jsonResponse(
+        {
+          code: 'lots_unavailable',
+          message: 'The filtered lots read failed',
+          details: {},
+          correlation_id: 'unseen-lots-failure',
+        },
+        503,
+      ),
+    );
+    await expect(load).rejects.toMatchObject({
+      code: 'lots_unavailable',
+      correlationId: 'unseen-lots-failure',
+    });
+
+    const key = workspaceQueryKeys.lots(filters);
+    expect(queryClient.getQueryState(key)).toMatchObject({ status: 'error', fetchStatus: 'idle' });
+    const { workspace: remounted } = mountWorkspaceHarness();
+    expect(remounted.resourceFreshness.lots.status).toBe('error');
+    expect(remounted.lots).toBeNull();
+  });
+
+  it('does not replay cached policy observations after a failed activation refresh, but observes identical successful reads', async () => {
+    const oldPolicy = { active: { id: 'policy-old' }, drafts: [], superseded: [] };
+    let policyReads = 0;
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      const url = requestAddress(input);
+      if (url.pathname === '/health')
+        return responsePromise({
+          status: 'ok',
+          schema_ready: true,
+          broker_mode: 'fake',
+          live_broker_enabled: false,
+          order_submission_enabled: false,
+        });
+      if (url.pathname === '/api/v1/portfolio') return responsePromise(readyPortfolio(1));
+      if (url.pathname === '/api/v1/policy') {
+        policyReads += 1;
+        return policyReads === 2
+          ? responsePromise(
+              {
+                code: 'policy_unavailable',
+                message: 'Policy read failed',
+                details: {},
+                correlation_id: 'policy-refresh-error',
+              },
+              503,
+            )
+          : responsePromise(oldPolicy);
+      }
+      if (url.pathname.endsWith('/activate'))
+        return responsePromise({ id: 'policy-new', status: 'ACTIVE' });
+      if (url.pathname === '/api/v1/optimizer/runs' && init?.method === 'POST')
+        return responsePromise(
+          { ...demoRun('policy-new-run'), policy_revision_id: 'policy-new' },
+          201,
+        );
+      if (url.pathname === '/api/v1/lots')
+        return responsePromise({
+          items: [],
+          total: 0,
+          offset: 0,
+          limit: 100,
+          source_generation: 1,
+        });
+      if (url.pathname === '/api/v1/wash-sales')
+        return responsePromise({
+          demo: true,
+          source: 'FakeBroker',
+          history: [],
+          acquisitions: [],
+          current_restrictions: [],
+          proposed_restrictions: [],
+          warnings: [],
+        });
+      if (url.pathname === '/api/v1/activity')
+        return responsePromise({ items: [], total: 0, offset: 0, limit: 100 });
+      return Promise.reject(new Error(`Unhandled fake route: ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const { workspace: store, wrapper } = mountWorkspaceHarness();
+
+    await store.loadPolicy();
+    await store.activatePolicy('policy-new');
+    expect(store.resourceFreshness.policy.status).toBe('stale');
+    expect(store.policy?.active?.id).toBe('policy-old');
+    await store.runOptimizer();
+    expect(store.currentRunView).toBe('current');
+
+    wrapper.unmount();
+    const { workspace: remounted } = mountWorkspaceHarness();
+    expect(remounted.currentRunView).toBe('current');
+
+    const cachedPolicy = remounted.policy;
+    const identicalPolicy = await remounted.loadPolicy();
+    expect(remounted.policy).toBe(cachedPolicy);
+    expect(identicalPolicy.active?.id).toBe('policy-old');
+    expect(remounted.currentRunView).toBe('stale');
+    expect(policyReads).toBe(3);
+  });
+
+  it('does not replay cached incomplete-portfolio observations on facade remount', async () => {
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      const url = requestAddress(input);
+      if (url.pathname === '/api/v1/portfolio') return responsePromise(portfolioResponse('0.00'));
+      if (url.pathname === '/api/v1/optimizer/runs' && init?.method === 'POST')
+        return responsePromise(demoRun('incomplete-portfolio-run'), 201);
+      return Promise.reject(new Error(`Unhandled fake route: ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const { workspace: store, wrapper } = mountWorkspaceHarness();
+
+    await store.loadPortfolio();
+    expect(store.observedSourceGeneration).toBeNull();
+    await store.runOptimizer();
+    expect(store.currentRunView).toBe('current');
+
+    wrapper.unmount();
+    const { workspace: remounted } = mountWorkspaceHarness();
+    expect(remounted.currentRunView).toBe('current');
+  });
+
+  it('publishes an accepted response observation after its component unmounts', async () => {
+    const portfolioResponsePending = deferred<Response>();
+    const fetcher = vi.fn<typeof fetch>((input) => {
+      if (requestAddress(input).pathname !== '/api/v1/portfolio')
+        return Promise.reject(new Error(`Unhandled fake route: ${requestAddress(input).pathname}`));
+      return portfolioResponsePending.promise;
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const { workspace: store, queryClient, wrapper } = mountWorkspaceHarness();
+
+    const pendingLoad = store.loadPortfolio();
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    expect(store.actionState.loadPortfolio.pendingCount).toBe(1);
+    wrapper.unmount();
+
+    portfolioResponsePending.resolve(jsonResponse(readyPortfolio(9)));
+    await expect(pendingLoad).resolves.toMatchObject({ sync: { generation: 9 } });
+    expect(
+      queryClient.getQueryData<PortfolioReadyResponse>(workspaceQueryKeys.portfolio)?.sync
+        .generation,
+    ).toBe(9);
+    expect(store.observedSourceGeneration).toBe(9);
+    expect(store.actionState.loadPortfolio.pendingCount).toBe(0);
+  });
+
   it('synchronizes and reloads without auto-running the optimizer', async () => {
     const fetcher = installDefaultApi();
-    const store = useWorkspaceStore();
+    const { workspace: store } = mountWorkspaceHarness();
 
     await store.syncPortfolio();
 
@@ -485,9 +1117,9 @@ describe('workspace store', () => {
       return Promise.reject(new Error(`Unhandled fake route: ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const store = useWorkspaceStore();
+    const store = mountWorkspaceHarness().workspace;
     await store.runOptimizer();
-    const original = store.currentRun;
+    const original = currentRunForTest(store);
     const selected = {
       selected_group_ids: ['group/1'],
       selected_sell_lots: { 'group/1': ['lot #42'] },
@@ -499,13 +1131,13 @@ describe('workspace store', () => {
     expect(store.currentRun?.warnings).toEqual(['server-authoritative result']);
 
     rejectSelection = true;
-    const lastValidRun = store.currentRun;
+    const lastValidRun = currentRunForTest(store);
     await expect(store.recalculateSelection({ selected_group_ids: [] })).rejects.toMatchObject({
       code: 'invalid_selection',
       correlationId: 'selection-error',
     });
-    expect(store.currentRun).toBe(lastValidRun);
-    expect(store.currentRun).not.toBe(original);
+    expect(currentRunForTest(store)).toBe(lastValidRun);
+    expect(currentRunForTest(store)).not.toBe(original);
     expect(store.actionState.recalculateSelection.error?.code).toBe('invalid_selection');
   });
 
@@ -547,10 +1179,10 @@ describe('workspace store', () => {
       return Promise.reject(new Error(`Unhandled fake route: ${init?.method} ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const store = useWorkspaceStore();
-    store.currentRun = initial;
+    const store = mountWorkspaceHarness().workspace;
+    seedCurrentRunForTest(store, initial);
     store.currentRunView = 'current';
-    store.currentRunSummary = { ...demoRun('annotated-run'), orders_count: 2 };
+    seedCurrentRunSummaryForTest(store, { ...demoRun('annotated-run'), orders_count: 2 });
 
     const result = await store.annotateGroup('annotated-run', 'group-1', {
       rejected: true,
@@ -565,14 +1197,14 @@ describe('workspace store', () => {
       warnings: ['full response after rejection'],
     });
 
-    const successfulRun = store.currentRun;
-    const successfulSummary = store.currentRunSummary;
+    const successfulRun = currentRunForTest(store);
+    const successfulSummary = currentRunSummaryForTest(store);
     response = { ...updated, run_id: 'different-run' };
     await expect(
       store.annotateGroup('annotated-run', 'group-1', { note: null }),
     ).rejects.toMatchObject({ code: 'run_id_mismatch' });
-    expect(store.currentRun).toBe(successfulRun);
-    expect(store.currentRunSummary).toBe(successfulSummary);
+    expect(currentRunForTest(store)).toBe(successfulRun);
+    expect(currentRunSummaryForTest(store)).toBe(successfulSummary);
   });
 
   it('serializes annotations, selection, and lot intent through the review queue', async () => {
@@ -626,8 +1258,8 @@ describe('workspace store', () => {
       return Promise.reject(new Error(`Unhandled fake route: ${init?.method} ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const store = useWorkspaceStore();
-    store.currentRun = initial;
+    const store = mountWorkspaceHarness().workspace;
+    seedCurrentRunForTest(store, initial);
     store.currentRunView = 'current';
     store.observeSourceGeneration(1);
 
@@ -641,7 +1273,7 @@ describe('workspace store', () => {
     store.setLotReviewIntent('LOT-1', 'VB', 1, true);
     const lotIntent = store.applyLotReviewIntent();
     expect(store.reviewMutationPending).toBe(true);
-    await Promise.resolve();
+    await flushPromises();
     expect(requestOrder).toEqual(['PATCH group-1']);
 
     firstAnnotationResponse.resolve(jsonResponse(serverRun));
@@ -689,8 +1321,8 @@ describe('workspace store', () => {
       return Promise.reject(new Error(`Unhandled fake route: ${init?.method} ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const store = useWorkspaceStore();
-    store.currentRun = serverRun;
+    const store = mountWorkspaceHarness().workspace;
+    seedCurrentRunForTest(store, serverRun);
     store.currentRunView = 'current';
     store.observeSourceGeneration(1);
     store.setLotReviewIntent('LOT-1', 'VB', 1, true);
@@ -740,8 +1372,8 @@ describe('workspace store', () => {
       return Promise.reject(new Error(`Unhandled fake route: ${init?.method} ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const store = useWorkspaceStore();
-    store.currentRun = previousRun;
+    const store = mountWorkspaceHarness().workspace;
+    seedCurrentRunForTest(store, previousRun);
     store.currentRunView = 'current';
     store.observeSourceGeneration(1);
     store.setLotReviewIntent('LOT-1', 'VB', 1, true);
@@ -777,14 +1409,14 @@ describe('workspace store', () => {
       return Promise.reject(new Error(`Unhandled fake route: ${init?.method} ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const store = useWorkspaceStore();
-    store.currentRun = demoRun(runId);
+    const store = mountWorkspaceHarness().workspace;
+    seedCurrentRunForTest(store, demoRun(runId));
     store.currentRunView = 'current';
     store.observeSourceGeneration(1);
     store.setLotReviewIntent('LOT-1', 'VB', 1, true);
 
     const applying = store.applyLotReviewIntent();
-    await Promise.resolve();
+    await flushPromises();
     expect(submittedBody).toEqual({ source_generation: 1, broker_lot_ids: ['LOT-1'] });
     expect(store.lotReviewIntentConfirmedRunId).toBeNull();
 
@@ -800,8 +1432,8 @@ describe('workspace store', () => {
   });
 
   it('invalidates requested lots on generation changes and treats null as unvalidated', () => {
-    const store = useWorkspaceStore();
-    store.currentRun = { ...demoRun('source-3'), source_generation: 3 };
+    const store = mountWorkspaceHarness().workspace;
+    seedCurrentRunForTest(store, { ...demoRun('source-3'), source_generation: 3 });
     store.currentRunView = 'current';
     store.observeSourceGeneration(3);
     store.setLotReviewIntent('LOT-3', 'VB', 3, true);
@@ -835,8 +1467,8 @@ describe('workspace store', () => {
       return Promise.reject(new Error(`Unhandled fake route: ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const store = useWorkspaceStore();
-    store.currentRun = demoRun('intent-run');
+    const store = mountWorkspaceHarness().workspace;
+    seedCurrentRunForTest(store, demoRun('intent-run'));
     store.currentRunView = 'current';
     store.observeSourceGeneration(1);
     store.setLotReviewIntent('LOT-1', 'VB', 1, true);
@@ -875,7 +1507,7 @@ describe('workspace store', () => {
       return Promise.reject(new Error(`Unhandled fake route: ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const store = useWorkspaceStore();
+    const store = mountWorkspaceHarness().workspace;
 
     const olderRun = store.runOptimizer();
     await store.runOptimizer();
@@ -884,7 +1516,7 @@ describe('workspace store', () => {
     expect(store.currentRun?.run_id).toBe('new-run');
 
     const oldSelection = store.recalculateSelection({ selected_group_ids: ['old'] });
-    await Promise.resolve();
+    await flushPromises();
     expect(
       fetcher.mock.calls.some(([input]) => requestAddress(input).pathname.endsWith('/selection')),
     ).toBe(true);
@@ -942,13 +1574,13 @@ describe('workspace store', () => {
       return Promise.reject(new Error(`Unhandled fake route: ${init?.method} ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const store = useWorkspaceStore();
-    store.policy = {
+    const { workspace: store, queryClient } = mountWorkspaceHarness();
+    queryClient.setQueryData(workspaceQueryKeys.policy, {
       active: { id: 'policy-demo', status: 'ACTIVE' },
       drafts: [],
       superseded: [],
-    } as unknown as PolicyResponse;
-    store.currentRun = demoRun('active-policy-run');
+    } as unknown as PolicyResponse);
+    seedCurrentRunForTest(store, demoRun('active-policy-run'));
     store.currentRunView = 'current';
 
     await store.activatePolicy('policy-new');
@@ -1004,8 +1636,8 @@ describe('workspace store', () => {
       return Promise.reject(new Error(`Unhandled fake route: ${init?.method} ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const store = useWorkspaceStore();
-    store.currentRun = demoRun('source-run');
+    const { workspace: store } = mountWorkspaceHarness();
+    seedCurrentRunForTest(store, demoRun('source-run'));
     store.currentRunView = 'current';
 
     await store.syncPortfolio();
@@ -1025,7 +1657,7 @@ describe('workspace store', () => {
       return Promise.reject(new Error(`Unhandled fake route: ${init?.method} ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const store = useWorkspaceStore();
+    const store = mountWorkspaceHarness().workspace;
 
     store.observeActivePolicyRevision(null);
     await store.runOptimizer();
@@ -1054,12 +1686,12 @@ describe('workspace store', () => {
       }
       return responsePromise({});
     });
-    const store = useWorkspaceStore();
-    store.policy = {
+    const { workspace: store, queryClient } = mountWorkspaceHarness();
+    queryClient.setQueryData(workspaceQueryKeys.policy, {
       active: activePolicy,
       drafts: [],
       superseded: [],
-    } as unknown as PolicyResponse;
+    } as unknown as PolicyResponse);
     await store.runOptimizer();
 
     await store.savePolicyDraft({ settings: {}, sleeves: [] });

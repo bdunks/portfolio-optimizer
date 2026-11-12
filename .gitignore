@@ -14,4 +14,3 @@ node_modules/
 *.sqlite3-wal
 
 # Ignore dynamically generated audit files
-docs/quasar-audit/

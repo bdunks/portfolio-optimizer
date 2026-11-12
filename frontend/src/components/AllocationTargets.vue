@@ -1,63 +1,83 @@
 <template>
-  <section class="allocation-panel column no-wrap q-gutter-y-md" aria-labelledby="allocation-title">
-    <header>
-      <h2 class="q-ma-none text-h6" id="allocation-title">Portfolio Allocation</h2>
-      <p class="q-mt-xs q-mb-none q-mx-none text-body2">
+  <section
+    class="allocation-panel workspace-foundation tw:flex tw:flex-col tw:gap-4"
+    aria-labelledby="allocation-title"
+  >
+    <header class="tw:flex tw:flex-col tw:gap-1">
+      <h2 class="tw:m-0 tw:text-lg tw:font-semibold tw:tracking-tight" id="allocation-title">
+        Portfolio Allocation
+      </h2>
+      <p class="tw:m-0 tw:text-sm tw:text-muted-foreground">
         API-reported sleeve weights as percentages of the whole portfolio.
       </p>
     </header>
 
-    <q-banner
-      v-if="showNoCurrentBasket"
-      class="q-my-sm rounded bg-amber-1 text-brown-10"
-      role="status"
-    >
-      No current proposed basket from a matching optimizer run. We show only allocation values
-      reported by the portfolio API.
-    </q-banner>
+    <Alert v-if="showNoCurrentBasket" role="status" class="workspace-foundation">
+      <AlertDescription>
+        No current proposed basket from a matching optimizer run. We show only allocation values
+        reported by the portfolio API.
+      </AlertDescription>
+    </Alert>
 
-    <p v-if="!allocation" class="empty-state q-mr-none q-mb-none q-ml-none">
-      Allocation data is unavailable from the portfolio API.
-    </p>
-    <WorkspaceTableFrame v-else-if="sleeveKeys.length" label="Portfolio allocation weights">
-      <q-markup-table class="allocation-table" wrap-cells>
-        <caption class="visually-hidden">
-          Current, proposed basket, and policy target allocation weights
-        </caption>
-        <thead>
-          <tr>
-            <th scope="col">Sleeve</th>
-            <th scope="col">Current</th>
-            <th scope="col">Proposed basket</th>
-            <th scope="col">Policy target</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="sleeveKey in sleeveKeys" :key="sleeveKey">
-            <th scope="row">{{ labels[sleeveKey] ?? sleeveKey }}</th>
-            <td>
-              {{ formatPercent(allocation.current?.sleeve_weights_pct[sleeveKey]) }}
-            </td>
-            <td>
-              {{ formatPercent(allocation.proposed?.sleeve_weights_pct[sleeveKey]) }}
-            </td>
-            <td>
-              {{ formatPercent(allocation.target?.sleeve_weights_pct[sleeveKey]) }}
-            </td>
-          </tr>
-        </tbody>
-      </q-markup-table>
-    </WorkspaceTableFrame>
-    <p v-else class="empty-state q-mr-none q-mb-none q-ml-none">
-      No allocation weights were returned.
-    </p>
+    <WorkspaceEmptyState
+      v-if="!allocation"
+      title="Allocation data is unavailable from the portfolio API."
+    />
+    <template v-else-if="sleeveKeys.length">
+      <AllocationWeightChart :allocation="allocation" :labels="labels" :sleeve-keys="sleeveKeys" />
+      <WorkspaceTableFrame v-if="sleeveKeys.length" label="Portfolio allocation weights">
+        <Table class="allocation-table">
+          <TableCaption class="tw:sr-only">
+            Current, proposed basket, and policy target allocation weights
+          </TableCaption>
+          <TableHeader>
+            <TableRow v-for="headerGroup in table.getHeaderGroups()" :key="headerGroup.id">
+              <TableHead v-for="header in headerGroup.headers" :key="header.id" scope="col">
+                <FlexRender v-if="!header.isPlaceholder" :header="header" />
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableRow v-for="row in tableRows" :key="row.id">
+              <template v-for="cell in row.getAllCells()" :key="cell.id">
+                <TableHead
+                  v-if="cell.column.id === 'sleeve'"
+                  scope="row"
+                  class="tw:text-left tw:font-medium"
+                >
+                  <FlexRender :cell="cell" />
+                </TableHead>
+                <TableCell v-else class="tw:tabular-nums">
+                  <FlexRender :cell="cell" />
+                </TableCell>
+              </template>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </WorkspaceTableFrame>
+    </template>
+    <WorkspaceEmptyState v-else title="No allocation weights were returned." />
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, shallowRef, watch } from 'vue';
+import { FlexRender, tableFeatures, useTable } from '@tanstack/vue-table';
+import type { ColumnDef } from '@tanstack/vue-table';
 import type { AllocationResponse } from '@/types/api';
 import { formatPercent } from '@/utils/display-values';
+import AllocationWeightChart from '@/components/charts/AllocationWeightChart.vue';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import WorkspaceEmptyState from '@/components/WorkspaceEmptyState.vue';
 import WorkspaceTableFrame from '@/components/WorkspaceTableFrame.vue';
 
 const props = withDefaults(
@@ -68,6 +88,13 @@ const props = withDefaults(
   }>(),
   { labels: () => ({}), showNoCurrentBasket: false },
 );
+
+type AllocationRow = {
+  sleeveKey: string;
+  current: string | undefined;
+  proposed: string | undefined;
+  target: string | undefined;
+};
 
 const allocation = computed(() => props.allocation);
 const labels = computed(() => props.labels);
@@ -81,28 +108,62 @@ const sleeveKeys = computed(() => {
     ]),
   ];
 });
+
+const allocationFeatures = tableFeatures({});
+const columns: Array<ColumnDef<typeof allocationFeatures, AllocationRow>> = [
+  {
+    id: 'sleeve',
+    accessorKey: 'sleeveKey',
+    header: 'Sleeve',
+    cell: ({ row }) => labels.value[row.original.sleeveKey] ?? row.original.sleeveKey,
+  },
+  {
+    id: 'current',
+    accessorKey: 'current',
+    header: 'Current',
+    cell: ({ row }) => formatPercent(row.original.current),
+  },
+  {
+    id: 'proposed',
+    accessorKey: 'proposed',
+    header: 'Proposed basket',
+    cell: ({ row }) => formatPercent(row.original.proposed),
+  },
+  {
+    id: 'target',
+    accessorKey: 'target',
+    header: 'Policy target',
+    cell: ({ row }) => formatPercent(row.original.target),
+  },
+];
+
+const allocationRows = computed<AllocationRow[]>(() =>
+  sleeveKeys.value.map((sleeveKey) => ({
+    sleeveKey,
+    current: props.allocation?.current?.sleeve_weights_pct[sleeveKey],
+    proposed: props.allocation?.proposed?.sleeve_weights_pct[sleeveKey],
+    target: props.allocation?.target?.sleeve_weights_pct[sleeveKey],
+  })),
+);
+
+const tableData = shallowRef(allocationRows.value);
+const table = useTable({ features: allocationFeatures, columns, data: tableData });
+watch(
+  allocationRows,
+  (rows) => {
+    tableData.value = rows;
+    table.setOptions((previous) => ({ ...previous, data: rows }));
+  },
+  { flush: 'sync' },
+);
+const tableRows = computed(() => (tableData.value.length === 0 ? [] : table.getRowModel().rows));
 </script>
 
 <style scoped>
-.allocation-table :deep(tbody td) {
-  font-variant-numeric: tabular-nums;
-}
-
-.empty-state {
-  color: #718795;
-  font-size: 0.82rem;
-}
-
-/* Keep content available to assistive technology without occupying layout space. */
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
+#allocation-title {
+  font-size: var(--tw-text-lg);
+  line-height: var(--tw-text-lg--line-height);
+  font-weight: var(--tw-font-weight-semibold);
+  letter-spacing: var(--tw-tracking-tight);
 }
 </style>

@@ -3,34 +3,31 @@
 ## Install the dependencies
 
 ```bash
-pnpm install
-# or: yarn/npm/bun install
+npm install
 ```
 
 ### Start the app in development mode (HMR, error reporting, etc.)
 
 ```bash
-quasar dev
+npm run dev
 ```
 
 ### Format & Lint the files
 
 ```bash
-pnpm run lint
-# or: yarn/npm/bun run lint
+npm run lint
 ```
 
 ...or just check formatting & linting:
 
 ```bash
-pnpm run lint:check
-# or: yarn/npm/bun run lint:check
+npm run lint:check
 ```
 
 ### Build the app for production
 
 ```bash
-quasar build
+npm run build
 ```
 
 ### Tests and type checks
@@ -54,10 +51,10 @@ npm run test:e2e:install
 npm run test:e2e
 ```
 
-The browser tests start Quasar's real Vite development server with the normal app CSS and a separate loopback FastAPI/FakeBroker process backed by a newly created temporary SQLite file. Each process uses its own allocated loopback port; teardown stops and reaps the owned process groups and removes the temporary directory. No credentials, default database, or broker traffic are used. A focused test rejects database paths outside the temp-directory boundary.
+The browser tests start the real standalone Vite development server with the normal app CSS and a separate loopback FastAPI/FakeBroker process backed by a newly created temporary SQLite file. Each process uses its own allocated loopback port; teardown stops and reaps the owned process groups and removes the temporary directory. No credentials, default database, or broker traffic are used. A focused test rejects database paths outside the temp-directory boundary.
 
 The suite runs headless Chromium at desktop `1440×1000` and tablet `768×1024` viewports. It checks rendered route navigation, keyboard focus, API empty/loading/failure states, policy revision flows, recommendation mutation rollback/remount, note clearing, and confirmed lot intent. The jsdom unit suite, real-backend API integration test, and browser suite are separate evidence; browser assertions do not claim screenshot approval, exhaustive accessibility, or broker/trading acceptance.
 
 ### Customize the configuration
 
-See [Configuring quasar.config.js](https://v2.quasar.dev/quasar-cli-vite/quasar-config-file).
+See [`vite.config.ts`](./vite.config.ts) for the local development/preview server, API proxies, and build settings.

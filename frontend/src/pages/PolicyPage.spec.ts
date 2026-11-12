@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { flushPromises } from '@vue/test-utils';
-import { mountWorkspacePageWithQuasar, setQuasarModelValue } from '@/test-utils/quasar-mount';
+import { mountWithWorkspace } from '@/test-utils/workspace-mount';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import type {
@@ -10,7 +10,81 @@ import type {
   PolicySettingsResponse,
 } from '@/types/api';
 import PolicyPage from './PolicyPage.vue';
-import { QBadge, QBanner, QCard, QCheckbox, QSelect } from 'quasar';
+import { useWorkspaceStore } from '@/stores/workspace-store';
+import { Select } from '@/components/ui/select';
+
+function labelForSleeveControl(wrapper: ReturnType<typeof mountWithWorkspace>, labelText: string) {
+  const label = wrapper
+    .findAll('label')
+    .find((candidate) => candidate.text().replace(/\s+/g, ' ').trim() === labelText);
+  if (!label) throw new Error(`Sleeve control label not found: ${labelText}`);
+  return label;
+}
+
+async function setSleeveCheckbox(
+  wrapper: ReturnType<typeof mountWithWorkspace>,
+  labelText: string,
+  checked: boolean,
+): Promise<void> {
+  const label = labelForSleeveControl(wrapper, labelText);
+  const id = label.attributes('for');
+  if (!id) throw new Error(`Sleeve checkbox label is not associated: ${labelText}`);
+  const control = wrapper.find(`[data-slot="checkbox"][id="${id}"]`);
+  if (!control.exists()) throw new Error(`Sleeve checkbox not found: ${labelText}`);
+  if (control.attributes('aria-checked') !== String(checked)) await control.trigger('click');
+  await flushPromises();
+}
+
+async function setSleeveSelect(
+  wrapper: ReturnType<typeof mountWithWorkspace>,
+  labelText: string,
+  optionLabel: string,
+): Promise<void> {
+  const label = labelForSleeveControl(wrapper, labelText);
+  const labelId = label.attributes('id');
+  if (!labelId) throw new Error(`Sleeve select label has no ID: ${labelText}`);
+  const control = wrapper
+    .findAllComponents(Select)
+    .find((candidate) =>
+      candidate.find(`[data-slot="select-trigger"][aria-labelledby="${labelId}"]`).exists(),
+    );
+  if (!control) throw new Error(`Sleeve select not found: ${labelText}`);
+  const triggerId = control
+    .get(`[data-slot="select-trigger"][aria-labelledby="${labelId}"]`)
+    .attributes('id');
+  const sectionLabel = wrapper.get('[data-policy-sleeves-root]').attributes('aria-labelledby');
+  const sectionId = sectionLabel?.replace(/-title$/, '');
+  if (!sectionId || !triggerId) throw new Error(`Sleeve select has no stable ID: ${labelText}`);
+  let kind: string;
+  if (triggerId.startsWith(`${sectionId}-delete-parent-`)) {
+    kind = `delete-parent-${decodeURIComponent(triggerId.slice(`${sectionId}-delete-parent-`.length))}`;
+  } else if (triggerId.endsWith('-parent')) {
+    kind = 'parent';
+  } else {
+    kind = 'reassignment';
+  }
+  let domainValue: string | null;
+  if (optionLabel === 'Top level') {
+    domainValue = null;
+  } else if (optionLabel === 'Choose destination' || optionLabel === 'Choose new parent') {
+    domainValue = '';
+  } else {
+    const row = wrapper.findAll('tbody tr').find((candidate) => {
+      const nameInput = candidate.find('input[aria-label^="Sleeve display name for "]');
+      const key = candidate.find('.sleeve-key').text().trim();
+      return (
+        (nameInput.exists() &&
+          nameInput.attributes('aria-label') === `Sleeve display name for ${optionLabel}`) ||
+        key.toLowerCase() === optionLabel.toLowerCase()
+      );
+    });
+    if (!row) throw new Error(`Sleeve select option not found: ${optionLabel}`);
+    domainValue = row.get('.sleeve-key').text().trim();
+  }
+  const token = `${sectionId}-${kind}-${domainValue === null ? 'none' : `value-${encodeURIComponent(domainValue)}`}`;
+  control.vm.$emit('update:modelValue', token);
+  await flushPromises();
+}
 
 const settings: PolicySettingsResponse = {
   short_term_tax_rate: '0.2500',
@@ -183,6 +257,17 @@ function revisionFromPayload(payload: PolicyDraftInput): PolicyRevisionResponse 
   };
 }
 
+function taxInputByLabel(wrapper: ReturnType<typeof mountWithWorkspace>, labelText: string) {
+  const taxSettings = wrapper.get('[data-policy-tax-settings-root]');
+  const label = taxSettings
+    .findAll('label')
+    .find((candidate) => candidate.text().includes(labelText));
+  if (!label) throw new Error(`Tax settings label not found: ${labelText}`);
+  const inputId = label.attributes('for');
+  if (!inputId) throw new Error(`Tax settings label has no input association: ${labelText}`);
+  return taxSettings.get(`input[data-slot="input"][id="${inputId}"]`);
+}
+
 beforeEach(() => {
   vi.unstubAllGlobals();
   setActivePinia(createPinia());
@@ -193,6 +278,72 @@ afterEach(() => {
 });
 
 describe('PolicyPage', () => {
+  it('validates revision choices and keeps controller selection resets authoritative', async () => {
+    const knownRevision: PolicyRevisionResponse = {
+      ...activeRevision,
+      id: 'revision-known-synthetic',
+      revision_number: 8,
+      status: 'DRAFT',
+      activated_at: null,
+    };
+    const fetcher = vi.fn<typeof fetch>((input) => {
+      const url = requestAddress(input);
+      if (url.pathname === '/api/v1/policy') {
+        return Promise.resolve(
+          jsonResponse({ active: activeRevision, drafts: [knownRevision], superseded: [] }),
+        );
+      }
+      if (url.pathname === '/api/v1/portfolio')
+        return Promise.resolve(jsonResponse(notSyncedPortfolioResponse()));
+      return Promise.reject(new Error(`Unhandled local API request: ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const pinia = createPinia();
+    const wrapper = mountWithWorkspace(PolicyPage, {
+      global: { plugins: [pinia] },
+    });
+    await flushPromises();
+
+    const policySelect = wrapper
+      .findAllComponents(Select)
+      .find((select) => select.find('#policy-revision-select').exists());
+    if (!policySelect) throw new Error('Policy revision selector not found');
+    const editor = useWorkspaceStore(pinia).policyEditor;
+    const requestRevisionChange = vi.spyOn(editor, 'requestRevisionChange');
+
+    policySelect.vm.$emit('update:modelValue', 'revision-not-available');
+    await flushPromises();
+    const trigger = wrapper.get('#policy-revision-select');
+    expect(trigger.attributes('aria-invalid')).toBe('true');
+    expect(trigger.attributes('aria-describedby')).toBe('policy-revision-select-error');
+    expect(wrapper.get('#policy-revision-select-error').attributes('role')).toBe('alert');
+    expect(wrapper.get('#policy-revision-select-error').text()).toContain(
+      'Select a policy revision that is currently available.',
+    );
+    expect(requestRevisionChange).not.toHaveBeenCalled();
+    expect(editor.state.selectedRevisionId).toBe(knownRevision.id);
+
+    editor.state.revisionChoice = '';
+    await flushPromises();
+    expect(policySelect.props('modelValue')).toBe('__new_policy__');
+    expect(wrapper.find('#policy-revision-select-error').exists()).toBe(false);
+    expect(requestRevisionChange).not.toHaveBeenCalled();
+
+    editor.state.revisionChoice = knownRevision.id;
+    await flushPromises();
+    expect(policySelect.props('modelValue')).toBe(knownRevision.id);
+    expect(requestRevisionChange).not.toHaveBeenCalled();
+
+    policySelect.vm.$emit('update:modelValue', activeRevision.id);
+    await flushPromises();
+    expect(requestRevisionChange).toHaveBeenCalledTimes(1);
+    expect(requestRevisionChange).toHaveBeenCalledWith(activeRevision.id, expect.any(Array));
+    expect(editor.state.selectedRevisionId).toBe(activeRevision.id);
+    expect(policySelect.props('modelValue')).toBe(activeRevision.id);
+    expect(wrapper.find('#policy-revision-select-error').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it('edits a source revision as a new draft and cannot activate dirty or invalid target content', async () => {
     let savedRevision: PolicyRevisionResponse | null = null;
     const draftPayloads: PolicyDraftInput[] = [];
@@ -247,7 +398,7 @@ describe('PolicyPage', () => {
       );
     });
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mountWorkspacePageWithQuasar(PolicyPage, {
+    const wrapper = mountWithWorkspace(PolicyPage, {
       global: { plugins: [createPinia()] },
     });
     await flushPromises();
@@ -257,21 +408,45 @@ describe('PolicyPage', () => {
     expect(revisionCard.attributes('aria-labelledby')).toBe('revision-title');
     expect(activationCard.element.tagName).toBe('SECTION');
     expect(activationCard.attributes('aria-labelledby')).toBe('activation-title');
-    expect(wrapper.findComponent(QCard).exists()).toBe(true);
-    const statusBadges = wrapper.findAllComponents(QBadge);
+    expect(revisionCard.find('[data-slot="card"]').exists()).toBe(true);
+    expect(activationCard.find('[data-slot="card"]').exists()).toBe(true);
+    expect(wrapper.get('#revision-title').element.tagName).toBe('H2');
+    expect(wrapper.get('#activation-title').element.tagName).toBe('H2');
+    const statusBadges = wrapper.findAll('[data-slot="badge"]');
     expect(statusBadges.map((badge) => badge.text())).toEqual([
       'Editing source revision-active-synthetic',
       'Target sums valid',
     ]);
     expect(statusBadges.every((badge) => badge.attributes('role') === 'status')).toBe(true);
-    expect(statusBadges.every((badge) => badge.props('color') === 'teal-1')).toBe(true);
-    expect(wrapper.get('.success-card').element.tagName).toBe('P');
+    expect(statusBadges.every((badge) => badge.attributes('data-variant') === 'secondary')).toBe(
+      true,
+    );
+    expect(wrapper.get('.activation-panel').text()).toContain(
+      'No target-sum errors are currently reported.',
+    );
+    const policySelect = wrapper
+      .findAllComponents(Select)
+      .find((select) => select.find('#policy-revision-select').exists());
+    expect(policySelect?.props('modelValue')).toBe('revision-active-synthetic');
+    expect(wrapper.get('#policy-revision-select').attributes('aria-label')).toBe(
+      'Select policy source revision',
+    );
+
+    policySelect?.vm.$emit('update:modelValue', '__new_policy__');
+    await flushPromises();
+    expect(policySelect?.props('modelValue')).toBe('__new_policy__');
+    expect(wrapper.get('.revision-panel').text()).toContain(
+      'None — creating the first policy revision',
+    );
+    policySelect?.vm.$emit('update:modelValue', 'revision-active-synthetic');
+    await flushPromises();
+    expect(policySelect?.props('modelValue')).toBe('revision-active-synthetic');
 
     expect(wrapper.get('.workspace-page').classes()).toContain('policy-page');
     expect(wrapper.text()).toContain('Allocation Policy');
     expect(wrapper.text()).toContain('ST/LT tax rates use fraction units');
-    const target = wrapper.find('input[aria-label="Target percent"]');
-    await setQuasarModelValue(wrapper, QCheckbox, 'Transition destination sub-sleeve', true);
+    const target = wrapper.find('input[aria-label="Target percent for US equity"]');
+    await setSleeveCheckbox(wrapper, 'Transition destination sub-sleeve for US equity', true);
     await target.setValue('99.9999999999999999');
     expect((wrapper.get('button.primary-button').element as HTMLButtonElement).disabled).toBe(
       false,
@@ -295,11 +470,10 @@ describe('PolicyPage', () => {
     expect(savedPayload?.settings.long_term_tax_rate).toBeNull();
     expect(wrapper.text()).toContain('top_level_target_sum');
     const attentionBadge = wrapper
-      .findAllComponents(QBadge)
+      .findAll('[data-slot="badge"]')
       .find((badge) => badge.text() === 'Needs attention');
     expect(attentionBadge?.attributes('role')).toBe('status');
-    expect(attentionBadge?.props('color')).toBe('amber-1');
-    expect(attentionBadge?.props('textColor')).toBe('brown-10');
+    expect(attentionBadge?.attributes('data-variant')).toBe('destructive');
     expect(wrapper.text()).toContain('Only this saved content can be activated');
     expect(activationCalls).toBe(0);
   });
@@ -398,13 +572,13 @@ describe('PolicyPage', () => {
       );
     });
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mountWorkspacePageWithQuasar(PolicyPage, {
+    const wrapper = mountWithWorkspace(PolicyPage, {
       global: { plugins: [createPinia()] },
     });
     await flushPromises();
 
-    await setQuasarModelValue(wrapper, QCheckbox, 'Enabled', false);
-    await setQuasarModelValue(wrapper, QSelect, 'Reassign holdings from US equity', 'other');
+    await setSleeveCheckbox(wrapper, 'Enabled US equity', false);
+    await setSleeveSelect(wrapper, 'Reassign holdings from US equity', 'Other');
     await wrapper.find('button.primary-button').trigger('click');
     await flushPromises();
 
@@ -417,7 +591,7 @@ describe('PolicyPage', () => {
     expect(wrapper.text()).toContain('Current form matches saved revision');
     expect(wrapper.text()).not.toContain('Choose a holding reassignment for disabled sleeve');
 
-    await wrapper.find('.settings-group input').setValue('0.3000');
+    await taxInputByLabel(wrapper, 'Short-term marginal tax rate').setValue('0.3000');
     await wrapper.find('button.primary-button').trigger('click');
     await flushPromises();
 
@@ -461,7 +635,7 @@ describe('PolicyPage', () => {
     });
     vi.stubGlobal('fetch', fetcher);
     const mountPage = () =>
-      mountWorkspacePageWithQuasar(PolicyPage, {
+      mountWithWorkspace(PolicyPage, {
         global: { plugins: [createPinia()] },
       });
     const firstMount = mountPage();
@@ -471,14 +645,16 @@ describe('PolicyPage', () => {
       .findAll('button')
       .find((button) => button.text().includes('Add sleeve'))!
       .trigger('click');
-    const firstNames = firstMount.findAll('input[aria-label="Sleeve display name"]');
-    const firstTargets = firstMount.findAll('input[aria-label="Target percent"]');
-    const firstDriftBands = firstMount.findAll(
-      'input[aria-label="Drift band in percentage points"]',
+    const firstNames = firstMount.findAll(
+      'input[aria-label="Sleeve display name for sleeve-new-1"]',
     );
-    await firstNames[1]!.setValue('New sleeve');
-    await firstTargets[1]!.setValue('0');
-    await firstDriftBands[1]!.setValue('0.25');
+    const firstTargets = firstMount.findAll('input[aria-label="Target percent for sleeve-new-1"]');
+    const firstDriftBands = firstMount.findAll(
+      'input[aria-label="Drift band in percentage points for sleeve-new-1"]',
+    );
+    await firstNames[0]!.setValue('New sleeve');
+    await firstTargets[0]!.setValue('0');
+    await firstDriftBands[0]!.setValue('0.25');
     await firstMount.find('button.primary-button').trigger('click');
     await flushPromises();
     expect(savedSleeveKeys[0]).toContain('sleeve-new-1');
@@ -522,7 +698,7 @@ describe('PolicyPage', () => {
       return Promise.resolve(jsonResponse({}));
     });
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mountWorkspacePageWithQuasar(PolicyPage, {
+    const wrapper = mountWithWorkspace(PolicyPage, {
       global: { plugins: [createPinia()] },
     });
     await flushPromises();
@@ -535,7 +711,7 @@ describe('PolicyPage', () => {
     await flushPromises();
     expect(wrapper.get('.policy-page').element.hasAttribute('inert')).toBe(true);
     expect(wrapper.get('.policy-page').attributes('aria-busy')).toBe('true');
-    const taxRate = wrapper.find('.settings-group input');
+    const taxRate = taxInputByLabel(wrapper, 'Short-term marginal tax rate');
     await taxRate.setValue('0.3000');
     expect(wrapper.text()).toContain('Unsaved changes.');
 
@@ -576,19 +752,18 @@ describe('PolicyPage', () => {
       return Promise.reject(new Error(`Unhandled local API request: ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mountWorkspacePageWithQuasar(PolicyPage, {
+    const wrapper = mountWithWorkspace(PolicyPage, {
       global: { plugins: [createPinia()] },
     });
     await flushPromises();
 
-    await setQuasarModelValue(wrapper, QCheckbox, 'Enabled', false);
+    await setSleeveCheckbox(wrapper, 'Enabled US equity', false);
 
-    expect(wrapper.find('.delete-panel').exists()).toBe(false);
-    const alertBanner = wrapper
-      .findAllComponents(QBanner)
-      .find((banner) => banner.attributes('role') === 'alert');
-    expect(alertBanner).toBeDefined();
-    expect(alertBanner!.text()).toContain(
+    expect(wrapper.findAll('[role="group"]').some((group) => group.find('h3').exists())).toBe(
+      false,
+    );
+    const alert = wrapper.get('[role="alert"]');
+    expect(alert.text()).toContain(
       'Disable or reparent enabled child sleeves before disabling this parent.',
     );
   });
@@ -613,13 +788,13 @@ describe('PolicyPage', () => {
     vi.stubGlobal('fetch', fetcher);
     const pinia = createPinia();
     const mountPage = () =>
-      mountWorkspacePageWithQuasar(PolicyPage, {
+      mountWithWorkspace(PolicyPage, {
         global: { plugins: [pinia] },
       });
     const first = mountPage();
     await flushPromises();
-    const rateSelector = '.settings-group input';
-    await first.find(rateSelector).setValue('0.2750000000000000001');
+    const taxRate = () => taxInputByLabel(first, 'Short-term marginal tax rate');
+    await taxRate().setValue('0.2750000000000000001');
     expect(first.text()).toContain('Unsaved changes.');
 
     await first
@@ -627,13 +802,16 @@ describe('PolicyPage', () => {
       .find((button) => button.text().includes('Refresh policy list'))!
       .trigger('click');
     await flushPromises();
-    expect(first.find(rateSelector).element).toHaveProperty('value', '0.2750000000000000001');
+    expect(taxRate().element).toHaveProperty('value', '0.2750000000000000001');
     expect(policyReads).toBe(2);
     first.unmount();
 
     const remounted = mountPage();
     await flushPromises();
-    expect(remounted.find(rateSelector).element).toHaveProperty('value', '0.2750000000000000001');
+    expect(taxInputByLabel(remounted, 'Short-term marginal tax rate').element).toHaveProperty(
+      'value',
+      '0.2750000000000000001',
+    );
     expect(remounted.text()).toContain('Unsaved changes.');
     expect(remounted.text()).toContain(activeRevision.id);
     remounted.unmount();

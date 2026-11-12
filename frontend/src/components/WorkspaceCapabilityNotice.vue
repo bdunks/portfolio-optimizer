@@ -1,17 +1,17 @@
 <template>
-  <QBanner
-    dense
-    rounded
-    class="workspace-capability-notice bg-amber-1 text-brown-10"
+  <Alert
+    class="workspace-capability-notice workspace-foundation"
+    data-workspace-foundation
     role="status"
     aria-live="polite"
   >
-    <strong>{{ label }}</strong> <slot />
-  </QBanner>
+    <AlertTitle>{{ label }}</AlertTitle>
+    <AlertDescription><slot /></AlertDescription>
+  </Alert>
 </template>
 
 <script setup lang="ts">
-import { QBanner } from 'quasar';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 
 defineProps<{ label: string }>();
 </script>

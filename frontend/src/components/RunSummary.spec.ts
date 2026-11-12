@@ -1,6 +1,6 @@
 import { mount } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
-import { QBadge, QBanner, QCard } from 'quasar';
+
 import RunSummary from './RunSummary.vue';
 import type {
   FrozenRunDisplayContextResponse,
@@ -95,12 +95,12 @@ describe('RunSummary', () => {
         </div>
       `,
     });
-    const summaryCards = wrapper
-      .findAllComponents(QCard)
-      .filter((card) => card.classes().includes('run-summary'));
-    expect(summaryCards).toHaveLength(2);
-    expect(summaryCards.every((card) => card.props('tag') === 'section')).toBe(true);
-    expect(summaryCards.every((card) => card.props('flat') && card.props('bordered'))).toBe(true);
+    const summaryCards = wrapper.findAll('.run-summary');
+    expect(
+      summaryCards.every(
+        (card) => card.attributes('role') === 'region' && card.attributes('data-slot') === 'card',
+      ),
+    ).toBe(true);
     const headings = wrapper.findAll('.run-summary h2');
     const ids = headings.map((heading) => heading.attributes('id'));
     expect(new Set(ids).size).toBe(2);
@@ -109,14 +109,20 @@ describe('RunSummary', () => {
     expect(wrapper.text()).toContain('3210.00');
     expect(wrapper.text()).not.toContain('active-policy-r99');
     expect(wrapper.text()).toContain('DEMO · non-actionable');
-    const statusBadges = wrapper.findAllComponents(QBadge);
+    const statusBadges = wrapper.findAll('[data-slot="badge"]');
     expect(statusBadges).toHaveLength(2);
     expect(statusBadges.map((badge) => badge.text())).toEqual([
       'DEMO · non-actionable',
       'DEMO · non-actionable',
     ]);
     expect(statusBadges.every((badge) => badge.attributes('role') === 'status')).toBe(true);
-    expect(statusBadges.every((badge) => badge.props('color') === 'amber-1')).toBe(true);
+    expect(
+      statusBadges.every(
+        (badge) =>
+          badge.classes().includes('tw:bg-secondary') &&
+          badge.classes().includes('tw:text-secondary-foreground'),
+      ),
+    ).toBe(true);
   });
 
   // Synthetic future API variants exercise existing wording; the current DEMO API schema stays unchanged.
@@ -131,7 +137,7 @@ describe('RunSummary', () => {
         } as unknown as OptimizerRecommendationsResponse,
       },
     });
-    const actionableBadge = actionable.findComponent(QBadge);
+    const actionableBadge = actionable.get('[data-slot="badge"]');
     expect(actionableBadge.text()).toBe('API-marked actionable · no order controls');
     expect(actionableBadge.attributes('role')).toBe('status');
 
@@ -145,7 +151,7 @@ describe('RunSummary', () => {
         } as unknown as OptimizerRecommendationsResponse,
       },
     });
-    expect(nonActionable.findComponent(QBadge).text()).toBe('NON-ACTIONABLE');
+    expect(nonActionable.get('[data-slot="badge"]').text()).toBe('NON-ACTIONABLE');
   });
 
   it('withholds previous financial values while a review update is pending', () => {
@@ -166,7 +172,7 @@ describe('RunSummary', () => {
       'Review update pending · prior run withheld',
     );
     const pendingBanner = wrapper
-      .findAllComponents(QBanner)
+      .findAll('[data-slot="alert"]')
       .find((banner) =>
         banner.text().includes('requested selection or annotation is being saved or re-solved'),
       );
@@ -199,20 +205,36 @@ describe('RunSummary', () => {
         provenanceLabel: 'Stale/unverified run · read-only',
       },
     });
-    const banners = wrapper.findAllComponents(QBanner);
+    const banners = wrapper.findAll('[data-slot="alert"]');
     expect(banners.map((banner) => banner.attributes('role'))).toEqual([
       'status',
       'group',
       'group',
     ]);
-    expect(banners[0]?.classes()).toContain('bg-amber-1');
+    expect(banners[0]?.classes()).toContain('tw:text-destructive');
+    expect(banners[0]?.classes()).toContain('tw:bg-card');
     expect(banners[0]?.text()).toContain('Stale/unverified run · read-only');
     expect(wrapper.get('[aria-label="DEMO solver output notice"]').text()).toContain(
       'hypothetical and non-executable',
     );
+    const taxNotice = wrapper.get('[aria-label="Tax estimate availability notice"]');
+    expect(taxNotice.classes()).toContain('tw:text-destructive');
+    expect(taxNotice.classes()).toContain('tw:bg-card');
     expect(wrapper.get('[aria-label="Tax estimate availability notice"]').text()).toContain(
       'No production optimization or feasibility claim is made.',
     );
     expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+  });
+  it('uses a native keyboard-accessible frozen-assumptions disclosure', async () => {
+    const wrapper = mount(RunSummary, {
+      props: { mode: 'overview', run: fullRun, context },
+    });
+    const details = wrapper.get('details');
+    const summary = wrapper.get('details summary');
+
+    expect(summary.element.tagName).toBe('SUMMARY');
+    expect(details.attributes('open')).toBeUndefined();
+    await summary.trigger('click');
+    expect(details.attributes('open')).toBe('');
   });
 });

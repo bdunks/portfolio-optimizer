@@ -1,40 +1,44 @@
 <template>
   <nav
-    class="workspace-pagination row items-center justify-between q-gutter-sm"
+    class="workspace-pagination tw:flex tw:min-w-0 tw:flex-wrap tw:items-center tw:justify-between tw:gap-2"
     :aria-label="label"
   >
-    <q-btn
+    <Button
       type="button"
-      flat
-      dense
-      no-caps
+      variant="outline"
+      size="sm"
+      class="tw:shrink-0"
       aria-label="Previous page"
-      :disable="pending || offset <= 0"
+      :disabled="pending || offset <= 0"
       @click="requestPage(-1)"
     >
       Previous page
-    </q-btn>
-    <span class="workspace-pagination__status" aria-live="polite">
+    </Button>
+    <span
+      class="workspace-pagination__status tw:min-w-0 tw:break-words tw:text-sm tw:tabular-nums tw:text-muted-foreground"
+      aria-live="polite"
+    >
       <slot name="status" :page-number="metadata.pageNumber" :page-count="metadata.pageCount">
         Page {{ metadata.pageNumber }} of {{ metadata.pageCount }}
       </slot>
     </span>
-    <q-btn
+    <Button
       type="button"
-      flat
-      dense
-      no-caps
+      variant="outline"
+      size="sm"
+      class="tw:shrink-0"
       aria-label="Next page"
-      :disable="nextDisabled"
+      :disabled="nextDisabled"
       @click="requestPage(1)"
     >
       Next page
-    </q-btn>
+    </Button>
   </nav>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import { Button } from '@/components/ui/button';
 import { getPaginationMetadata } from './workspace-pagination-state';
 
 const props = withDefaults(
@@ -64,11 +68,3 @@ function requestPage(direction: -1 | 1): void {
   emit('page', props.offset + metadata.value.pageSize);
 }
 </script>
-
-<style scoped>
-.workspace-pagination__status {
-  color: #526c7c;
-  font-size: 0.78rem;
-  font-variant-numeric: tabular-nums;
-}
-</style>

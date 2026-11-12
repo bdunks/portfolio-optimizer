@@ -1,24 +1,20 @@
 <template>
-  <section class="workspace-page q-my-none q-mx-auto q-pa-md" aria-labelledby="wash-title">
+  <section
+    class="workspace-page tw:mx-auto tw:my-0 tw:min-w-0 tw:px-4 tw:py-4"
+    data-workspace-foundation
+    data-wash-sales-root
+    aria-labelledby="wash-title"
+  >
     <WorkspacePageHeader
       eyebrow="Managed-account restrictions"
       title="Wash Sales"
       title-id="wash-title"
-      subtitle="Transaction history and purchase restrictions returned by the local wash-sales API. This page does not perform or imply wash-sale validation."
+      subtitle="Transaction history and restrictions from the local API; no wash-sale validation is implied."
     >
       <template #actions>
-        <q-btn
-          unelevated
-          no-caps
-          type="button"
-          class="primary-button"
-          color="primary"
-          size="sm"
-          :disable="isLoading"
-          @click="refresh"
-        >
+        <Button type="button" :disabled="isLoading" @click="refresh">
           {{ isLoading ? 'Loading…' : 'Refresh wash data' }}
-        </q-btn>
+        </Button>
       </template>
     </WorkspacePageHeader>
 
@@ -34,300 +30,455 @@
 
     <ResourceFreshnessNotice :resources="['washSales']" />
 
-    <q-card
-      tag="form"
-      flat
-      bordered
-      aria-label="Wash-sale filters"
-      class="filter-panel row items-end q-gutter-sm q-pa-md text-caption text-weight-bold text-blue-grey-8"
-      @submit.prevent
-    >
-      <label class="column no-wrap q-gutter-y-xs">
-        <span>Filter records</span>
-        <q-input
-          outlined
-          dense
-          hide-bottom-space
-          v-model="search"
-          type="search"
-          placeholder="Ticker, source, trigger, or ID"
-        />
-      </label>
-      <label class="column no-wrap q-gutter-y-xs">
-        <span>Transaction kind</span>
-        <q-select
-          v-model="transactionKind"
-          :options="[
-            { label: 'All transaction kinds', value: '' },
-            { label: 'BUY', value: 'BUY' },
-            { label: 'SELL', value: 'SELL' },
-            { label: 'DIVIDEND', value: 'DIVIDEND' },
-            { label: 'OTHER', value: 'OTHER' },
-          ]"
-          emit-value
-          map-options
-          outlined
-          dense
-          hide-bottom-space
-          aria-label="Transaction kind"
-        />
-      </label>
-    </q-card>
+    <form aria-label="Wash-sale filters" class="tw:min-w-0" @submit.prevent>
+      <Card class="tw:min-w-0">
+        <CardHeader class="tw:sr-only">
+          <CardTitle id="wash-filter-title" role="heading" aria-level="2">
+            Wash-sale filters
+          </CardTitle>
+          <CardDescription>Filter returned wash-sale records.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <FieldGroup class="tw:grid tw:grid-cols-1 tw:gap-4 tw:md:grid-cols-2">
+            <filterForm.Field name="search">
+              <template #default="{ field }">
+                <UiField :data-invalid="field.state.meta.errors.length ? 'true' : undefined">
+                  <FieldLabel for="wash-search">Filter records</FieldLabel>
+                  <Input
+                    id="wash-search"
+                    type="search"
+                    :model-value="field.state.value"
+                    placeholder="Ticker, source, trigger, or ID"
+                    :aria-invalid="field.state.meta.errors.length ? 'true' : undefined"
+                    :aria-describedby="
+                      field.state.meta.errors.length ? 'wash-search-error' : undefined
+                    "
+                    @update:model-value="setSearch"
+                    @blur="field.handleBlur"
+                  />
+                  <FieldError id="wash-search-error" :errors="field.state.meta.errors" />
+                </UiField>
+              </template>
+            </filterForm.Field>
 
-    <q-banner
+            <filterForm.Field name="transactionKind">
+              <template #default="{ field }">
+                <UiField :data-invalid="field.state.meta.errors.length ? 'true' : undefined">
+                  <FieldLabel for="wash-transaction-kind">Transaction kind</FieldLabel>
+                  <Select
+                    :model-value="selectedTransactionKind"
+                    @update:model-value="updateTransactionKind"
+                  >
+                    <SelectTrigger
+                      id="wash-transaction-kind"
+                      class="tw:w-full"
+                      aria-label="Transaction kind"
+                      :aria-invalid="field.state.meta.errors.length ? 'true' : undefined"
+                      :aria-describedby="
+                        field.state.meta.errors.length ? 'wash-kind-error' : undefined
+                      "
+                      @blur="field.handleBlur"
+                    >
+                      <SelectValue placeholder="All transaction kinds" />
+                    </SelectTrigger>
+                    <SelectContent class="wash-sales-select-content">
+                      <SelectGroup>
+                        <SelectItem value="all">All transaction kinds</SelectItem>
+                        <SelectItem
+                          v-for="kind in WASH_SALES_TRANSACTION_KINDS"
+                          :key="kind"
+                          :value="kind"
+                        >
+                          {{ kind }}
+                        </SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <FieldError id="wash-kind-error" :errors="field.state.meta.errors" />
+                </UiField>
+              </template>
+            </filterForm.Field>
+          </FieldGroup>
+        </CardContent>
+      </Card>
+    </form>
+
+    <Alert
       v-if="store.actionState.loadWashSales.pending && !washSales"
-      dense
-      rounded
-      class="q-my-sm bg-blue-grey-1 text-blue-grey-10"
       role="status"
+      aria-live="polite"
     >
-      Loading wash-sale history and restrictions from the local API…
-    </q-banner>
-    <WorkspaceEmptyState v-else-if="!washSales" title="No wash-sale data loaded">
-      Retry to request the current API response. No history or restrictions have been inferred.
-      <template #action>
-        <q-btn
-          no-caps
-          type="button"
-          class="secondary-button"
-          outline
-          color="primary"
-          size="sm"
-          :disable="isLoading"
-          @click="refresh"
-        >
-          Retry loading wash data
-        </q-btn>
-      </template>
-    </WorkspaceEmptyState>
-    <template v-else>
-      <q-card
-        tag="section"
-        flat
-        bordered
-        class="coverage-card q-pa-md"
-        aria-labelledby="coverage-title"
-      >
-        <div class="section-heading row justify-between q-gutter-md items-center q-mb-md">
-          <div>
-            <h2 class="q-ma-none text-subtitle1 text-blue-grey-10" id="coverage-title">
-              API coverage
-            </h2>
-            <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
-              Source: {{ washSales.source }}
-            </p>
-          </div>
-          <q-badge rounded color="amber-1" text-color="brown-10">
-            {{ washSales.demo ? 'DEMO' : 'API' }}
-          </q-badge>
-        </div>
-        <dl class="coverage-grid q-ma-none">
-          <div class="q-pa-sm">
-            <dt>Transaction history rows</dt>
-            <dd class="q-mt-xs q-mb-none q-mx-none">{{ washSales.history.length }}</dd>
-          </div>
-          <div class="q-pa-sm">
-            <dt>Acquisition rows</dt>
-            <dd class="q-mt-xs q-mb-none q-mx-none">{{ washSales.acquisitions.length }}</dd>
-          </div>
-          <div class="q-pa-sm">
-            <dt>Current restrictions</dt>
-            <dd class="q-mt-xs q-mb-none q-mx-none">{{ washSales.current_restrictions.length }}</dd>
-          </div>
-          <div class="q-pa-sm">
-            <dt>Proposed restrictions</dt>
-            <dd class="q-mt-xs q-mb-none q-mx-none">
-              {{ washSales.proposed_restrictions.length }}
-            </dd>
-          </div>
-        </dl>
-        <p class="coverage-note q-mt-sm q-mb-none q-mx-none">
-          Conflicting-transaction links and affected tax-lot IDs are not included in this API
-          response; they are not inferred here. Counts are returned-record counts; the endpoint
-          provides no pagination or total-coverage indicator.
-        </p>
-        <ul
-          v-if="washSales.warnings.length"
-          class="warning-list q-mt-sm q-mb-none q-mx-none q-pl-md"
-          aria-label="API coverage warnings"
-        >
-          <li v-for="warning in washSales.warnings" :key="warning">{{ warning }}</li>
-        </ul>
-        <p v-else class="coverage-note q-mt-sm q-mb-none q-mx-none">
-          The API returned no coverage warnings.
-        </p>
-      </q-card>
+      <AlertDescription>
+        Loading wash-sale history and restrictions from the local API…
+      </AlertDescription>
+    </Alert>
 
-      <q-card tag="section" flat bordered class="data-card q-pa-md" aria-labelledby="history-title">
-        <div class="section-heading row justify-between q-gutter-md items-center q-mb-md">
-          <div>
-            <h2 class="q-ma-none text-subtitle1 text-blue-grey-10" id="history-title">
+    <Empty
+      v-else-if="!washSales"
+      class="tw:my-2 tw:border tw:border-border"
+      role="status"
+      aria-live="polite"
+    >
+      <EmptyHeader>
+        <EmptyTitle id="wash-data-empty-title" role="heading" aria-level="2">
+          No wash-sale data loaded
+        </EmptyTitle>
+        <EmptyDescription class="tw:m-0">
+          Retry to request the current API response. No history or restrictions have been inferred.
+        </EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent>
+        <Button variant="outline" type="button" :disabled="isLoading" @click="refresh">
+          Retry loading wash data
+        </Button>
+      </EmptyContent>
+    </Empty>
+
+    <template v-else>
+      <section aria-labelledby="coverage-title" class="tw:min-w-0">
+        <Card class="tw:min-w-0">
+          <CardHeader class="tw:flex tw:flex-row tw:items-start tw:justify-between tw:gap-4">
+            <div class="tw:min-w-0">
+              <CardTitle id="coverage-title" role="heading" aria-level="2">
+                API coverage
+              </CardTitle>
+              <CardDescription>Source: {{ washSales.source }}</CardDescription>
+            </div>
+            <CardAction class="tw:ml-auto">
+              <Badge role="status" variant="secondary">
+                {{ washSales.demo ? 'DEMO' : 'API' }}
+              </Badge>
+            </CardAction>
+          </CardHeader>
+          <CardContent class="tw:flex tw:min-w-0 tw:flex-col tw:gap-4">
+            <dl class="tw:m-0 tw:grid tw:grid-cols-1 tw:gap-2 tw:sm:grid-cols-2 tw:lg:grid-cols-4">
+              <div
+                class="tw:flex tw:min-w-0 tw:flex-col tw:gap-1 tw:rounded-lg tw:border tw:border-border tw:bg-muted/30 tw:p-3"
+              >
+                <dt class="tw:text-sm tw:text-muted-foreground">Transaction history rows</dt>
+                <dd class="tw:m-0 tw:text-lg tw:font-semibold tw:tabular-nums">
+                  {{ washSales.history.length }}
+                </dd>
+              </div>
+              <div
+                class="tw:flex tw:min-w-0 tw:flex-col tw:gap-1 tw:rounded-lg tw:border tw:border-border tw:bg-muted/30 tw:p-3"
+              >
+                <dt class="tw:text-sm tw:text-muted-foreground">Acquisition rows</dt>
+                <dd class="tw:m-0 tw:text-lg tw:font-semibold tw:tabular-nums">
+                  {{ washSales.acquisitions.length }}
+                </dd>
+              </div>
+              <div
+                class="tw:flex tw:min-w-0 tw:flex-col tw:gap-1 tw:rounded-lg tw:border tw:border-border tw:bg-muted/30 tw:p-3"
+              >
+                <dt class="tw:text-sm tw:text-muted-foreground">Current restrictions</dt>
+                <dd class="tw:m-0 tw:text-lg tw:font-semibold tw:tabular-nums">
+                  {{ washSales.current_restrictions.length }}
+                </dd>
+              </div>
+              <div
+                class="tw:flex tw:min-w-0 tw:flex-col tw:gap-1 tw:rounded-lg tw:border tw:border-border tw:bg-muted/30 tw:p-3"
+              >
+                <dt class="tw:text-sm tw:text-muted-foreground">Proposed restrictions</dt>
+                <dd class="tw:m-0 tw:text-lg tw:font-semibold tw:tabular-nums">
+                  {{ washSales.proposed_restrictions.length }}
+                </dd>
+              </div>
+            </dl>
+
+            <p class="tw:m-0 tw:text-sm tw:leading-relaxed tw:text-muted-foreground">
+              Overall API coverage is unknown beyond returned rows. Conflicting-transaction links
+              and affected tax-lot IDs are not included in this API response; they are not inferred
+              here. Counts are returned-record counts; the endpoint provides no pagination or
+              total-coverage indicator.
+            </p>
+
+            <Alert
+              v-if="washSales.warnings.length"
+              role="status"
+              aria-live="polite"
+              aria-label="API coverage warnings"
+            >
+              <AlertTitle>API coverage warnings</AlertTitle>
+              <AlertDescription>
+                <ul aria-label="API coverage warnings" class="tw:m-0 tw:list-disc tw:pl-4">
+                  <li v-for="warning in washSales.warnings" :key="warning">{{ warning }}</li>
+                </ul>
+              </AlertDescription>
+            </Alert>
+            <p v-else class="tw:m-0 tw:text-sm tw:text-muted-foreground">
+              The API returned no coverage warnings.
+            </p>
+          </CardContent>
+        </Card>
+      </section>
+
+      <section aria-labelledby="history-title" class="tw:min-w-0">
+        <Card class="tw:min-w-0">
+          <CardHeader>
+            <CardTitle id="history-title" role="heading" aria-level="2">
               Acquisition and transaction history
-            </h2>
-            <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
+            </CardTitle>
+            <CardDescription>
               Acquisition rows include the API-provided lookback-window end date; transaction keys
               and quantities are shown as returned.
-            </p>
-          </div>
-        </div>
-        <WorkspaceTableFrame v-if="filteredAcquisitions.length" label="Wash-sale acquisition rows">
-          <q-markup-table class="wash-sales-table" wrap-cells>
-            <caption class="sr-only">
-              Acquisition history with API-provided lookback dates
-            </caption>
-            <thead>
-              <tr>
-                <th scope="col">Ticker</th>
-                <th scope="col">Kind</th>
-                <th scope="col">Trade date / time</th>
-                <th scope="col">Shares</th>
-                <th scope="col">Lookback window ends</th>
-                <th scope="col">Transaction key</th>
-                <th scope="col">Source</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in filteredAcquisitions" :key="row.broker_transaction_key">
-                <th scope="row">{{ row.ticker ?? 'Ticker unavailable' }}</th>
-                <td>{{ row.transaction_kind }}</td>
-                <td>{{ row.trade_date }} · {{ row.transaction_time }}</td>
-                <td>{{ row.shares }}</td>
-                <td>{{ row.lookback_window_end_date }}</td>
-                <td class="wrap-cell">{{ row.broker_transaction_key }}</td>
-                <td>{{ row.source }}</td>
-              </tr>
-            </tbody>
-          </q-markup-table>
-        </WorkspaceTableFrame>
-        <p v-else class="empty-note q-mt-sm q-mb-none q-mx-none">
-          {{
-            washSales.acquisitions.length
-              ? 'No acquisition rows match these filters.'
-              : 'The API returned no acquisition rows.'
-          }}
-        </p>
+            </CardDescription>
+          </CardHeader>
+          <CardContent class="tw:flex tw:min-w-0 tw:flex-col tw:gap-4">
+            <WorkspaceTableFrame
+              v-if="filteredAcquisitions.length"
+              label="Wash-sale acquisition rows"
+            >
+              <Table class="tw:min-w-[940px]">
+                <TableCaption class="tw:sr-only">
+                  Acquisition history with API-provided lookback dates
+                </TableCaption>
+                <TableHeader>
+                  <TableRow
+                    v-for="headerGroup in acquisitionTable.getHeaderGroups()"
+                    :key="headerGroup.id"
+                  >
+                    <TableHead v-for="header in headerGroup.headers" :key="header.id" scope="col">
+                      <FlexRender v-if="!header.isPlaceholder" :header="header" />
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <TableRow v-for="row in acquisitionTable.getRowModel().rows" :key="row.id">
+                    <template v-for="cell in row.getAllCells()" :key="cell.id">
+                      <TableHead
+                        v-if="cell.column.id === 'ticker'"
+                        scope="row"
+                        class="tw:text-left tw:font-medium"
+                      >
+                        <FlexRender :cell="cell" />
+                      </TableHead>
+                      <TableCell
+                        v-else
+                        :class="
+                          cell.column.id === 'transactionKey' ? 'wash-sales-wrap-cell' : undefined
+                        "
+                      >
+                        <FlexRender :cell="cell" />
+                      </TableCell>
+                    </template>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </WorkspaceTableFrame>
+            <Empty v-else class="tw:border tw:border-border" role="status" aria-live="polite">
+              <EmptyHeader>
+                <EmptyTitle>
+                  {{
+                    washSales.acquisitions.length
+                      ? 'No acquisition rows match these filters.'
+                      : 'The API returned no acquisition rows.'
+                  }}
+                </EmptyTitle>
+              </EmptyHeader>
+            </Empty>
 
-        <h3 class="subsection-title q-mt-md q-mb-sm q-mx-none">All transaction history</h3>
-        <WorkspaceTableFrame v-if="filteredHistory.length" label="Wash-sale transaction history">
-          <q-markup-table class="wash-sales-table" wrap-cells>
-            <caption class="sr-only">
-              Managed-account transaction history returned by the API
-            </caption>
-            <thead>
-              <tr>
-                <th scope="col">Ticker</th>
-                <th scope="col">Kind</th>
-                <th scope="col">Acquisition?</th>
-                <th scope="col">Trade date / time</th>
-                <th scope="col">Shares</th>
-                <th scope="col">Transaction key</th>
-                <th scope="col">Source</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in filteredHistory" :key="row.broker_transaction_key">
-                <th scope="row">{{ row.ticker ?? 'Ticker unavailable' }}</th>
-                <td>{{ row.transaction_kind }}</td>
-                <td>{{ row.is_acquisition ? 'Yes' : 'No' }}</td>
-                <td>{{ row.trade_date }} · {{ row.transaction_time }}</td>
-                <td>{{ row.shares }}</td>
-                <td class="wrap-cell">{{ row.broker_transaction_key }}</td>
-                <td>{{ row.source }}</td>
-              </tr>
-            </tbody>
-          </q-markup-table>
-        </WorkspaceTableFrame>
-        <p v-else class="empty-note q-mt-sm q-mb-none q-mx-none">
-          {{
-            washSales.history.length
-              ? 'No transaction rows match these filters.'
-              : 'The API returned no transaction-history rows.'
-          }}
-        </p>
-      </q-card>
+            <CardTitle class="tw:pt-2" role="heading" aria-level="3">
+              All transaction history
+            </CardTitle>
+            <WorkspaceTableFrame
+              v-if="filteredHistory.length"
+              label="Wash-sale transaction history"
+            >
+              <Table class="tw:min-w-[940px]">
+                <TableCaption class="tw:sr-only">
+                  Managed-account transaction history returned by the API
+                </TableCaption>
+                <TableHeader>
+                  <TableRow
+                    v-for="headerGroup in historyTable.getHeaderGroups()"
+                    :key="headerGroup.id"
+                  >
+                    <TableHead v-for="header in headerGroup.headers" :key="header.id" scope="col">
+                      <FlexRender v-if="!header.isPlaceholder" :header="header" />
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <TableRow v-for="row in historyTable.getRowModel().rows" :key="row.id">
+                    <template v-for="cell in row.getAllCells()" :key="cell.id">
+                      <TableHead
+                        v-if="cell.column.id === 'ticker'"
+                        scope="row"
+                        class="tw:text-left tw:font-medium"
+                      >
+                        <FlexRender :cell="cell" />
+                      </TableHead>
+                      <TableCell
+                        v-else
+                        :class="
+                          cell.column.id === 'transactionKey' ? 'wash-sales-wrap-cell' : undefined
+                        "
+                      >
+                        <FlexRender :cell="cell" />
+                      </TableCell>
+                    </template>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </WorkspaceTableFrame>
+            <Empty v-else class="tw:border tw:border-border" role="status" aria-live="polite">
+              <EmptyHeader>
+                <EmptyTitle>
+                  {{
+                    washSales.history.length
+                      ? 'No transaction rows match these filters.'
+                      : 'The API returned no transaction-history rows.'
+                  }}
+                </EmptyTitle>
+              </EmptyHeader>
+            </Empty>
+          </CardContent>
+        </Card>
+      </section>
 
-      <q-card
-        tag="section"
-        flat
-        bordered
-        class="data-card q-pa-md"
-        aria-labelledby="restrictions-title"
-      >
-        <div class="section-heading row justify-between q-gutter-md items-center q-mb-md">
-          <div>
-            <h2 class="q-ma-none text-subtitle1 text-blue-grey-10" id="restrictions-title">
+      <section aria-labelledby="restrictions-title" class="tw:min-w-0">
+        <Card class="tw:min-w-0">
+          <CardHeader>
+            <CardTitle id="restrictions-title" role="heading" aria-level="2">
               Purchase restrictions
-            </h2>
-            <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
+            </CardTitle>
+            <CardDescription>
               Current and proposed restrictions are separate API lists. Proposed records are not
               represented as executed sales.
-            </p>
-          </div>
-        </div>
-        <WorkspaceTableFrame
-          v-if="filteredRestrictions.length"
-          label="Wash-sale purchase restrictions"
-        >
-          <q-markup-table class="wash-sales-table" wrap-cells>
-            <caption class="sr-only">
-              Current and proposed purchase restrictions
-            </caption>
-            <thead>
-              <tr>
-                <th scope="col">Status</th>
-                <th scope="col">Ticker</th>
-                <th scope="col">Trigger</th>
-                <th scope="col">Loss-sale date</th>
-                <th scope="col">Next eligible purchase</th>
-                <th scope="col">Validation</th>
-                <th scope="col">Run / source</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in filteredRestrictions" :key="restrictionKey(row)">
-                <th scope="row">{{ row.statusLabel }}</th>
-                <td>{{ row.ticker }}</td>
-                <td>{{ row.trigger }}</td>
-                <td>{{ row.loss_sale_date }}</td>
-                <td>{{ row.next_eligible_purchase_date }}</td>
-                <td>{{ row.validation }}</td>
-                <td class="wrap-cell">
-                  {{ row.run_id ?? 'No run ID returned' }}<br />{{ row.source }}
-                </td>
-              </tr>
-            </tbody>
-          </q-markup-table>
-        </WorkspaceTableFrame>
-        <p v-else class="empty-note q-mt-sm q-mb-none q-mx-none">
-          {{
-            allRestrictions.length
-              ? 'No restrictions match these filters.'
-              : 'The API returned no current or proposed restrictions.'
-          }}
-        </p>
-      </q-card>
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <WorkspaceTableFrame
+              v-if="filteredRestrictions.length"
+              label="Wash-sale purchase restrictions"
+            >
+              <Table class="tw:min-w-[940px]">
+                <TableCaption class="tw:sr-only">
+                  Current and proposed purchase restrictions
+                </TableCaption>
+                <TableHeader>
+                  <TableRow
+                    v-for="headerGroup in restrictionTable.getHeaderGroups()"
+                    :key="headerGroup.id"
+                  >
+                    <TableHead v-for="header in headerGroup.headers" :key="header.id" scope="col">
+                      <FlexRender v-if="!header.isPlaceholder" :header="header" />
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <TableRow v-for="row in restrictionTable.getRowModel().rows" :key="row.id">
+                    <template v-for="cell in row.getAllCells()" :key="cell.id">
+                      <TableHead
+                        v-if="cell.column.id === 'statusLabel'"
+                        scope="row"
+                        class="tw:text-left tw:font-medium"
+                      >
+                        <FlexRender :cell="cell" />
+                      </TableHead>
+                      <TableCell
+                        v-else
+                        :class="cell.column.id === 'runSource' ? 'wash-sales-wrap-cell' : undefined"
+                      >
+                        <FlexRender :cell="cell" />
+                      </TableCell>
+                    </template>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </WorkspaceTableFrame>
+            <Empty v-else class="tw:border tw:border-border" role="status" aria-live="polite">
+              <EmptyHeader>
+                <EmptyTitle>
+                  {{
+                    allRestrictions.length
+                      ? 'No restrictions match these filters.'
+                      : 'The API returned no current or proposed restrictions.'
+                  }}
+                </EmptyTitle>
+              </EmptyHeader>
+            </Empty>
+          </CardContent>
+        </Card>
+      </section>
     </template>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted } from 'vue';
+import { FlexRender, tableFeatures, useTable } from '@tanstack/vue-table';
+import type { ColumnDef } from '@tanstack/vue-table';
+import { useForm } from '@tanstack/vue-form';
+import type {
+  WashAcquisitionResponse,
+  WashRestrictionResponse,
+  WashTransactionResponse,
+} from '@/types/api';
 import ApiActionError from '@/components/ApiActionError.vue';
 import WorkspacePageHeader from '@/components/WorkspacePageHeader.vue';
 import WorkspaceCapabilityNotice from '@/components/WorkspaceCapabilityNotice.vue';
-import WorkspaceEmptyState from '@/components/WorkspaceEmptyState.vue';
 import WorkspaceTableFrame from '@/components/WorkspaceTableFrame.vue';
-
 import ResourceFreshnessNotice from '@/components/ResourceFreshnessNotice.vue';
-import { useWorkspaceStore } from '@/stores/workspace-store';
-import type { WashRestrictionResponse, WashTransactionResponse } from '@/types/api';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from '@/components/ui/empty';
+import { FieldError, FieldGroup, FieldLabel, Field as UiField } from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import {
+  isWashSalesTransactionKind,
+  WASH_SALES_TRANSACTION_KINDS,
+  washSalesFilterSchema,
+} from '@/forms/wash-sales-filters';
+import type { WashSalesFilterValues } from '@/forms/wash-sales-filters';
+import { useWorkspace } from '@/composables/use-workspace';
 
-const store = useWorkspaceStore();
-const search = ref('');
-const transactionKind = ref('');
+const store = useWorkspace();
+const defaultFilterValues: WashSalesFilterValues = { search: '', transactionKind: '' };
+const filterForm = useForm({
+  defaultValues: defaultFilterValues,
+  validators: { onChange: washSalesFilterSchema },
+});
+const filters = filterForm.useSelector((state) => state.values);
 const washSales = computed(() => store.washSales);
 const isLoading = computed(() => store.actionState.loadWashSales.pending);
-const needle = computed(() => search.value.trim().toLocaleLowerCase());
+const searchNeedle = computed(() => filters.value.search.trim().toLocaleLowerCase());
+const allKindValue = 'all';
+const selectedTransactionKind = computed(() => filters.value.transactionKind || allKindValue);
+
 const filteredHistory = computed(() =>
   (washSales.value?.history ?? []).filter(
     (row) => kindMatches(row) && matchesText([row.ticker, row.broker_transaction_key, row.source]),
@@ -338,14 +489,15 @@ const filteredAcquisitions = computed(() =>
     (row) => kindMatches(row) && matchesText([row.ticker, row.broker_transaction_key, row.source]),
   ),
 );
-const allRestrictions = computed(() => [
+type WashRestrictionTableRow = WashRestrictionResponse & { statusLabel: 'Current' | 'Proposed' };
+const allRestrictions = computed<WashRestrictionTableRow[]>(() => [
   ...(washSales.value?.current_restrictions ?? []).map((row) => ({
     ...row,
-    statusLabel: 'Current',
+    statusLabel: 'Current' as const,
   })),
   ...(washSales.value?.proposed_restrictions ?? []).map((row) => ({
     ...row,
-    statusLabel: 'Proposed',
+    statusLabel: 'Proposed' as const,
   })),
 ]);
 const filteredRestrictions = computed(() =>
@@ -354,18 +506,101 @@ const filteredRestrictions = computed(() =>
   ),
 );
 
-function kindMatches(row: WashTransactionResponse): boolean {
-  return transactionKind.value === '' || row.transaction_kind === transactionKind.value;
+function kindMatches(row: WashTransactionResponse | WashAcquisitionResponse): boolean {
+  return (
+    filters.value.transactionKind === '' || row.transaction_kind === filters.value.transactionKind
+  );
 }
 
 function matchesText(values: Array<string | null | undefined>): boolean {
-  if (!needle.value) return true;
-  return values.some((value) => value?.toLocaleLowerCase().includes(needle.value));
+  if (!searchNeedle.value) return true;
+  return values.some((value) => value?.toLocaleLowerCase().includes(searchNeedle.value));
 }
 
-function restrictionKey(row: WashRestrictionResponse): string {
-  return `${row.run_id ?? 'current'}:${row.ticker}:${row.loss_sale_date}:${row.trigger}`;
+function setSearch(value: string | number): void {
+  filterForm.setFieldValue('search', String(value));
 }
+
+function updateTransactionKind(value: unknown): void {
+  if (typeof value !== 'string') return;
+  if (value === allKindValue) {
+    filterForm.setFieldValue('transactionKind', '');
+  } else if (isWashSalesTransactionKind(value)) {
+    filterForm.setFieldValue('transactionKind', value);
+  }
+}
+
+const washSalesTableFeatures = tableFeatures({});
+const acquisitionColumns: Array<ColumnDef<typeof washSalesTableFeatures, WashAcquisitionResponse>> =
+  [
+    {
+      id: 'ticker',
+      accessorKey: 'ticker',
+      header: 'Ticker',
+      cell: ({ row }) => row.original.ticker ?? 'Ticker unavailable',
+    },
+    { accessorKey: 'transaction_kind', header: 'Kind' },
+    {
+      id: 'tradeDateTime',
+      header: 'Trade date / time',
+      cell: ({ row }) => `${row.original.trade_date} · ${row.original.transaction_time}`,
+    },
+    { accessorKey: 'shares', header: 'Shares' },
+    { accessorKey: 'lookback_window_end_date', header: 'Lookback window ends' },
+    { id: 'transactionKey', accessorKey: 'broker_transaction_key', header: 'Transaction key' },
+    { accessorKey: 'source', header: 'Source' },
+  ];
+const historyColumns: Array<ColumnDef<typeof washSalesTableFeatures, WashTransactionResponse>> = [
+  {
+    id: 'ticker',
+    accessorKey: 'ticker',
+    header: 'Ticker',
+    cell: ({ row }) => row.original.ticker ?? 'Ticker unavailable',
+  },
+  { accessorKey: 'transaction_kind', header: 'Kind' },
+  {
+    id: 'isAcquisition',
+    header: 'Acquisition?',
+    cell: ({ row }) => (row.original.is_acquisition ? 'Yes' : 'No'),
+  },
+  {
+    id: 'tradeDateTime',
+    header: 'Trade date / time',
+    cell: ({ row }) => `${row.original.trade_date} · ${row.original.transaction_time}`,
+  },
+  { accessorKey: 'shares', header: 'Shares' },
+  { id: 'transactionKey', accessorKey: 'broker_transaction_key', header: 'Transaction key' },
+  { accessorKey: 'source', header: 'Source' },
+];
+const restrictionColumns: Array<ColumnDef<typeof washSalesTableFeatures, WashRestrictionTableRow>> =
+  [
+    { accessorKey: 'statusLabel', header: 'Status' },
+    { accessorKey: 'ticker', header: 'Ticker' },
+    { accessorKey: 'trigger', header: 'Trigger' },
+    { accessorKey: 'loss_sale_date', header: 'Loss-sale date' },
+    { accessorKey: 'next_eligible_purchase_date', header: 'Next eligible purchase' },
+    { accessorKey: 'validation', header: 'Validation' },
+    {
+      id: 'runSource',
+      header: 'Run / source',
+      cell: ({ row }) => `${row.original.run_id ?? 'No run ID returned'} · ${row.original.source}`,
+    },
+  ];
+const acquisitionTable = useTable({
+  features: washSalesTableFeatures,
+  columns: acquisitionColumns,
+  data: filteredAcquisitions,
+});
+const historyTable = useTable({
+  features: washSalesTableFeatures,
+  columns: historyColumns,
+  data: filteredHistory,
+});
+const restrictionTable = useTable({
+  features: washSalesTableFeatures,
+  columns: restrictionColumns,
+  data: filteredRestrictions,
+});
 
 async function refresh(): Promise<void> {
   try {
@@ -381,80 +616,54 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.filter-panel,
-.coverage-card,
-.data-card {
-  min-width: 0;
+:global([data-wash-sales-root]) {
+  color: var(--foreground);
 }
 
-.filter-panel label {
-  min-width: min(19rem, 100%);
+:global([data-wash-sales-root] input[data-slot='input']) {
+  appearance: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-md);
+  background-color: transparent;
+  color: var(--foreground);
+  font-family: inherit;
+  font-size: var(--tw-text-sm);
+  line-height: var(--tw-text-sm--line-height);
 }
 
-/* negative-margin gutters distort grid tracks at the standard Quasar spacing scale. */
-.coverage-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-}
-.coverage-grid > div {
-  border: 1px solid #eaf0f3;
-  border-radius: 0.55rem;
-}
-.coverage-grid dt {
-  color: #647c8b;
-  font-size: 0.7rem;
-}
-.coverage-grid dd {
-  color: #087f7d;
-  font-size: 1rem;
-  font-weight: 800;
-}
-.coverage-note,
-.warning-list,
-.empty-note {
-  color: #657d8b;
-  font-size: 0.78rem;
-  line-height: 1.5;
+:global([data-wash-sales-root] button[data-slot='button']),
+:global([data-wash-sales-root] button[data-slot='select-trigger']) {
+  appearance: none;
+  font-family: inherit;
+  font-size: var(--tw-text-sm);
+  line-height: var(--tw-text-sm--line-height);
+  text-transform: none;
 }
 
-.warning-list {
-  color: #765016;
-}
-.wash-sales-table {
-  min-width: 940px;
+:global([data-wash-sales-root] button[data-slot='select-trigger']) {
+  border: 1px solid var(--input);
+  background-color: transparent;
+  color: var(--foreground);
 }
 
-.wrap-cell {
+:global([data-wash-sales-root] [data-slot='table-container']) {
+  overflow: visible;
+}
+
+:global([data-wash-sales-root] table[data-slot='table']) {
+  border-collapse: collapse;
+}
+
+:global([data-wash-sales-root] .wash-sales-wrap-cell) {
   max-width: 14rem;
   overflow-wrap: anywhere;
-}
-.subsection-title {
-  color: #526c7c;
-  font-size: 0.8rem;
-  text-transform: uppercase;
+  white-space: normal;
 }
 
-/* Keep content available to assistive technology without occupying layout space. */
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  clip-path: inset(50%);
-}
-@media (max-width: 850px) {
-  .section-heading {
-    align-items: stretch;
-    flex-direction: column;
-  }
-  .coverage-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .filter-panel label {
-    width: 100%;
-  }
+:global(.wash-sales-select-content) {
+  color: var(--popover-foreground);
+  font-family: inherit;
+  font-size: var(--tw-text-sm);
+  line-height: var(--tw-text-sm--line-height);
 }
 </style>

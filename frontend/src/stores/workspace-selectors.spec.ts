@@ -5,7 +5,7 @@ import type {
   PolicyRevisionResponse,
 } from '../types/api';
 import type { PortfolioReadyResponse } from '../types/api';
-import type { WorkspaceResourceFreshness } from './workspace-resources';
+import type { WorkspaceResourceFreshness } from '../types/workspace-resources';
 import {
   selectPortfolioLabelContext,
   selectResourceFreshnessNotices,

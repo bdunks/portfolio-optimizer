@@ -1,12 +1,18 @@
 // @vitest-environment jsdom
 import { flushPromises } from '@vue/test-utils';
-import { mountWorkspacePageWithQuasar } from '@/test-utils/quasar-mount';
+import { mountWithWorkspace } from '@/test-utils/workspace-mount';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
-import { useWorkspaceStore } from '@/stores/workspace-store';
+import {
+  mountWorkspaceHarness,
+  seedCurrentRunForTest,
+  currentRunForTest,
+} from '@/test-utils/workspace-harness';
+import { workspaceQueryKeys } from '@/composables/queries/workspace-queries';
+import { getTestQueryClient } from '@/test-utils/workspace-mount';
+import type { QueryClient } from '@tanstack/vue-query';
 import IndexPage from './IndexPage.vue';
-import { QBanner, QCard } from 'quasar';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -59,34 +65,41 @@ function portfolioFixture(revisionId: string) {
 }
 
 function seedMismatchedPortfolioAndPolicy(
-  store: ReturnType<typeof useWorkspaceStore>,
+  queryClient: QueryClient,
   portfolioRevisionId = 'portfolio-revision-a',
   policyRevisionId = 'active-policy-b',
 ) {
-  const confirmedAt = '2026-01-01T00:00:00Z';
-  store.health = {
-    status: 'ok',
-    schema_ready: true,
-    broker_mode: 'demo',
-    live_broker_enabled: false,
-    order_submission_enabled: false,
-  };
-  store.portfolio = portfolioFixture(portfolioRevisionId) as never;
-  store.policy = {
-    active: {
-      id: policyRevisionId,
-      activation_errors: [],
-      sleeves: [
-        { sleeve_key: 'us', display_name: 'Active policy US label' },
-        { sleeve_key: 'transition_nested', display_name: 'Active policy nested label' },
-      ],
+  const confirmedAt = Date.parse('2026-01-01T00:00:00Z');
+  queryClient.setQueryData(
+    workspaceQueryKeys.health,
+    {
+      status: 'ok',
+      schema_ready: true,
+      broker_mode: 'demo',
+      live_broker_enabled: false,
+      order_submission_enabled: false,
     },
-    drafts: [],
-    superseded: [],
-  } as never;
-  store.resourceFreshness.health = { status: 'fresh', confirmedAt };
-  store.resourceFreshness.portfolio = { status: 'fresh', confirmedAt };
-  store.resourceFreshness.policy = { status: 'fresh', confirmedAt };
+    { updatedAt: confirmedAt },
+  );
+  queryClient.setQueryData(workspaceQueryKeys.portfolio, portfolioFixture(portfolioRevisionId), {
+    updatedAt: confirmedAt,
+  });
+  queryClient.setQueryData(
+    workspaceQueryKeys.policy,
+    {
+      active: {
+        id: policyRevisionId,
+        activation_errors: [],
+        sleeves: [
+          { sleeve_key: 'us', display_name: 'Active policy US label' },
+          { sleeve_key: 'transition_nested', display_name: 'Active policy nested label' },
+        ],
+      },
+      drafts: [],
+      superseded: [],
+    },
+    { updatedAt: confirmedAt },
+  );
 }
 
 function currentRunFixture(realizedSt = '-5.00', allocationWeight = '70.0000') {
@@ -135,12 +148,16 @@ function deferred<T>() {
 }
 
 describe('IndexPage', () => {
-  it('uses the shared workspace root for the overview screen', () => {
+  it('uses the shared workspace root for the overview screen', async () => {
     const pinia = createPinia();
     setActivePinia(pinia);
-    const store = useWorkspaceStore();
-    store.health = { status: 'ok', schema_ready: false } as never;
-    store.portfolio = {
+    const router = createRouter({ history: createMemoryHistory(), routes: [] });
+    const wrapper = mountWithWorkspace(IndexPage, {
+      global: { plugins: [pinia, router] },
+    });
+    const queryClient = getTestQueryClient(wrapper);
+    queryClient.setQueryData(workspaceQueryKeys.health, { status: 'ok', schema_ready: false });
+    queryClient.setQueryData(workspaceQueryKeys.portfolio, {
       status: 'not_synced',
       positions: [],
       coverage: {},
@@ -152,83 +169,67 @@ describe('IndexPage', () => {
         last_error_code: null,
         last_error_summary: null,
       },
-    } as never;
-    store.policy = { active: null, drafts: [], superseded: [] };
-    const router = createRouter({ history: createMemoryHistory(), routes: [] });
-    const wrapper = mountWorkspacePageWithQuasar(IndexPage, {
-      global: { plugins: [pinia, router] },
     });
+    queryClient.setQueryData(workspaceQueryKeys.policy, {
+      active: null,
+      drafts: [],
+      superseded: [],
+    });
+    await flushPromises();
 
     expect(wrapper.get('.workspace-page').classes()).toContain('overview-page');
     expect(
-      wrapper.findAllComponents(QCard).filter((card) => card.classes().includes('summary-card')),
+      wrapper
+        .findAll('[data-slot="card"]')
+        .filter((card) => card.classes().includes('summary-card')),
     ).toHaveLength(4);
     expect(
-      wrapper.findAllComponents(QCard).filter((card) => card.classes().includes('workspace-card')),
+      wrapper
+        .findAll('[data-slot="card"]')
+        .filter((card) => card.classes().includes('workspace-card')),
     ).toHaveLength(5);
+    const summaryGrid = wrapper.get('.summary-grid');
+    expect(summaryGrid.classes()).toEqual(
+      expect.arrayContaining(['tw:grid-cols-1', 'tw:sm:grid-cols-2', 'tw:xl:grid-cols-4']),
+    );
+    const runButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('Run DEMO recommendations'));
+    expect(runButton?.attributes('disabled')).toBeDefined();
     expect(wrapper.get('h1').text()).toBe('Overview');
-
     expect(wrapper.findAll('.overview-page-action')).toHaveLength(2);
     wrapper.unmount();
   });
-  it('uses shared freshness selectors to withhold an unconfirmed run comparison', () => {
+  it('uses shared freshness selectors to withhold an unconfirmed run comparison', async () => {
     const pinia = createPinia();
     setActivePinia(pinia);
-    const store = useWorkspaceStore();
-    store.health = {
-      status: 'ok',
-      schema_ready: true,
-      broker_mode: 'demo',
-      live_broker_enabled: false,
-      order_submission_enabled: false,
-    };
-    store.portfolio = {
-      status: 'ready',
-      demo: true,
-      source: 'fixture',
-      account: { display_name: 'Demo account', account_type: 'brokerage', tax_treatment: null },
-      as_of: '2026-01-01T00:00:00Z',
-      cash_usd: '0.00',
-      settled_buying_power_usd: '0.00',
-      positions_market_value_usd: '0.00',
-      portfolio_total_usd: '0.00',
-      position_count: 0,
-      positions: [],
-      active_policy_revision_id: 'policy-current',
-      unassigned_tickers: [],
-      sync: {
-        generation: 7,
-        complete: true,
-        started_at: null,
-        completed_at: '2026-01-01T00:00:00Z',
-        last_error_code: null,
-        last_error_summary: null,
-      },
-      allocation: { current: null, proposed: null, target: null },
-      us_transition: null,
-      coverage: {},
-    } as never;
-    store.policy = {
-      active: { id: 'policy-current', activation_errors: [] },
-      drafts: [],
-      superseded: [],
-    } as never;
-    store.resourceFreshness.policy = { status: 'stale', confirmedAt: '2026-01-01T00:00:00Z' };
-    store.currentRun = {
+    const store = mountWorkspaceHarness().workspace;
+    seedCurrentRunForTest(store, {
       run_id: 'run-current',
       source_generation: 7,
       policy_revision_id: 'policy-current',
       frozen_display_context: { available: false, unavailable_reason: 'missing' },
       portfolio_effects: null,
       groups: [],
-    } as never;
+    } as never);
     store.currentRunView = 'current';
     const router = createRouter({ history: createMemoryHistory(), routes: [] });
-    const wrapper = mountWorkspacePageWithQuasar(IndexPage, {
+    const wrapper = mountWithWorkspace(IndexPage, {
       global: { plugins: [pinia, router] },
     });
+    const queryClient = getTestQueryClient(wrapper);
+    seedMismatchedPortfolioAndPolicy(queryClient, 'active-policy-b', 'policy-current');
+    await queryClient
+      .fetchQuery({
+        queryKey: workspaceQueryKeys.policy,
+        queryFn: () => Promise.reject(new Error('stale policy fixture')),
+        staleTime: 0,
+        retry: false,
+      })
+      .catch(() => undefined);
+    await flushPromises();
     expect(wrapper.get('.policy-subhead').classes()).toEqual(
-      expect.arrayContaining(['text-subtitle2', 'text-blue-grey-8', 'text-uppercase']),
+      expect.arrayContaining(['tw:text-sm!', 'tw:text-muted-foreground', 'tw:uppercase']),
     );
 
     expect(wrapper.text()).toContain('No current matching recommendation run');
@@ -237,42 +238,11 @@ describe('IndexPage', () => {
     wrapper.unmount();
   });
 
-  it('keeps a saved run context when the active policy renames or removes its sleeve', () => {
+  it('keeps a saved run context when the active policy renames or removes its sleeve', async () => {
     const pinia = createPinia();
     setActivePinia(pinia);
-    const store = useWorkspaceStore();
-    store.health = { status: 'ok', schema_ready: false } as never;
-    store.portfolio = {
-      status: 'not_synced',
-      positions: [],
-      coverage: {},
-      sync: {
-        generation: 0,
-        complete: false,
-        started_at: null,
-        completed_at: null,
-        last_error_code: null,
-        last_error_summary: null,
-      },
-    } as never;
-    store.policy = {
-      active: {
-        id: 'policy-current',
-        revision_number: 9,
-        sleeves: [
-          {
-            sleeve_key: 'domestic',
-            display_name: 'Current Domestic Equity',
-            target_pct: '100.0000',
-            enabled: true,
-          },
-        ],
-        allowed_securities: [],
-      },
-      drafts: [],
-      superseded: [],
-    } as never;
-    store.currentRun = {
+    const store = mountWorkspaceHarness().workspace;
+    seedCurrentRunForTest(store, {
       run_id: 'saved-historical-run',
       groups: [],
       portfolio_effects: null,
@@ -303,12 +273,45 @@ describe('IndexPage', () => {
         overrides: [],
         unavailable_reason: null,
       },
-    } as never;
+    } as never);
     store.currentRunView = 'saved';
     const router = createRouter({ history: createMemoryHistory(), routes: [] });
-    const wrapper = mountWorkspacePageWithQuasar(IndexPage, {
+    const wrapper = mountWithWorkspace(IndexPage, {
       global: { plugins: [pinia, router] },
     });
+    const queryClient = getTestQueryClient(wrapper);
+    queryClient.setQueryData(workspaceQueryKeys.health, { status: 'ok', schema_ready: false });
+    queryClient.setQueryData(workspaceQueryKeys.portfolio, {
+      status: 'not_synced',
+      positions: [],
+      coverage: {},
+      sync: {
+        generation: 0,
+        complete: false,
+        started_at: null,
+        completed_at: null,
+        last_error_code: null,
+        last_error_summary: null,
+      },
+    });
+    queryClient.setQueryData(workspaceQueryKeys.policy, {
+      active: {
+        id: 'policy-current',
+        revision_number: 9,
+        sleeves: [
+          {
+            sleeve_key: 'domestic',
+            display_name: 'Current Domestic Equity',
+            target_pct: '100.0000',
+            enabled: true,
+          },
+        ],
+        allowed_securities: [],
+      },
+      drafts: [],
+      superseded: [],
+    });
+    await flushPromises();
 
     const historical = wrapper.get('[aria-label="Overview frozen run context"]');
     expect(historical.text()).toContain('Historical US Equity');
@@ -318,27 +321,26 @@ describe('IndexPage', () => {
     expect(wrapper.text()).toContain('Current Domestic Equity');
     wrapper.unmount();
   });
-  it('uses portfolio API sleeve keys when successful portfolio and policy reads disagree', () => {
+  it('uses portfolio API sleeve keys when successful portfolio and policy reads disagree', async () => {
     const pinia = createPinia();
     setActivePinia(pinia);
-    const store = useWorkspaceStore();
-    seedMismatchedPortfolioAndPolicy(store);
     const router = createRouter({ history: createMemoryHistory(), routes: [] });
-    const wrapper = mountWorkspacePageWithQuasar(IndexPage, {
+    const wrapper = mountWithWorkspace(IndexPage, {
       global: { plugins: [pinia, router] },
     });
+    seedMismatchedPortfolioAndPolicy(getTestQueryClient(wrapper));
+    await flushPromises();
 
     expect(wrapper.text()).toContain(
       'Portfolio effects use policy revision portfolio-revision-a; the active policy is active-policy-b.',
     );
-    const mismatchBanner = wrapper
-      .findAllComponents(QBanner)
-      .find((banner) =>
-        banner.text().includes('Portfolio effects use policy revision portfolio-revision-a'),
+    const mismatchAlert = wrapper
+      .findAll('[role="status"]')
+      .find((alert) =>
+        alert.text().includes('Portfolio effects use policy revision portfolio-revision-a'),
       );
-    expect(mismatchBanner?.attributes('role')).toBe('status');
+    expect(mismatchAlert?.attributes('role')).toBe('status');
     expect(wrapper.get('.allocation-card').text()).toContain('us');
-
     expect(wrapper.get('.allocation-card').text()).toContain('100.0000%');
     expect(wrapper.get('.allocation-card').text()).not.toContain('Active policy US label');
     expect(wrapper.get('.transition-card').text()).toContain('transition_nested');
@@ -349,22 +351,25 @@ describe('IndexPage', () => {
   it('keeps cached portfolio labels unlocalized after a failed follow-up policy read', async () => {
     const pinia = createPinia();
     setActivePinia(pinia);
-    const store = useWorkspaceStore();
-    seedMismatchedPortfolioAndPolicy(store);
-    vi.stubGlobal(
-      'fetch',
-      vi.fn<typeof fetch>(() => Promise.reject(new Error('policy transport failed'))),
-    );
-    await expect(store.loadPolicy()).rejects.toThrow('policy transport failed');
     const router = createRouter({ history: createMemoryHistory(), routes: [] });
-    const wrapper = mountWorkspacePageWithQuasar(IndexPage, {
+    const wrapper = mountWithWorkspace(IndexPage, {
       global: { plugins: [pinia, router] },
     });
+    const queryClient = getTestQueryClient(wrapper);
+    seedMismatchedPortfolioAndPolicy(queryClient);
+    await queryClient
+      .fetchQuery({
+        queryKey: workspaceQueryKeys.policy,
+        queryFn: () => Promise.reject(new Error('policy transport failed')),
+        staleTime: 0,
+        retry: false,
+      })
+      .catch(() => undefined);
+    await flushPromises();
 
     expect(wrapper.text()).toContain('cached data is being shown');
     expect(wrapper.text()).toContain('Portfolio effects use policy revision portfolio-revision-a');
     expect(wrapper.get('.allocation-card').text()).not.toContain('Active policy US label');
-
     expect(wrapper.get('.allocation-card').text()).toContain('100.0000%');
     expect(wrapper.get('.transition-card').text()).not.toContain('Active policy nested label');
     wrapper.unmount();
@@ -373,14 +378,20 @@ describe('IndexPage', () => {
   it('withholds Overview run metrics and effects across navigation until a selection confirms', async () => {
     const pinia = createPinia();
     setActivePinia(pinia);
-    const store = useWorkspaceStore();
-    seedMismatchedPortfolioAndPolicy(store, 'active-policy-b', 'active-policy-b');
-    store.currentRun = currentRunFixture() as never;
+    const store = mountWorkspaceHarness().workspace;
+
+    seedCurrentRunForTest(store, currentRunFixture() as never);
     store.currentRunView = 'current';
     const router = createRouter({ history: createMemoryHistory(), routes: [] });
-    const wrapper = mountWorkspacePageWithQuasar(IndexPage, {
+    const wrapper = mountWithWorkspace(IndexPage, {
       global: { plugins: [pinia, router] },
     });
+    seedMismatchedPortfolioAndPolicy(
+      getTestQueryClient(wrapper),
+      'active-policy-b',
+      'active-policy-b',
+    );
+    await flushPromises();
     const response = deferred<Response>();
     vi.stubGlobal(
       'fetch',
@@ -392,9 +403,14 @@ describe('IndexPage', () => {
     expect(store.reviewMutationPending).toBe(true);
     wrapper.unmount();
 
-    const remounted = mountWorkspacePageWithQuasar(IndexPage, {
+    const remounted = mountWithWorkspace(IndexPage, {
       global: { plugins: [pinia, router] },
     });
+    seedMismatchedPortfolioAndPolicy(
+      getTestQueryClient(remounted),
+      'active-policy-b',
+      'active-policy-b',
+    );
     await flushPromises();
     expect(remounted.text()).toContain('awaiting API confirmation');
     expect(remounted.text()).not.toContain('-5.00');
@@ -414,15 +430,22 @@ describe('IndexPage', () => {
   it('restores the last successful Overview run after a pending annotation fails', async () => {
     const pinia = createPinia();
     setActivePinia(pinia);
-    const store = useWorkspaceStore();
-    seedMismatchedPortfolioAndPolicy(store, 'active-policy-b', 'active-policy-b');
-    const previousRun = currentRunFixture();
-    store.currentRun = previousRun as never;
+    const store = mountWorkspaceHarness().workspace;
+
+    const run = currentRunFixture();
+    seedCurrentRunForTest(store, run as never);
+    const previousRun = currentRunForTest(store)!;
     store.currentRunView = 'current';
     const router = createRouter({ history: createMemoryHistory(), routes: [] });
-    const wrapper = mountWorkspacePageWithQuasar(IndexPage, {
+    const wrapper = mountWithWorkspace(IndexPage, {
       global: { plugins: [pinia, router] },
     });
+    seedMismatchedPortfolioAndPolicy(
+      getTestQueryClient(wrapper),
+      'active-policy-b',
+      'active-policy-b',
+    );
+    await flushPromises();
     const response = deferred<Response>();
     vi.stubGlobal(
       'fetch',
@@ -436,9 +459,14 @@ describe('IndexPage', () => {
     expect(store.reviewMutationPending).toBe(true);
     wrapper.unmount();
 
-    const remounted = mountWorkspacePageWithQuasar(IndexPage, {
+    const remounted = mountWithWorkspace(IndexPage, {
       global: { plugins: [pinia, router] },
     });
+    seedMismatchedPortfolioAndPolicy(
+      getTestQueryClient(remounted),
+      'active-policy-b',
+      'active-policy-b',
+    );
     await flushPromises();
     expect(remounted.text()).toContain('awaiting API confirmation');
     expect(remounted.find('.overview-metrics').exists()).toBe(false);
@@ -447,7 +475,7 @@ describe('IndexPage', () => {
     await mutation;
     await flushPromises();
     expect(store.reviewMutationPending).toBe(false);
-    expect(store.currentRun).toBe(previousRun);
+    expect(currentRunForTest(store)).toBe(previousRun);
     expect(store.currentRunView).toBe('current');
     expect(remounted.text()).not.toContain('awaiting API confirmation');
     expect(remounted.get('.overview-metrics').text()).toContain('-5.00');

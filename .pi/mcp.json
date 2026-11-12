@@ -1,13 +1,5 @@
 {
   "mcpServers": {
-    "quasar": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "--fetch-retries=0",
-        "@quasar/mcp@latest"
-      ]
-    },
     "shadcn": {
       "command": "npx",
       "args": [

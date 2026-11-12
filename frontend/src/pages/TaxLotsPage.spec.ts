@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
-import { flushPromises, mount } from '@vue/test-utils';
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import type { LotResponse, OptimizerRecommendationsResponse } from '@/types/api';
-import { useWorkspaceStore } from '@/stores/workspace-store';
+import {
+  mountWorkspaceHarness,
+  seedCurrentRunForTest,
+  currentRunForTest,
+} from '@/test-utils/workspace-harness';
 import TaxLotsPage from './TaxLotsPage.vue';
-import { QBanner, QCard, QCheckbox, QMarkupTable, QSelect } from 'quasar';
-import { findQuasarComponent, setQuasarModelValue } from '@/test-utils/quasar-mount';
 
 const lot: LotResponse = {
   ticker: 'SYN',
@@ -98,8 +100,40 @@ function requestBody(init?: RequestInit): unknown {
   return JSON.parse(init.body) as unknown;
 }
 
+async function selectOption(
+  wrapper: VueWrapper,
+  label: string,
+  optionLabel: string,
+): Promise<void> {
+  const trigger = wrapper.get(`[role="combobox"][aria-label="${label}"]`);
+  await trigger.trigger('keydown', { key: 'ArrowDown' });
+  await flushPromises();
+  const option = Array.from(document.body.querySelectorAll<HTMLElement>('[role="option"]')).find(
+    (candidate) => candidate.textContent?.replace(/\s+/g, ' ').trim() === optionLabel,
+  );
+  if (!option) throw new Error(`Select option not found: ${optionLabel}`);
+  option.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+  option.dispatchEvent(new Event('pointerup', { bubbles: true }));
+  await flushPromises();
+}
+
+async function setCheckbox(
+  wrapper: VueWrapper,
+  accessibleName: string,
+  requested: boolean,
+): Promise<void> {
+  const checkbox = wrapper.get(`[role="checkbox"][aria-label="${accessibleName}"]`);
+  if (checkbox.attributes('aria-checked') === String(requested)) return;
+  await checkbox.trigger('click');
+  await flushPromises();
+}
+
 beforeEach(() => {
   vi.unstubAllGlobals();
+  Object.defineProperty(Element.prototype, 'scrollIntoView', {
+    configurable: true,
+    value: vi.fn(),
+  });
   setActivePinia(createPinia());
 });
 
@@ -111,23 +145,23 @@ describe('TaxLotsPage', () => {
   it('renders lots and separates requested intent from confirmed selection', async () => {
     const fetcher = vi.fn<typeof fetch>(() => Promise.resolve(jsonResponse(page([lot]))));
     vi.stubGlobal('fetch', fetcher);
-    const store = useWorkspaceStore();
+    const store = mountWorkspaceHarness().workspace;
     const wrapper = mount(TaxLotsPage);
     await flushPromises();
-    const filters = findQuasarComponent(wrapper, QCard, 'Tax lot filters');
+    const filters = wrapper.get('form[aria-label="Tax lot filters"]');
     expect(filters.element.tagName).toBe('FORM');
     expect(wrapper.get('.security-card').element.tagName).toBe('SECTION');
     expect(wrapper.get('.security-card').attributes('aria-labelledby')).toBe('security-SYN');
     expect(wrapper.get('.review-summary').element.tagName).toBe('SECTION');
 
-    const markupTables = wrapper.findAllComponents(QMarkupTable);
-    expect(markupTables).toHaveLength(1);
-    expect(markupTables[0]!.element.querySelectorAll('table')).toHaveLength(1);
-    const renderedTable = markupTables[0]!.element.querySelector('table');
-    const caption = renderedTable?.querySelector('caption')?.textContent;
+    const renderedTable = wrapper.get('table[data-slot="table"]');
+    const caption = renderedTable.element.querySelector('caption')?.textContent;
     expect(caption?.replace(/\s+/g, ' ').trim()).toBe('Tax lots for SYN');
-    expect(renderedTable?.querySelectorAll('thead th[scope="col"]')).toHaveLength(
-      renderedTable?.querySelectorAll('thead th').length,
+    expect(renderedTable.element.querySelectorAll('thead th[scope="col"]')).toHaveLength(
+      renderedTable.element.querySelectorAll('thead th').length,
+    );
+    expect(renderedTable.element.querySelector('tbody th[scope="row"]')?.textContent).toContain(
+      'BROKER-LOT-0007',
     );
     const region = wrapper.get('[role="region"][aria-label="Tax lots for SYN"]');
     expect(region.attributes('tabindex')).toBe('0');
@@ -139,18 +173,16 @@ describe('TaxLotsPage', () => {
     expect(wrapper.text()).toContain('8.1875 USD / 5.3099%');
     expect(wrapper.text()).toContain('synthetic-quality-flag');
     expect(wrapper.text()).toContain('Fractional cleanup unsupported; not executable');
-    expect(wrapper.findAll('small.sub-value.block')).toHaveLength(2);
+    expect(wrapper.text()).toContain('synthetic-test-source · as of 2025-02-04T12:00:00Z');
     expect(wrapper.text()).toContain('DEMO ONLY');
     expect(wrapper.text()).toContain('complete replacement set');
     const noCurrentRun = wrapper
-      .findAllComponents(QBanner)
-      .find((banner) => banner.text().includes('No current DEMO run is available'));
-    expect(noCurrentRun?.attributes('role')).toBe('status');
+      .findAll('[role="status"]')
+      .find((status) => status.text().includes('No current DEMO run is available'));
+    expect(noCurrentRun).toBeDefined();
 
-    expect(wrapper.get('.q-checkbox').classes()).toEqual(
-      expect.arrayContaining(['row', 'inline', 'no-wrap', 'items-center']),
-    );
-    await setQuasarModelValue(wrapper, QCheckbox, 'Request SYN lot BROKER-LOT-0007', true);
+    await setCheckbox(wrapper, 'Request SYN lot BROKER-LOT-0007', true);
+
     expect(wrapper.text()).toContain('Requested lot intent · 1');
     expect(wrapper.text()).toContain(
       'Backend-confirmed selected SELL lot IDs in the loaded run: none',
@@ -165,15 +197,24 @@ describe('TaxLotsPage', () => {
     ).toBe(false);
   });
 
-  it('sends server-side lot filters and sorting to the API', async () => {
-    const fetcher = vi.fn<typeof fetch>(() => Promise.resolve(jsonResponse(page([lot]))));
+  it('sends server-side filters and sorting while preserving API row order', async () => {
+    let requestCount = 0;
+    const lowerProfitLot = {
+      ...lot,
+      broker_lot_id: 'BROKER-LOT-0001',
+      unrealized_pl_usd: '-1.0000',
+    };
+    const fetcher = vi.fn<typeof fetch>(() => {
+      requestCount += 1;
+      return Promise.resolve(jsonResponse(page(requestCount >= 3 ? [lot, lowerProfitLot] : [lot])));
+    });
     vi.stubGlobal('fetch', fetcher);
     const wrapper = mount(TaxLotsPage);
     await flushPromises();
 
-    await wrapper.get('input[type="search"]').setValue('ALL-ACCOUNT-RESULT');
-    await setQuasarModelValue(wrapper, QSelect, 'Holding term', 'ST');
-    await setQuasarModelValue(wrapper, QSelect, 'Fractional cleanup', 'true');
+    await wrapper.get('input[type="search"]').setValue('  ALL-ACCOUNT-RESULT  ');
+    await selectOption(wrapper, 'Holding term', 'Short term');
+    await selectOption(wrapper, 'Fractional cleanup', 'No unsupported fractional cleanup');
     await wrapper.get('form[aria-label="Tax lot filters"]').trigger('submit');
     await flushPromises();
 
@@ -181,18 +222,22 @@ describe('TaxLotsPage', () => {
     expect(filteredRequest.pathname).toBe('/api/v1/lots');
     expect(filteredRequest.searchParams.get('search')).toBe('ALL-ACCOUNT-RESULT');
     expect(filteredRequest.searchParams.get('term')).toBe('ST');
-    expect(filteredRequest.searchParams.get('fractional')).toBe('true');
+    expect(filteredRequest.searchParams.get('fractional')).toBe('false');
     expect(filteredRequest.searchParams.get('offset')).toBe('0');
     expect(filteredRequest.searchParams.get('limit')).toBe('100');
-    // The API owns filtering; returned API rows are not filtered again in the browser.
+    // The API owns filtering; returned API rows are rendered even when they do not match the search draft.
     expect(wrapper.text()).toContain('BROKER-LOT-0007');
 
-    await setQuasarModelValue(wrapper, QSelect, 'Sort API results by', 'unrealized_pl_usd');
+    await selectOption(wrapper, 'Sort API results by', 'Unrealized P/L (USD)');
     await flushPromises();
     const sortedRequest = requestUrl(fetcher.mock.calls[2]![0]);
     expect(sortedRequest.searchParams.get('sort_by')).toBe('unrealized_pl_usd');
     expect(sortedRequest.searchParams.get('sort_direction')).toBe('asc');
     expect(sortedRequest.searchParams.get('offset')).toBe('0');
+    expect(wrapper.findAll('tbody th[scope="row"]').map((cell) => cell.text())).toEqual([
+      'BROKER-LOT-0007',
+      'BROKER-LOT-0001',
+    ]);
   });
 
   it('keeps pagination available when a non-final API page is empty', async () => {
@@ -207,12 +252,20 @@ describe('TaxLotsPage', () => {
     const wrapper = mount(TaxLotsPage);
     await flushPromises();
 
-    await wrapper.get('nav[aria-label="Tax lot API pages"] button:last-child').trigger('click');
+    await wrapper
+      .get('nav[aria-label="Tax lot API pages"] button[aria-label="Next page"]')
+      .trigger('click');
     await flushPromises();
     expect(wrapper.text()).toContain('No lots returned');
+    const emptyTitle = wrapper.get('[data-slot="empty-title"]');
+    expect(emptyTitle.text()).toBe('No lots returned');
+    expect(emptyTitle.attributes('role')).toBe('heading');
+    expect(emptyTitle.attributes('aria-level')).toBe('2');
     expect(wrapper.text()).toContain('Page 2 of 2');
 
-    const previousPage = wrapper.get('nav[aria-label="Tax lot API pages"] button:first-child');
+    const previousPage = wrapper.get(
+      'nav[aria-label="Tax lot API pages"] button[aria-label="Previous page"]',
+    );
     expect((previousPage.element as HTMLButtonElement).disabled).toBe(false);
     await previousPage.trigger('click');
     await flushPromises();
@@ -221,7 +274,9 @@ describe('TaxLotsPage', () => {
       fetcher.mock.calls.map(([input]) => requestUrl(input).searchParams.get('offset')),
     ).toEqual(['0', '100', '0']);
     expect(wrapper.text()).toContain('BROKER-LOT-0007');
-    await wrapper.get('nav[aria-label="Tax lot API pages"] button:last-child').trigger('click');
+    await wrapper
+      .get('nav[aria-label="Tax lot API pages"] button[aria-label="Next page"]')
+      .trigger('click');
     await flushPromises();
     await wrapper.get('input[type="search"]').setValue('search-reset');
     await wrapper.get('form[aria-label="Tax lot filters"]').trigger('submit');
@@ -230,11 +285,112 @@ describe('TaxLotsPage', () => {
     expect(requestUrl(fetcher.mock.calls[4]![0]).searchParams.get('search')).toBe('search-reset');
   });
 
+  it('blocks paging while a filter draft is unapplied and refreshes with applied filters', async () => {
+    const fetcher = vi.fn<typeof fetch>((input) => {
+      const offset = Number(requestUrl(input).searchParams.get('offset') ?? '0');
+      return Promise.resolve(jsonResponse(page([lot], offset, 201)));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const wrapper = mount(TaxLotsPage);
+    await flushPromises();
+
+    const nextPage = wrapper.get(
+      'nav[aria-label="Tax lot API pages"] button[aria-label="Next page"]',
+    );
+    expect((nextPage.element as HTMLButtonElement).disabled).toBe(false);
+    const search = wrapper.get('input[type="search"]');
+    await search.setValue(' draft-search ');
+    expect((nextPage.element as HTMLButtonElement).disabled).toBe(true);
+    await nextPage.trigger('click');
+    await flushPromises();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+
+    const refresh = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('Refresh lots'));
+    expect(refresh).toBeDefined();
+    await refresh!.trigger('click');
+    await flushPromises();
+    const refreshedRequest = requestUrl(fetcher.mock.calls[1]![0]);
+    expect(refreshedRequest.searchParams.get('offset')).toBe('0');
+    expect(refreshedRequest.searchParams.has('search')).toBe(false);
+    expect((search.element as HTMLInputElement).value).toBe(' draft-search ');
+
+    await wrapper.get('form[aria-label="Tax lot filters"]').trigger('submit');
+    await flushPromises();
+    const appliedRequest = requestUrl(fetcher.mock.calls[2]![0]);
+    expect(appliedRequest.searchParams.get('offset')).toBe('0');
+    expect(appliedRequest.searchParams.get('search')).toBe('draft-search');
+  });
+
+  it('preserves complete-set lot intent across API pages without submitting on checkbox changes', async () => {
+    const runId = 'cross-page-intent-run';
+    const store = mountWorkspaceHarness().workspace;
+    seedCurrentRunForTest(store, recommendations(runId, []));
+    store.currentRunView = 'current';
+    const secondPageLot: LotResponse = {
+      ...lot,
+      ticker: 'ALT',
+      broker_lot_id: 'BROKER-LOT-0101',
+      unrealized_pl_usd: '900.0000',
+    };
+    const confirmedRun = recommendations(runId, ['BROKER-LOT-0007', 'BROKER-LOT-0101']);
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      const url = requestUrl(input);
+      if (url.pathname === '/api/v1/lots') {
+        const offset = Number(url.searchParams.get('offset') ?? '0');
+        return Promise.resolve(
+          jsonResponse(offset === 100 ? page([secondPageLot], 100, 101) : page([lot], 0, 101)),
+        );
+      }
+      if (url.pathname.endsWith('/lot-review-intent') && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse(confirmedRun));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${init?.method} ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const wrapper = mount(TaxLotsPage);
+    await flushPromises();
+
+    await setCheckbox(wrapper, 'Request SYN lot BROKER-LOT-0007', true);
+    expect(fetcher.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+    await wrapper
+      .get('nav[aria-label="Tax lot API pages"] button[aria-label="Next page"]')
+      .trigger('click');
+    await flushPromises();
+    expect(
+      wrapper.get('[role="checkbox"][aria-label="Request ALT lot BROKER-LOT-0101"]'),
+    ).toBeDefined();
+    expect(wrapper.find('[aria-label="Request SYN lot BROKER-LOT-0007"]').exists()).toBe(false);
+    await setCheckbox(wrapper, 'Request ALT lot BROKER-LOT-0101', true);
+    expect(store.lotReviewIntent.map((entry) => entry.broker_lot_id)).toEqual([
+      'BROKER-LOT-0007',
+      'BROKER-LOT-0101',
+    ]);
+    expect(fetcher.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+
+    const applyButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('Apply complete set to current DEMO run'));
+    expect(applyButton).toBeDefined();
+    await applyButton!.trigger('click');
+    await flushPromises();
+    const mutation = fetcher.mock.calls.find(([, init]) => init?.method === 'POST');
+    expect(requestBody(mutation?.[1])).toEqual({
+      source_generation: 1,
+      broker_lot_ids: ['BROKER-LOT-0007', 'BROKER-LOT-0101'],
+    });
+    expect(store.currentRun?.consolidated_legs[0]?.selected_lots).toHaveLength(2);
+    expect(
+      fetcher.mock.calls.some(([input]) => requestUrl(input).pathname.includes('/orders/')),
+    ).toBe(false);
+  });
+
   it('submits full intent and confirms only after API success', async () => {
     const runId = 'intent-run';
-    const store = useWorkspaceStore();
+    const store = mountWorkspaceHarness().workspace;
     const originalRun = recommendations(runId, ['OLD-CONFIRMED-LOT']);
-    store.currentRun = originalRun;
+    seedCurrentRunForTest(store, originalRun);
     store.currentRunView = 'current';
     const confirmedRun = recommendations(runId, ['BROKER-LOT-0007']);
     const fetcher = vi.fn<typeof fetch>((input, init) => {
@@ -248,8 +404,8 @@ describe('TaxLotsPage', () => {
     const wrapper = mount(TaxLotsPage);
     await flushPromises();
 
-    await setQuasarModelValue(wrapper, QCheckbox, 'Request SYN lot BROKER-LOT-0007', true);
-    expect(store.currentRun).toBe(originalRun);
+    await setCheckbox(wrapper, 'Request SYN lot BROKER-LOT-0007', true);
+    expect(currentRunForTest(store)).toBe(originalRun);
     const applyButton = wrapper
       .findAll('button')
       .find((button) => button.text().includes('Apply complete set to current DEMO run'));
@@ -288,13 +444,13 @@ describe('TaxLotsPage', () => {
       return Promise.reject(new Error(`Unexpected request: ${init?.method} ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const store = useWorkspaceStore();
-    store.currentRun = recommendations(runId, []);
+    const store = mountWorkspaceHarness().workspace;
+    seedCurrentRunForTest(store, recommendations(runId, []));
     store.currentRunView = 'current';
     const wrapper = mount(TaxLotsPage);
     await flushPromises();
 
-    await setQuasarModelValue(wrapper, QCheckbox, 'Request SYN lot BROKER-LOT-0007', true);
+    await setCheckbox(wrapper, 'Request SYN lot BROKER-LOT-0007', true);
     const applyButton = () =>
       wrapper
         .findAll('button')
@@ -314,9 +470,9 @@ describe('TaxLotsPage', () => {
 
   it('requires an explicit empty set to clear confirmed selection', async () => {
     const runId = 'clear-run';
-    const store = useWorkspaceStore();
+    const store = mountWorkspaceHarness().workspace;
     const originallyConfirmed = recommendations(runId, ['BROKER-LOT-0007']);
-    store.currentRun = originallyConfirmed;
+    seedCurrentRunForTest(store, originallyConfirmed);
     store.currentRunView = 'current';
     const responseRun = recommendations(runId, []);
     const fetcher = vi.fn<typeof fetch>((input, init) => {
@@ -356,9 +512,9 @@ describe('TaxLotsPage', () => {
 
   it('preserves confirmed selection and shows reasons on atomic rejection', async () => {
     const runId = 'atomic-run';
-    const store = useWorkspaceStore();
+    const store = mountWorkspaceHarness().workspace;
     const originalRun = recommendations(runId, ['OLD-CONFIRMED-LOT']);
-    store.currentRun = originalRun;
+    seedCurrentRunForTest(store, originalRun);
     store.currentRunView = 'current';
     const fetcher = vi.fn<typeof fetch>((input, init) => {
       const url = requestUrl(input);
@@ -386,14 +542,14 @@ describe('TaxLotsPage', () => {
     const wrapper = mount(TaxLotsPage);
     await flushPromises();
 
-    await setQuasarModelValue(wrapper, QCheckbox, 'Request SYN lot BROKER-LOT-0007', true);
+    await setCheckbox(wrapper, 'Request SYN lot BROKER-LOT-0007', true);
     await wrapper
       .findAll('button')
       .find((button) => button.text().includes('Apply complete set to current DEMO run'))!
       .trigger('click');
     await flushPromises();
 
-    expect(store.currentRun).toBe(originalRun);
+    expect(currentRunForTest(store)).toBe(originalRun);
     expect(store.currentRun?.consolidated_legs[0]?.selected_lots[0]?.broker_lot_id).toBe(
       'OLD-CONFIRMED-LOT',
     );
@@ -410,18 +566,18 @@ describe('TaxLotsPage', () => {
   it('persists shared intent across remounts and invalidates on generation change', async () => {
     const fetcher = vi.fn<typeof fetch>(() => Promise.resolve(jsonResponse(page([lot]))));
     vi.stubGlobal('fetch', fetcher);
-    const store = useWorkspaceStore();
+    const store = mountWorkspaceHarness().workspace;
     const firstMount = mount(TaxLotsPage);
     await flushPromises();
-    await setQuasarModelValue(firstMount, QCheckbox, 'Request SYN lot BROKER-LOT-0007', true);
+    await setCheckbox(firstMount, 'Request SYN lot BROKER-LOT-0007', true);
     firstMount.unmount();
 
     const secondMount = mount(TaxLotsPage);
     await flushPromises();
     expect(
-      findQuasarComponent(secondMount, QCheckbox, 'Request SYN lot BROKER-LOT-0007').attributes(
-        'aria-checked',
-      ),
+      secondMount
+        .get('[role="checkbox"][aria-label="Request SYN lot BROKER-LOT-0007"]')
+        .attributes('aria-checked'),
     ).toBe('true');
     expect(store.lotReviewIntent).toHaveLength(1);
 
@@ -429,10 +585,8 @@ describe('TaxLotsPage', () => {
     await flushPromises();
     expect(store.lotReviewIntent).toEqual([]);
     expect(store.lotReviewIntentNotice).toContain('Source generation changed to 2');
-    const lotCheckbox = findQuasarComponent(
-      secondMount,
-      QCheckbox,
-      'Request SYN lot BROKER-LOT-0007',
+    const lotCheckbox = secondMount.get(
+      '[role="checkbox"][aria-label="Request SYN lot BROKER-LOT-0007"]',
     );
     expect(lotCheckbox.attributes('aria-checked')).toBe('false');
     expect(lotCheckbox.attributes('aria-disabled')).toBe('true');
@@ -448,9 +602,9 @@ describe('TaxLotsPage', () => {
     await flushPromises();
 
     expect(
-      findQuasarComponent(wrapper, QCheckbox, 'Request SYN lot BROKER-LOT-0007').attributes(
-        'aria-disabled',
-      ),
+      wrapper
+        .get('[role="checkbox"][aria-label="Request SYN lot BROKER-LOT-0007"]')
+        .attributes('aria-disabled'),
     ).toBe('true');
     expect(wrapper.text()).toContain('It is unvalidated; lot intent cannot be submitted');
     expect(wrapper.text()).toContain('No current DEMO run is available');

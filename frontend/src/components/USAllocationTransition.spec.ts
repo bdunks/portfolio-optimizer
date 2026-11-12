@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { mount } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
-import { QBanner, QCard, QChip } from 'quasar';
+
 import USAllocationTransition from './USAllocationTransition.vue';
 import type { USTransitionResponse } from '@/types/api';
 
@@ -58,32 +58,85 @@ describe('USAllocationTransition', () => {
     const wrapper = mount(USAllocationTransition, {
       props: { transition, labels: { fund: 'Synthetic fund', stocks: 'Synthetic equities' } },
     });
-    const cards = wrapper.findAllComponents(QCard);
+    const cards = wrapper.findAll('article[data-state]');
     expect(cards).toHaveLength(3);
-    expect(cards.map((card) => card.element.tagName.toLowerCase())).toEqual([
-      'article',
-      'article',
-      'article',
+    expect(cards.map((card) => card.attributes('data-state'))).toEqual([
+      'current',
+      'proposed',
+      'target',
     ]);
-    expect(cards.every((card) => card.classes().includes('q-pa-md'))).toBe(true);
+    expect(wrapper.findAll('[data-slot="card"]')).toHaveLength(3);
     expect(wrapper.find('section.transition-panel').exists()).toBe(true);
 
-    expect(wrapper.findAll('.state-card')).toHaveLength(3);
-    expect(wrapper.get('[data-state="current"]').text()).toContain('101.0100 USD');
-    expect(wrapper.get('[data-state="proposed"]').text()).toContain('102.0200 USD');
-    expect(wrapper.get('[data-state="target"]').text()).toContain('Policy target');
-    expect(wrapper.text()).toContain('Within US sleeve + whole portfolio');
-    expect(wrapper.get('[data-state="current"]').text()).toContain(
-      'Transition destination progress within US sleeve11.1100%',
+    const current = wrapper.get('[data-state="current"]');
+    const proposed = wrapper.get('[data-state="proposed"]');
+    const target = wrapper.get('[data-state="target"]');
+    expect(current.findAll('dd').map((item) => item.text())).toEqual([
+      '101.0100 USD',
+      '51.5100%',
+      '11.1100%',
+    ]);
+    expect(proposed.findAll('dd').map((item) => item.text())).toEqual([
+      '102.0200 USD',
+      '52.5200%',
+      '13.1300%',
+    ]);
+    expect(target.text()).toContain('Policy target');
+    expect(target.findAll('dd').map((item) => item.text())).toEqual([
+      'Unavailable',
+      '53.5300%',
+      'Unavailable',
+    ]);
+    expect(target.text()).toContain(
+      'Policy target percentages; dollar values and progress are unavailable.',
     );
-    const unitChip = wrapper.findComponent(QChip);
-    expect(unitChip.text()).toBe('Within US sleeve + whole portfolio');
-    expect(unitChip.props('clickable')).toBe(false);
-    expect(unitChip.attributes('role')).toBeUndefined();
-    expect(wrapper.get('[data-state="current"]').text()).toContain('12.1200% within US sleeve');
-    expect(wrapper.get('[data-state="proposed"]').text()).toContain('13.1300% within US sleeve');
+    expect(wrapper.text()).toContain('Within US sleeve + whole portfolio');
+    expect(current.text()).toContain('12.1200% within US sleeve');
+    expect(proposed.text()).toContain('13.1300% within US sleeve');
     expect(wrapper.text()).toContain('6.0600% of whole portfolio');
-    expect(wrapper.get('[data-state="target"]').text()).toContain('20.2000% within US sleeve');
+    expect(target.text()).toContain('20.2000% within US sleeve');
+
+    const unitBadge = wrapper.get('[data-slot="badge"]');
+    expect(unitBadge.text()).toBe('Within US sleeve + whole portfolio');
+    expect(unitBadge.attributes('role')).toBeUndefined();
+    expect(unitBadge.attributes('tabindex')).toBeUndefined();
+  });
+
+  it('keeps component keys in first API appearance order and falls back to raw keys', () => {
+    const snapshotChild = {
+      value_usd: '1.00',
+      within_us_sleeve_pct: '1.0000',
+      whole_portfolio_pct: '0.5000',
+    };
+    const targetChild = { within_us_sleeve_pct: '1.0000', whole_portfolio_pct: '0.5000' };
+    const unionTransition: USTransitionResponse = {
+      ...transition,
+      current: {
+        ...transition.current,
+        children: { current_key: snapshotChild, shared_key: snapshotChild },
+      },
+      proposed_basket: {
+        ...transition.proposed_basket,
+        children: { proposed_key: snapshotChild, shared_key: snapshotChild },
+      },
+      target: {
+        ...transition.target,
+        children: { target_key: targetChild, current_key: targetChild },
+      },
+    };
+    const wrapper = mount(USAllocationTransition, {
+      props: {
+        transition: unionTransition,
+        labels: { current_key: 'Current child', shared_key: 'Shared child' },
+      },
+    });
+
+    expect(
+      wrapper
+        .get('[data-state="current"]')
+        .findAll('.component-list strong')
+        .map((item) => item.text()),
+    ).toEqual(['Current child', 'Shared child', 'proposed_key', 'target_key']);
   });
 
   it('shows unavailable destination progress without inferring a security set', () => {
@@ -95,11 +148,21 @@ describe('USAllocationTransition', () => {
     };
     const wrapper = mount(USAllocationTransition, { props: { transition: unconfigured } });
 
-    expect(wrapper.text()).toContain('No transition destination is designated in this policy');
+    const notice = wrapper.get('[data-slot="alert"]');
+    expect(notice.attributes('role')).toBe('status');
+    expect(notice.attributes('aria-live')).toBe('polite');
+    expect(notice.text()).toContain('No transition destination is designated in this policy');
     expect(wrapper.get('[data-state="current"]').text()).toContain(
       'Transition destination progress within US sleeveUnavailable',
     );
+    expect(
+      wrapper
+        .get('[data-state="target"]')
+        .findAll('dd')
+        .map((item) => item.text())[2],
+    ).toBe('Unavailable');
     expect(wrapper.text()).not.toContain('11.1100%');
+    expect(wrapper.text()).not.toContain('ETF ticker');
   });
 
   it('states missing transition data as unavailable instead of substituting zero', () => {
@@ -108,18 +171,35 @@ describe('USAllocationTransition', () => {
     expect(wrapper.text()).toContain('US transition data is unavailable');
     expect(wrapper.text()).not.toContain('0 USD');
     expect(wrapper.findAll('.state-card')).toHaveLength(0);
+    expect(wrapper.get('[data-slot="empty"]').attributes('role')).toBe('status');
   });
+
+  it('keeps empty API component children as an explicit state', () => {
+    const noChildren: USTransitionResponse = {
+      ...transition,
+      current: { ...transition.current, children: {} },
+      proposed_basket: { ...transition.proposed_basket, children: {} },
+      target: { ...transition.target, children: {} },
+    };
+    const wrapper = mount(USAllocationTransition, { props: { transition: noChildren } });
+
+    expect(wrapper.findAll('[data-state]')).toHaveLength(3);
+    expect(wrapper.findAll('.component-empty')).toHaveLength(3);
+    expect(wrapper.text()).toContain('No US sleeve component values were returned.');
+  });
+
   it('shows the current-basket comparison notice only when requested and keeps it polite', () => {
     const wrapper = mount(USAllocationTransition, {
       props: { transition, showNoCurrentBasket: true },
     });
-    const banner = wrapper.getComponent(QBanner);
-    expect(banner.attributes('role')).toBe('status');
-    expect(banner.text()).toContain(
+    const notice = wrapper.get('[data-slot="alert"]');
+    expect(notice.attributes('role')).toBe('status');
+    expect(notice.attributes('aria-live')).toBe('polite');
+    expect(notice.text()).toContain(
       'No current proposed basket from a matching current optimizer run.',
     );
 
     const withoutNotice = mount(USAllocationTransition, { props: { transition } });
-    expect(withoutNotice.findAllComponents(QBanner)).toHaveLength(0);
+    expect(withoutNotice.findAll('[data-slot="alert"]')).toHaveLength(0);
   });
 });

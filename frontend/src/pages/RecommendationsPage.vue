@@ -1,6 +1,7 @@
 <template>
   <section
-    class="workspace-page recommendations-page q-my-none q-mx-auto q-pa-md"
+    class="workspace-page recommendations-page tw:mx-auto tw:my-0! tw:min-w-0 tw:max-w-[1600px] tw:px-4 tw:py-4"
+    data-recommendations-root
     aria-labelledby="recommendations-title"
   >
     <WorkspacePageHeader
@@ -10,20 +11,18 @@
       subtitle="Review ranked groups and API-proposed legs. Group or sell-lot selection requests a backend re-solve; selection is never an order approval."
     >
       <template #actions>
-        <q-btn
-          unelevated
-          no-caps
+        <Button
           type="button"
-          class="primary-button"
-          color="primary"
+          variant="default"
           size="sm"
-          :disable="!canRunOptimizer"
+          class="primary-button tw:whitespace-normal"
+          :disabled="!canRunOptimizer"
           @click="runOptimizer"
         >
           {{
             store.actionState.runOptimizer.pending ? 'Running DEMO…' : 'Run DEMO recommendations'
           }}
-        </q-btn>
+        </Button>
       </template>
     </WorkspacePageHeader>
 
@@ -32,72 +31,114 @@
       submission controls exist on this screen.
     </WorkspaceCapabilityNotice>
 
-    <q-card
-      tag="section"
-      flat
-      bordered
-      class="run-controls q-pa-md"
-      aria-label="Recommendation run controls"
-    >
-      <label
-        class="trade-date-control column no-wrap q-gutter-y-xs text-caption text-weight-bold text-blue-grey-8"
-      >
-        <span>Proposed trade date (optional)</span>
-        <q-input
-          outlined
-          dense
-          hide-bottom-space
-          v-model="proposedTradeDate"
-          type="date"
-          :disable="!canRunOptimizer"
-        />
-      </label>
-      <p class="trade-date-help">
-        Blank uses the deterministic DEMO date 2026-11-05. This is a calendar date; no weekend or
-        holiday adjustment is applied.
-      </p>
-      <p v-if="!canRunOptimizer" class="state-message">
-        A new run requires a ready synchronized portfolio, healthy local API, and valid active
-        policy. Nothing runs automatically.
-      </p>
-      <form
-        class="saved-run-form row items-end q-gutter-sm justify-end"
-        @submit.prevent="openSavedRun"
-      >
-        <label class="column no-wrap q-gutter-y-xs text-caption text-weight-bold text-blue-grey-8">
-          <span>Open saved run ID</span>
-          <q-input
-            outlined
-            dense
-            hide-bottom-space
-            v-model.trim="savedRunId"
-            type="text"
-            autocomplete="off"
-            placeholder="Run ID from Activity"
-          />
-        </label>
-        <q-btn
-          no-caps
-          type="submit"
-          class="secondary-button"
-          outline
-          color="primary"
-          size="sm"
-          :disable="
-            !savedRunId ||
-            store.actionState.openSavedRun.pending ||
-            runPresentation.reviewMutationPending
-          "
-        >
-          {{ store.actionState.openSavedRun.pending ? 'Opening saved run…' : 'Open frozen run' }}
-        </q-btn>
-      </form>
-    </q-card>
+    <section class="run-controls tw:min-w-0" aria-label="Recommendation run controls">
+      <Card class="tw:min-w-0">
+        <CardHeader class="tw:gap-1">
+          <h2 class="tw:m-0! tw:text-base! tw:font-semibold!">Run recommendations</h2>
+          <p class="tw:m-0! tw:text-sm! tw:text-muted-foreground">
+            Choose an optional calendar date, or reopen a frozen run by its API run ID.
+          </p>
+        </CardHeader>
+        <CardContent class="tw:grid tw:min-w-0 tw:grid-cols-1 tw:gap-4 tw:md:grid-cols-2">
+          <runForm.Field name="proposedTradeDate">
+            <template #default="{ field }">
+              <UiField :data-invalid="field.state.meta.errors.length ? 'true' : undefined">
+                <FieldLabel for="recommendation-proposed-trade-date">
+                  Proposed trade date (optional)
+                </FieldLabel>
+                <Input
+                  id="recommendation-proposed-trade-date"
+                  type="date"
+                  :model-value="field.state.value"
+                  :disabled="!canRunOptimizer"
+                  :aria-invalid="field.state.meta.errors.length ? 'true' : undefined"
+                  :aria-describedby="
+                    field.state.meta.errors.length
+                      ? 'recommendation-proposed-trade-date-error recommendation-date-help'
+                      : 'recommendation-date-help'
+                  "
+                  @update:model-value="setProposedTradeDate"
+                  @blur="field.handleBlur"
+                />
+                <FieldDescription id="recommendation-date-help">
+                  Blank uses the deterministic DEMO date 2026-11-05. This is a calendar date; no
+                  weekend or holiday adjustment is applied.
+                </FieldDescription>
+                <FieldError
+                  id="recommendation-proposed-trade-date-error"
+                  :errors="field.state.meta.errors"
+                />
+              </UiField>
+            </template>
+          </runForm.Field>
+          <p
+            v-if="!canRunOptimizer"
+            class="state-message tw:m-0! tw:self-center tw:text-sm! tw:text-muted-foreground"
+          >
+            A new run requires a ready synchronized portfolio, healthy local API, and valid active
+            policy. Nothing runs automatically.
+          </p>
+        </CardContent>
+      </Card>
+    </section>
 
-    <div
-      class="error-stack column no-wrap q-gutter-y-sm"
-      aria-label="Recommendation request errors"
+    <form
+      class="saved-run-form tw:min-w-0"
+      aria-label="Open saved recommendation run"
+      @submit.prevent="openSavedRun"
     >
+      <Card class="tw:min-w-0">
+        <CardHeader class="tw:gap-1">
+          <h2 class="tw:m-0! tw:text-base! tw:font-semibold!">Open a saved run</h2>
+          <p class="tw:m-0! tw:text-sm! tw:text-muted-foreground">
+            Saved runs retain their frozen historical display context and are read-only.
+          </p>
+        </CardHeader>
+        <CardContent
+          class="tw:grid tw:min-w-0 tw:grid-cols-1 tw:items-start tw:gap-4 tw:sm:grid-cols-[minmax(0,1fr)_auto]"
+        >
+          <savedRunForm.Field name="savedRunId">
+            <template #default="{ field }">
+              <UiField :data-invalid="field.state.meta.errors.length ? 'true' : undefined">
+                <FieldLabel for="recommendation-saved-run-id">Open saved run ID</FieldLabel>
+                <Input
+                  id="recommendation-saved-run-id"
+                  type="text"
+                  autocomplete="off"
+                  placeholder="Run ID from Activity"
+                  :model-value="field.state.value"
+                  :aria-invalid="field.state.meta.errors.length ? 'true' : undefined"
+                  :aria-describedby="
+                    field.state.meta.errors.length ? 'recommendation-saved-run-id-error' : undefined
+                  "
+                  @update:model-value="setSavedRunId"
+                  @blur="field.handleBlur"
+                />
+                <FieldError
+                  id="recommendation-saved-run-id-error"
+                  :errors="field.state.meta.errors"
+                />
+              </UiField>
+            </template>
+          </savedRunForm.Field>
+          <Button
+            type="submit"
+            variant="outline"
+            size="sm"
+            class="secondary-button tw:whitespace-normal"
+            :disabled="
+              !savedRunId.trim() ||
+              store.actionState.openSavedRun.pending ||
+              runPresentation.reviewMutationPending
+            "
+          >
+            {{ store.actionState.openSavedRun.pending ? 'Opening saved run…' : 'Open frozen run' }}
+          </Button>
+        </CardContent>
+      </Card>
+    </form>
+
+    <div class="error-stack tw:grid tw:min-w-0 tw:gap-2" aria-label="Recommendation request errors">
       <ApiActionError
         :error="store.actionState.loadHealth.error"
         title="Local API health could not be loaded"
@@ -133,18 +174,18 @@
     </div>
 
     <ResourceFreshnessNotice />
-    <q-banner
+    <div
       v-if="portfolioLabelContext.revisionMismatch && !currentRunEffectsAreUsable"
-      dense
-      rounded
-      class="q-my-sm bg-blue-grey-1 text-blue-grey-10"
       role="status"
+      class="tw:my-2! tw:w-full tw:rounded-lg tw:border tw:border-border tw:bg-card tw:px-2.5 tw:py-2 tw:text-left tw:text-sm! tw:text-card-foreground"
     >
-      Portfolio effects use policy revision
-      {{ portfolioLabelContext.portfolioRevisionId ?? 'unavailable' }}; the active policy is
-      {{ portfolioLabelContext.policyRevisionId ?? 'unavailable' }}. Cached values remain visible
-      with API sleeve keys until matching policy labels are confirmed.
-    </q-banner>
+      <AlertDescription>
+        Portfolio effects use policy revision
+        {{ portfolioLabelContext.portfolioRevisionId ?? 'unavailable' }}; the active policy is
+        {{ portfolioLabelContext.policyRevisionId ?? 'unavailable' }}. Cached values remain visible
+        with API sleeve keys until matching policy labels are confirmed.
+      </AlertDescription>
+    </div>
 
     <WorkspaceEmptyState
       v-if="!currentRun"
@@ -163,7 +204,10 @@
         Run a DEMO analysis from Overview or this page, or reopen a saved run by its API run ID.
       </template>
       <template #details>
-        <p v-if="store.actionState.runOptimizer.error || store.actionState.openSavedRun.error">
+        <p
+          v-if="store.actionState.runOptimizer.error || store.actionState.openSavedRun.error"
+          class="tw:m-0!"
+        >
           The request failed. Retry only after reviewing the API error above.
         </p>
       </template>
@@ -180,365 +224,458 @@
         :provenance-label="provenanceLabel"
       />
 
-      <q-card
-        tag="section"
-        flat
-        bordered
+      <section
         v-if="!runPresentation.reviewMutationPending"
-        class="effects-panel q-pa-md column no-wrap q-gutter-y-md"
+        class="effects-panel tw:min-w-0"
         aria-labelledby="effects-title"
       >
-        <header class="section-heading row items-start justify-between q-gutter-md">
-          <div>
-            <h2 class="q-ma-none text-subtitle1 text-blue-grey-10" id="effects-title">
+        <Card class="tw:min-w-0">
+          <CardHeader class="tw:gap-1">
+            <h2 class="tw:m-0! tw:text-base! tw:font-semibold!" id="effects-title">
               API allocation effects
             </h2>
-            <p class="q-mt-xs q-mb-none q-mx-none text-body2 text-blue-grey-7">
-              {{ effectsDescription }}
-            </p>
-          </div>
-        </header>
-        <AllocationTargets
-          :allocation="effectDisplay.allocation"
-          :labels="effectDisplay.labels"
-          :show-no-current-basket="showNoCurrentBasket"
-        />
-        <USAllocationTransition
-          :transition="effectDisplay.transition"
-          :labels="effectDisplay.labels"
-          :show-no-current-basket="showNoCurrentBasket"
-        />
-      </q-card>
+            <p class="tw:m-0! tw:text-sm! tw:text-muted-foreground">{{ effectsDescription }}</p>
+          </CardHeader>
+          <CardContent class="tw:grid tw:min-w-0 tw:gap-4">
+            <AllocationTargets
+              :allocation="effectDisplay.allocation"
+              :labels="effectDisplay.labels"
+              :show-no-current-basket="showNoCurrentBasket"
+            />
+            <USAllocationTransition
+              :transition="effectDisplay.transition"
+              :labels="effectDisplay.labels"
+              :show-no-current-basket="showNoCurrentBasket"
+            />
+          </CardContent>
+        </Card>
+      </section>
 
-      <q-card
-        tag="section"
-        flat
-        bordered
+      <section
         v-if="currentRunGroupCount && !runPresentation.reviewMutationPending"
-        class="review-panel q-pa-md"
+        class="review-panel tw:min-w-0"
         aria-labelledby="groups-title"
       >
-        <header class="section-heading row items-start justify-between q-gutter-md">
-          <div>
-            <h2 class="q-ma-none text-subtitle1 text-blue-grey-10" id="groups-title">
-              Ranked trade groups
-            </h2>
-            <p class="q-mt-xs q-mb-none q-mx-none text-body2 text-blue-grey-7">
-              Priority rank is the API rank, not a precision score. Execution sequence and
-              dependencies are shown separately.
+        <Card class="tw:min-w-0">
+          <CardHeader class="tw:gap-2">
+            <div class="tw:grid tw:min-w-0 tw:gap-1">
+              <h2 class="tw:m-0! tw:text-base! tw:font-semibold!" id="groups-title">
+                Ranked trade groups
+              </h2>
+              <p class="tw:m-0! tw:text-sm! tw:text-muted-foreground">
+                Priority rank is the API rank, not a precision score. Execution sequence and
+                dependencies are shown separately.
+              </p>
+            </div>
+            <span class="tw:text-sm! tw:text-muted-foreground">
+              {{ filteredGroups.length }} shown / {{ currentRunGroupCount }} returned
+            </span>
+          </CardHeader>
+          <CardContent class="tw:grid tw:min-w-0 tw:gap-4">
+            <form class="tw:min-w-0" aria-label="Recommendation filters" @submit.prevent>
+              <Card class="filter-panel tw:min-w-0" size="sm">
+                <CardHeader class="tw:sr-only">
+                  <h3 class="tw:m-0! tw:text-sm! tw:font-semibold!">Recommendation filters</h3>
+                </CardHeader>
+                <CardContent>
+                  <FieldGroup
+                    class="tw:grid tw:min-w-0 tw:grid-cols-1 tw:gap-4 tw:sm:grid-cols-2 tw:lg:grid-cols-3"
+                  >
+                    <filterForm.Field name="sleeve">
+                      <template #default="{ field }">
+                        <UiField>
+                          <FieldLabel for="recommendation-filter-sleeve">Sleeve</FieldLabel>
+                          <Select
+                            :model-value="filters.sleeve ? `key:${filters.sleeve}` : 'all-sleeves'"
+                            @update:model-value="setSleeveFilter"
+                          >
+                            <SelectTrigger id="recommendation-filter-sleeve" aria-label="Sleeve">
+                              <SelectValue placeholder="All sleeves" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                <SelectItem value="all-sleeves">All sleeves</SelectItem>
+                                <SelectItem
+                                  v-for="sleeve in sleeveOptions"
+                                  :key="sleeve"
+                                  :value="`key:${sleeve}`"
+                                >
+                                  {{ sleeveLabel(sleeve) }}
+                                </SelectItem>
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                          <FieldError :errors="field.state.meta.errors" />
+                        </UiField>
+                      </template>
+                    </filterForm.Field>
+
+                    <filterForm.Field name="action">
+                      <template #default="{ field }">
+                        <UiField>
+                          <FieldLabel for="recommendation-filter-action">Action</FieldLabel>
+                          <Select
+                            :model-value="filters.action || 'all-actions'"
+                            @update:model-value="setActionFilter"
+                          >
+                            <SelectTrigger id="recommendation-filter-action" aria-label="Action">
+                              <SelectValue placeholder="Any action" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                <SelectItem value="all-actions">Any action</SelectItem>
+                                <SelectItem value="SELL">SELL</SelectItem>
+                                <SelectItem value="BUY">BUY</SelectItem>
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                          <FieldError :errors="field.state.meta.errors" />
+                        </UiField>
+                      </template>
+                    </filterForm.Field>
+
+                    <filterForm.Field name="term">
+                      <template #default="{ field }">
+                        <UiField>
+                          <FieldLabel for="recommendation-filter-term">Tax term</FieldLabel>
+                          <Select
+                            :model-value="filters.term || 'all-terms'"
+                            @update:model-value="setTermFilter"
+                          >
+                            <SelectTrigger id="recommendation-filter-term" aria-label="Tax term">
+                              <SelectValue placeholder="Any term" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                <SelectItem value="all-terms">Any term</SelectItem>
+                                <SelectItem value="ST">Short term</SelectItem>
+                                <SelectItem value="LT">Long term</SelectItem>
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                          <FieldError :errors="field.state.meta.errors" />
+                        </UiField>
+                      </template>
+                    </filterForm.Field>
+
+                    <filterForm.Field name="benefit">
+                      <template #default="{ field }">
+                        <UiField>
+                          <FieldLabel for="recommendation-filter-benefit"
+                            >Expected benefit</FieldLabel
+                          >
+                          <Select
+                            :model-value="filters.benefit || 'any-benefit'"
+                            @update:model-value="setBenefitFilter"
+                          >
+                            <SelectTrigger
+                              id="recommendation-filter-benefit"
+                              aria-label="Expected benefit"
+                            >
+                              <SelectValue placeholder="Any" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                <SelectItem value="any-benefit">Any</SelectItem>
+                                <SelectItem value="unavailable">Unavailable in API</SelectItem>
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                          <FieldError :errors="field.state.meta.errors" />
+                        </UiField>
+                      </template>
+                    </filterForm.Field>
+
+                    <filterForm.Field name="warning">
+                      <template #default="{ field }">
+                        <UiField>
+                          <FieldLabel for="recommendation-filter-warning">Warnings</FieldLabel>
+                          <Select
+                            :model-value="filters.warning || 'any-warning-state'"
+                            @update:model-value="setWarningFilter"
+                          >
+                            <SelectTrigger id="recommendation-filter-warning" aria-label="Warnings">
+                              <SelectValue placeholder="Any" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                <SelectItem value="any-warning-state">Any</SelectItem>
+                                <SelectItem value="with">With warnings</SelectItem>
+                                <SelectItem value="without">No warnings returned</SelectItem>
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                          <FieldError :errors="field.state.meta.errors" />
+                        </UiField>
+                      </template>
+                    </filterForm.Field>
+
+                    <filterForm.Field name="groupType">
+                      <template #default="{ field }">
+                        <UiField>
+                          <FieldLabel for="recommendation-filter-group-type">Group type</FieldLabel>
+                          <Select
+                            :model-value="
+                              filters.groupType ? `key:${filters.groupType}` : 'all-group-types'
+                            "
+                            @update:model-value="setGroupTypeFilter"
+                          >
+                            <SelectTrigger
+                              id="recommendation-filter-group-type"
+                              aria-label="Group type"
+                            >
+                              <SelectValue placeholder="Any type" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                <SelectItem value="all-group-types">Any type</SelectItem>
+                                <SelectItem
+                                  v-for="type in groupTypeOptions"
+                                  :key="type"
+                                  :value="`key:${type}`"
+                                >
+                                  {{ type }}
+                                </SelectItem>
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                          <FieldError :errors="field.state.meta.errors" />
+                        </UiField>
+                      </template>
+                    </filterForm.Field>
+
+                    <filterForm.Field name="sortOrder">
+                      <template #default="{ field }">
+                        <UiField>
+                          <FieldLabel for="recommendation-sort-order"
+                            >Sort by API priority rank</FieldLabel
+                          >
+                          <Select
+                            :model-value="filters.sortOrder"
+                            @update:model-value="setSortOrder"
+                          >
+                            <SelectTrigger
+                              id="recommendation-sort-order"
+                              aria-label="Sort by API priority rank"
+                            >
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                <SelectItem value="rank-ascending"
+                                  >Highest priority first (ascending rank)</SelectItem
+                                >
+                                <SelectItem value="rank-descending"
+                                  >Lowest priority first (descending rank)</SelectItem
+                                >
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                          <FieldError :errors="field.state.meta.errors" />
+                        </UiField>
+                      </template>
+                    </filterForm.Field>
+                  </FieldGroup>
+                </CardContent>
+              </Card>
+            </form>
+
+            <fieldset
+              class="selection-tools tw:grid tw:min-w-0 tw:grid-cols-1 tw:items-end tw:gap-3 tw:rounded-lg tw:border tw:border-border tw:p-4 tw:sm:grid-cols-[minmax(10rem,13rem)_auto_auto]"
+              :disabled="!canChangeSelection"
+            >
+              <legend class="tw:px-1 tw:text-sm! tw:font-semibold!">
+                Re-solve selected basket
+              </legend>
+              <topNForm.Field name="topN">
+                <template #default="{ field }">
+                  <UiField class="top-n-control">
+                    <FieldLabel for="recommendation-top-n">Top N groups by API rank</FieldLabel>
+                    <Input
+                      id="recommendation-top-n"
+                      type="number"
+                      min="1"
+                      :model-value="String(field.state.value)"
+                      :disabled="!canChangeSelection"
+                      :aria-invalid="field.state.meta.errors.length ? 'true' : undefined"
+                      :aria-describedby="
+                        field.state.meta.errors.length ? 'recommendation-top-n-error' : undefined
+                      "
+                      @update:model-value="setTopN"
+                      @blur="field.handleBlur"
+                    />
+                    <FieldError id="recommendation-top-n-error" :errors="field.state.meta.errors" />
+                  </UiField>
+                </template>
+              </topNForm.Field>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                class="secondary-button tw:whitespace-normal"
+                :disabled="!canChangeSelection"
+                @click="selectTopGroups"
+              >
+                Select top N and re-solve
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                class="secondary-button tw:whitespace-normal"
+                :disabled="!canChangeSelection"
+                @click="clearSelection"
+              >
+                Clear selected groups and re-solve
+              </Button>
+              <p
+                v-if="!canChangeSelection"
+                class="read-only-note tw:m-0! tw:text-sm! tw:text-muted-foreground tw:sm:col-span-3"
+              >
+                Saved, stale, or unverified run context is read-only. Open/run a current matching
+                run to change selection.
+              </p>
+              <p
+                v-else
+                class="read-only-note tw:m-0! tw:text-sm! tw:text-muted-foreground tw:sm:col-span-3"
+              >
+                Group selection and individual SELL-lot selection re-solve through the API. Shared
+                BUY legs cannot be toggled independently.
+              </p>
+            </fieldset>
+
+            <p
+              v-if="filteredGroups.length === 0"
+              class="empty-inline tw:m-0! tw:text-sm! tw:text-muted-foreground"
+            >
+              No returned groups match these filters.
             </p>
-          </div>
-          <span>{{ filteredGroups.length }} shown / {{ currentRunGroupCount }} returned</span>
-        </header>
+            <div v-else class="group-list tw:grid tw:min-w-0 tw:gap-2">
+              <TradeGroup
+                v-for="group in filteredGroups"
+                :key="group.group_id"
+                :group="group"
+                :legs="groupDetailLegs(group)"
+                :leg-references="groupLegReferences(group)"
+                :sleeve-label="sleeveLabel(group.sleeve_key)"
+                :has-sell-lots="groupSellLotIdsFor(group).length > 0"
+                :has-shared-leg="group.leg_ids.some(isSharedLeg)"
+                :note-draft="noteDrafts[group.group_id] ?? ''"
+                :rejection-draft="rejectionDrafts[group.group_id] ?? ''"
+                :can-change-selection="canChangeSelection"
+                :pending="runPresentation.reviewMutationPending"
+                @group-selection="changeGroupSelection"
+                @lot-selection="changeLotSelection"
+                @note-draft-change="changeNoteDraft"
+                @rejection-draft-change="changeRejectionDraft"
+                @save-note="saveNote"
+                @reject-group="rejectGroup"
+                @restore-group="restoreGroup"
+              />
+            </div>
 
-        <q-card
-          tag="form"
-          flat
-          bordered
-          aria-label="Recommendation filters"
-          class="filter-panel row items-end q-gutter-sm q-pa-sm text-caption text-weight-bold text-blue-grey-8"
-          @submit.prevent
-        >
-          <label
-            class="column no-wrap q-gutter-y-xs text-caption text-weight-bold text-blue-grey-8"
-          >
-            <span>Sleeve</span>
-            <q-select
-              v-model="filters.sleeve"
-              :options="[
-                { label: 'All sleeves', value: '' },
-                ...sleeveOptions.map((sleeve) => ({
-                  label: sleeveLabel(sleeve),
-                  value: sleeve,
-                })),
-              ]"
-              emit-value
-              map-options
-              outlined
-              dense
-              hide-bottom-space
-              aria-label="Sleeve"
-            />
-          </label>
-          <label
-            class="column no-wrap q-gutter-y-xs text-caption text-weight-bold text-blue-grey-8"
-          >
-            <span>Action</span>
-            <q-select
-              v-model="filters.action"
-              :options="[
-                { label: 'Any action', value: '' },
-                { label: 'SELL', value: 'SELL' },
-                { label: 'BUY', value: 'BUY' },
-              ]"
-              emit-value
-              map-options
-              outlined
-              dense
-              hide-bottom-space
-              aria-label="Action"
-            />
-          </label>
-          <label
-            class="column no-wrap q-gutter-y-xs text-caption text-weight-bold text-blue-grey-8"
-          >
-            <span>Tax term</span>
-            <q-select
-              v-model="filters.term"
-              :options="[
-                { label: 'Any term', value: '' },
-                { label: 'Short term', value: 'ST' },
-                { label: 'Long term', value: 'LT' },
-              ]"
-              emit-value
-              map-options
-              outlined
-              dense
-              hide-bottom-space
-              aria-label="Tax term"
-            />
-          </label>
-          <label
-            class="column no-wrap q-gutter-y-xs text-caption text-weight-bold text-blue-grey-8"
-          >
-            <span>Expected benefit</span>
-            <q-select
-              v-model="filters.benefit"
-              :options="[
-                { label: 'Any', value: '' },
-                { label: 'Unavailable in API', value: 'unavailable' },
-              ]"
-              emit-value
-              map-options
-              outlined
-              dense
-              hide-bottom-space
-              aria-label="Expected benefit"
-            />
-          </label>
-          <label
-            class="column no-wrap q-gutter-y-xs text-caption text-weight-bold text-blue-grey-8"
-          >
-            <span>Warnings</span>
-            <q-select
-              v-model="filters.warning"
-              :options="[
-                { label: 'Any', value: '' },
-                { label: 'With warnings', value: 'with' },
-                { label: 'No warnings returned', value: 'without' },
-              ]"
-              emit-value
-              map-options
-              outlined
-              dense
-              hide-bottom-space
-              aria-label="Warnings"
-            />
-          </label>
-          <label
-            class="column no-wrap q-gutter-y-xs text-caption text-weight-bold text-blue-grey-8"
-          >
-            <span>Group type</span>
-            <q-select
-              v-model="filters.groupType"
-              :options="[
-                { label: 'Any type', value: '' },
-                ...groupTypeOptions.map((type) => ({ label: type, value: type })),
-              ]"
-              emit-value
-              map-options
-              outlined
-              dense
-              hide-bottom-space
-              aria-label="Group type"
-            />
-          </label>
-          <label
-            class="column no-wrap q-gutter-y-xs text-caption text-weight-bold text-blue-grey-8"
-          >
-            <span>Sort by API priority rank</span>
-            <q-select
-              v-model="sortOrder"
-              :options="[
-                { label: 'Highest priority first (ascending rank)', value: 'rank-ascending' },
-                { label: 'Lowest priority first (descending rank)', value: 'rank-descending' },
-              ]"
-              emit-value
-              map-options
-              outlined
-              dense
-              hide-bottom-space
-              aria-label="Sort by API priority rank"
-            />
-          </label>
-        </q-card>
+            <section
+              v-if="visibleSharedLegs.length"
+              class="shared-legs tw:grid tw:min-w-0 tw:gap-2 tw:border-t tw:border-border tw:pt-4"
+              aria-labelledby="shared-legs-title"
+            >
+              <h3 class="tw:m-0! tw:text-sm! tw:font-semibold!" id="shared-legs-title">
+                Shared consolidated legs · each canonical leg shown once
+              </h3>
+              <p class="tw:m-0! tw:text-sm! tw:text-muted-foreground">
+                These API legs are referenced by multiple groups. A shared BUY cannot be toggled
+                independently.
+              </p>
+              <article
+                v-for="leg in visibleSharedLegs"
+                :key="leg.leg_id"
+                class="shared-leg-card tw:min-w-0"
+              >
+                <RecommendationLegDetails :leg="leg" :id="legAnchor(leg.leg_id)" />
+                <p class="tw:mt-2! tw:mb-0! tw:break-words tw:text-sm!">
+                  <strong>Linked groups:</strong> {{ leg.group_ids.join(', ') }}
+                </p>
+                <p
+                  v-if="leg.dependencies.length"
+                  class="tw:mt-1! tw:mb-0! tw:break-words tw:text-sm!"
+                >
+                  <strong>Leg dependencies:</strong> {{ leg.dependencies.join(', ') }}
+                </p>
+              </article>
+            </section>
 
-        <fieldset
-          class="selection-tools row items-end q-gutter-sm q-mb-md q-mr-none q-pa-md"
-          :disabled="!canChangeSelection"
-        >
-          <legend class="q-py-none q-px-xs">Re-solve selected basket</legend>
-          <label
-            class="top-n-control column no-wrap q-gutter-y-xs text-caption text-weight-bold text-blue-grey-8"
-          >
-            <span>Top N groups by API rank</span>
-            <q-input
-              outlined
-              dense
-              hide-bottom-space
-              v-model.number="topN"
-              :disable="!canChangeSelection"
-              type="number"
-              min="1"
-              :max="currentRunGroupCount"
-            />
-          </label>
-          <q-btn
-            no-caps
-            type="button"
-            class="secondary-button"
-            outline
-            color="primary"
-            size="sm"
-            :disable="!canChangeSelection"
-            @click="selectTopGroups"
-          >
-            Select top N and re-solve
-          </q-btn>
-          <q-btn
-            no-caps
-            type="button"
-            class="secondary-button"
-            outline
-            color="primary"
-            size="sm"
-            :disable="!canChangeSelection"
-            @click="clearSelection"
-          >
-            Clear selected groups and re-solve
-          </q-btn>
-          <span v-if="!canChangeSelection" class="read-only-note">
-            Saved, stale, or unverified run context is read-only. Open/run a current matching run to
-            change selection.
-          </span>
-          <span v-else class="read-only-note">
-            Group selection and individual SELL-lot selection re-solve through the API. Shared BUY
-            legs cannot be toggled independently.
-          </span>
-        </fieldset>
+            <Alert
+              v-if="visibleUnlinkedLegs.length"
+              role="region"
+              aria-label="Unlinked API legs"
+              class="tw:gap-2"
+            >
+              <div class="tw:grid tw:min-w-0 tw:gap-2">
+                <h3 class="tw:m-0! tw:text-sm! tw:font-semibold!">
+                  Unlinked API legs — not executable
+                </h3>
+                <article
+                  v-for="leg in visibleUnlinkedLegs"
+                  :key="leg.leg_id"
+                  class="unlinked-leg-card tw:min-w-0"
+                >
+                  <RecommendationLegDetails :leg="leg" :id="legAnchor(leg.leg_id)" />
+                  <p class="tw:mt-2! tw:mb-0! tw:text-sm! tw:text-muted-foreground">
+                    API group references are missing or inconsistent. Do not treat this leg as an
+                    executable recommendation.
+                  </p>
+                </article>
+              </div>
+            </Alert>
+          </CardContent>
+        </Card>
+      </section>
 
-        <p v-if="filteredGroups.length === 0" class="empty-inline q-my-xs q-mx-none">
-          No returned groups match these filters.
-        </p>
-        <div v-else class="group-list">
-          <TradeGroup
-            v-for="group in filteredGroups"
-            :key="group.group_id"
-            :group="group"
-            :legs="groupDetailLegs(group)"
-            :leg-references="groupLegReferences(group)"
-            :sleeve-label="sleeveLabel(group.sleeve_key)"
-            :has-sell-lots="groupSellLotIdsFor(group).length > 0"
-            :has-shared-leg="group.leg_ids.some(isSharedLeg)"
-            :note-draft="noteDrafts[group.group_id] ?? ''"
-            :rejection-draft="rejectionDrafts[group.group_id] ?? ''"
-            :can-change-selection="canChangeSelection"
-            :pending="runPresentation.reviewMutationPending"
-            @group-selection="changeGroupSelection"
-            @lot-selection="changeLotSelection"
-            @note-draft-change="changeNoteDraft"
-            @rejection-draft-change="changeRejectionDraft"
-            @save-note="saveNote"
-            @reject-group="rejectGroup"
-            @restore-group="restoreGroup"
-          />
-        </div>
-
-        <section
-          v-if="visibleSharedLegs.length"
-          class="shared-legs q-pt-md column no-wrap q-gutter-y-sm"
-          aria-labelledby="shared-legs-title"
-        >
-          <h3 class="q-mb-none q-mx-none text-subtitle2 text-blue-grey-9" id="shared-legs-title">
-            Shared consolidated legs · each canonical leg shown once
-          </h3>
-          <p class="q-mr-none q-mb-none q-ml-none text-body2 text-blue-grey-8">
-            These API legs are referenced by multiple groups. A shared BUY cannot be toggled
-            independently.
-          </p>
-          <article v-for="leg in visibleSharedLegs" :key="leg.leg_id" class="shared-leg-card">
-            <RecommendationLegDetails :leg="leg" :id="legAnchor(leg.leg_id)" />
-            <p><strong>Linked groups:</strong> {{ leg.group_ids.join(', ') }}</p>
-            <p v-if="leg.dependencies.length">
-              <strong>Leg dependencies:</strong> {{ leg.dependencies.join(', ') }}
-            </p>
-          </article>
-        </section>
-        <q-banner
-          v-if="visibleUnlinkedLegs.length"
-          dense
-          rounded
-          class="q-mt-sm bg-amber-1 text-brown-10"
-          role="region"
-          aria-label="Unlinked API legs"
-        >
-          <h3 class="q-ma-none text-subtitle2">Unlinked API legs — not executable</h3>
-          <article v-for="leg in visibleUnlinkedLegs" :key="leg.leg_id" class="unlinked-leg-card">
-            <RecommendationLegDetails :leg="leg" :id="legAnchor(leg.leg_id)" />
-            <p>
-              API group references are missing or inconsistent. Do not treat this leg as an
-              executable recommendation.
-            </p>
-          </article>
-        </q-banner>
-      </q-card>
-
-      <q-card
-        tag="section"
-        flat
-        bordered
+      <section
         v-if="!runPresentation.reviewMutationPending"
-        class="export-panel row no-wrap justify-between q-gutter-md items-center q-pa-md"
+        class="export-panel tw:min-w-0"
         aria-label="Recommendation export"
       >
-        <div>
-          <h2 class="q-ma-none text-subtitle1 text-blue-grey-10">Export this API run</h2>
-          <p class="q-mt-xs q-mb-none q-mx-none text-body2 text-blue-grey-7">
-            Exports retain the API run, policy, source generation, as-of time, warnings, and
-            demo/actionability metadata.
-          </p>
-        </div>
-        <q-btn
-          no-caps
-          type="button"
-          class="secondary-button"
-          outline
-          color="primary"
-          size="sm"
-          :disable="store.actionState.exportRun.pending"
-          @click="exportRun('csv')"
-        >
-          Export CSV
-        </q-btn>
-        <q-btn
-          no-caps
-          type="button"
-          class="secondary-button"
-          outline
-          color="primary"
-          size="sm"
-          :disable="store.actionState.exportRun.pending"
-          @click="exportRun('json')"
-        >
-          Export JSON
-        </q-btn>
-      </q-card>
+        <Card class="tw:min-w-0">
+          <CardHeader class="tw:gap-1">
+            <h2 class="tw:m-0! tw:text-base! tw:font-semibold!">Export this API run</h2>
+            <p class="tw:m-0! tw:text-sm! tw:text-muted-foreground">
+              Exports retain the API run, policy, source generation, as-of time, warnings, and
+              demo/actionability metadata.
+            </p>
+          </CardHeader>
+          <CardContent class="tw:flex tw:min-w-0 tw:flex-wrap tw:gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              class="secondary-button tw:whitespace-normal"
+              :disabled="store.actionState.exportRun.pending"
+              @click="exportRun('csv')"
+            >
+              Export CSV
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              class="secondary-button tw:whitespace-normal"
+              :disabled="store.actionState.exportRun.pending"
+              @click="exportRun('json')"
+            >
+              Export JSON
+            </Button>
+          </CardContent>
+        </Card>
+      </section>
     </template>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, watch } from 'vue';
+import { useForm } from '@tanstack/vue-form';
+import type { AcceptableValue } from 'reka-ui';
 import ApiActionError from '@/components/ApiActionError.vue';
 import WorkspaceCapabilityNotice from '@/components/WorkspaceCapabilityNotice.vue';
 import WorkspaceEmptyState from '@/components/WorkspaceEmptyState.vue';
@@ -550,8 +687,35 @@ import TradeGroup from '@/components/TradeGroup.vue';
 import ResourceFreshnessNotice from '@/components/ResourceFreshnessNotice.vue';
 import AllocationTargets from '@/components/AllocationTargets.vue';
 import USAllocationTransition from '@/components/USAllocationTransition.vue';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import {
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  Field as UiField,
+} from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import type { ExportFormat } from '@/services/api';
-import { useWorkspaceStore } from '@/stores/workspace-store';
+import {
+  recommendationRunFormSchema,
+  recommendationFilterDefaults,
+  recommendationFilterFormSchema,
+  recommendationTopNDefaults,
+  recommendationTopNFormSchema,
+  savedRunFormSchema,
+} from '@/forms/recommendations-page';
+import { useWorkspace } from '@/composables/use-workspace';
 import type { RecommendationGroupResponse, RecommendationLegResponse } from '@/types/api';
 import type {
   GroupActionIntent,
@@ -571,7 +735,6 @@ import {
   requestLotSelection,
   sharedLegs,
   unlinkedLegs,
-  type RecommendationFilters,
 } from './recommendations-state';
 
 import { completeFrozenRunSleeveLabels, frozenRunSleeveLabel } from './run-context';
@@ -581,21 +744,61 @@ import {
   selectWorkspaceReadiness,
 } from '@/stores/workspace-selectors';
 
-const store = useWorkspaceStore();
-const savedRunId = ref('');
-const proposedTradeDate = ref('');
-const topN = ref(3);
-const sortOrder = ref<'rank-ascending' | 'rank-descending'>('rank-ascending');
+const store = useWorkspace();
+const runForm = useForm({
+  defaultValues: { proposedTradeDate: '' },
+  validators: { onChange: recommendationRunFormSchema },
+  onSubmit: async ({ value }) => {
+    if (!canRunOptimizer.value) return;
+    try {
+      await store.runOptimizer(
+        value.proposedTradeDate ? { proposed_trade_date: value.proposedTradeDate } : {},
+      );
+    } catch {
+      // The store retains a structured API error for this page.
+    }
+  },
+});
+const savedRunForm = useForm({
+  defaultValues: { savedRunId: '' },
+  validators: { onChange: savedRunFormSchema },
+  onSubmit: async ({ value }) => {
+    const runId = value.savedRunId.trim();
+    if (!runId) return;
+    try {
+      await store.openSavedRun(runId);
+    } catch {
+      // The store retains a structured saved-run error for this page.
+    }
+  },
+});
+const savedRunId = savedRunForm.useSelector((state) => state.values.savedRunId);
+const filterForm = useForm({
+  defaultValues: recommendationFilterDefaults,
+  validators: { onChange: recommendationFilterFormSchema },
+});
+const filters = filterForm.useSelector((state) => state.values);
+const topNForm = useForm({
+  defaultValues: recommendationTopNDefaults,
+  validators: { onChange: recommendationTopNFormSchema },
+  onSubmit: async ({ value }) => {
+    const run = currentRun.value;
+    if (!run) return;
+    const count = Math.max(0, Math.floor(Number(value.topN) || 0));
+    const selectedGroups = [...run.groups]
+      .filter((group) => !group.rejected && groupSellLotIds(run, group).length > 0)
+      .sort((left, right) => left.rank - right.rank)
+      .slice(0, count);
+    await recalculate({
+      selected_group_ids: selectedGroups.map((group) => group.group_id),
+      selected_sell_lots: Object.fromEntries(
+        selectedGroups.map((group) => [group.group_id, groupSellLotIds(run, group)]),
+      ),
+    });
+  },
+});
 const noteDrafts = reactive<Record<string, string>>({});
 const rejectionDrafts = reactive<Record<string, string>>({});
-const filters = reactive<RecommendationFilters>({
-  sleeve: '',
-  action: '',
-  term: '',
-  benefit: '',
-  warning: '',
-  groupType: '',
-});
 
 const currentRun = computed(() => store.currentRun);
 const savedRunSummary = computed(() => store.currentRunSummary);
@@ -710,14 +913,18 @@ const effectDisplay = computed(() => {
   };
 });
 const effectsDescription = computed(() => runPresentation.value.effectsDescription);
-const sleeveOptions = computed(() =>
-  [...new Set(currentRun.value?.groups.map((group) => group.sleeve_key) ?? [])].sort(),
-);
-const groupTypeOptions = computed(() =>
-  [...new Set(currentRun.value?.groups.map((group) => group.group_type) ?? [])].sort(),
-);
+const sleeveOptions = computed(() => {
+  const keys = new Set<string>(currentRun.value?.groups.map((group) => group.sleeve_key) ?? []);
+  if (filters.value.sleeve) keys.add(filters.value.sleeve);
+  return [...keys].sort();
+});
+const groupTypeOptions = computed(() => {
+  const types = new Set<string>(currentRun.value?.groups.map((group) => group.group_type) ?? []);
+  if (filters.value.groupType) types.add(filters.value.groupType);
+  return [...types].sort();
+});
 const filteredGroups = computed(() =>
-  currentRun.value ? filterGroups(currentRun.value, filters, sortOrder.value) : [],
+  currentRun.value ? filterGroups(currentRun.value, filters.value, filters.value.sortOrder) : [],
 );
 const allCanonicalLegs = computed(() => (currentRun.value ? canonicalLegs(currentRun.value) : []));
 const allSharedLegs = computed(() => (currentRun.value ? sharedLegs(currentRun.value) : []));
@@ -768,6 +975,58 @@ function sleeveLabel(key: string): string {
   return frozenRunSleeveLabel(runDisplayContext.value, key);
 }
 
+function setProposedTradeDate(value: string | number): void {
+  runForm.setFieldValue('proposedTradeDate', String(value));
+}
+
+function setSavedRunId(value: string | number): void {
+  savedRunForm.setFieldValue('savedRunId', String(value));
+}
+
+function setTopN(value: string | number): void {
+  topNForm.setFieldValue('topN', value);
+}
+
+function setSleeveFilter(value: AcceptableValue): void {
+  if (value === 'all-sleeves') filterForm.setFieldValue('sleeve', '');
+  else if (typeof value === 'string' && value.startsWith('key:')) {
+    filterForm.setFieldValue('sleeve', value.slice('key:'.length));
+  }
+}
+
+function setActionFilter(value: AcceptableValue): void {
+  if (value === 'all-actions') filterForm.setFieldValue('action', '');
+  else if (value === 'BUY' || value === 'SELL') filterForm.setFieldValue('action', value);
+}
+
+function setTermFilter(value: AcceptableValue): void {
+  if (value === 'all-terms') filterForm.setFieldValue('term', '');
+  else if (value === 'ST' || value === 'LT') filterForm.setFieldValue('term', value);
+}
+
+function setBenefitFilter(value: AcceptableValue): void {
+  if (value === 'any-benefit') filterForm.setFieldValue('benefit', '');
+  else if (value === 'unavailable') filterForm.setFieldValue('benefit', value);
+}
+
+function setWarningFilter(value: AcceptableValue): void {
+  if (value === 'any-warning-state') filterForm.setFieldValue('warning', '');
+  else if (value === 'with' || value === 'without') filterForm.setFieldValue('warning', value);
+}
+
+function setGroupTypeFilter(value: AcceptableValue): void {
+  if (value === 'all-group-types') filterForm.setFieldValue('groupType', '');
+  else if (typeof value === 'string' && value.startsWith('key:')) {
+    filterForm.setFieldValue('groupType', value.slice('key:'.length));
+  }
+}
+
+function setSortOrder(value: AcceptableValue): void {
+  if (value === 'rank-ascending' || value === 'rank-descending') {
+    filterForm.setFieldValue('sortOrder', value);
+  }
+}
+
 function groupLegsFor(group: RecommendationGroupResponse): RecommendationLegResponse[] {
   if (!currentRun.value) return [];
   return groupLegs(currentRun.value, group).sort((left, right) => left.sequence - right.sequence);
@@ -812,25 +1071,12 @@ function legAnchor(legId: string): string {
   return `leg-${encodeURIComponent(legId)}`;
 }
 
-async function runOptimizer(): Promise<void> {
-  if (!canRunOptimizer.value) return;
-  try {
-    await store.runOptimizer(
-      proposedTradeDate.value ? { proposed_trade_date: proposedTradeDate.value } : {},
-    );
-  } catch {
-    // The store retains a structured API error for this page.
-  }
+function runOptimizer(): void {
+  void runForm.handleSubmit();
 }
 
-async function openSavedRun(): Promise<void> {
-  const runId = savedRunId.value.trim();
-  if (!runId) return;
-  try {
-    await store.openSavedRun(runId);
-  } catch {
-    // The store retains a structured API error for this page.
-  }
+function openSavedRun(): void {
+  void savedRunForm.handleSubmit();
 }
 
 async function recalculate(
@@ -855,21 +1101,8 @@ function changeLotSelection({ groupId, brokerLotId, selected }: LotSelectionInte
   if (!run) return;
   void recalculate(requestLotSelection(run, groupId, brokerLotId, selected));
 }
-
 function selectTopGroups(): void {
-  const run = currentRun.value;
-  if (!run) return;
-  const count = Math.max(0, Math.floor(Number(topN.value) || 0));
-  const selectedGroups = [...run.groups]
-    .filter((group) => !group.rejected && groupSellLotIds(run, group).length > 0)
-    .sort((left, right) => left.rank - right.rank)
-    .slice(0, count);
-  void recalculate({
-    selected_group_ids: selectedGroups.map((group) => group.group_id),
-    selected_sell_lots: Object.fromEntries(
-      selectedGroups.map((group) => [group.group_id, groupSellLotIds(run, group)]),
-    ),
-  });
+  void topNForm.handleSubmit();
 }
 
 function clearSelection(): void {
@@ -964,65 +1197,3 @@ onMounted(() => {
   void store.ensureInitialWorkspace();
 });
 </script>
-
-<style scoped>
-/* Grid gaps use Quasar's spacing scale; negative-margin gutters distort grid tracks. */
-
-.read-only-note,
-.empty-inline,
-.state-message {
-  color: #526c7c;
-  font-size: 0.78rem;
-  line-height: 1.5;
-}
-
-.section-heading > span {
-  color: #657d8b;
-  font-size: 0.76rem;
-}
-.filter-panel label {
-  flex: 1 1 9rem;
-}
-.selection-tools {
-  border: 1px solid #dce6eb;
-  border-radius: 0.65rem;
-  min-width: 0;
-}
-.selection-tools legend {
-  color: #29475a;
-  font-weight: 800;
-}
-.top-n-control {
-  max-width: 13rem;
-}
-.group-list {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  min-width: 0;
-  gap: 8px;
-}
-.shared-legs {
-  border-top: 1px solid #dce6eb;
-}
-.shared-legs > p {
-  color: #526c7c;
-  font-size: 0.78rem;
-}
-
-.export-panel > div {
-  flex: 1 1 20rem;
-}
-
-@media (max-width: 760px) {
-  .section-heading {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .saved-run-form {
-    justify-content: flex-start;
-  }
-  .saved-run-form label {
-    flex: 1 1 100%;
-  }
-}
-</style>

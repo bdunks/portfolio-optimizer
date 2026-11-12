@@ -1,6 +1,7 @@
 <template>
-  <q-page
-    class="workspace-page policy-page q-my-none q-mx-auto q-pa-md"
+  <section
+    class="workspace-page policy-page tw:mx-auto tw:w-full tw:max-w-[1800px] tw:px-4 tw:py-4"
+    aria-labelledby="policy-title"
     :inert="saving || activating"
     :aria-busy="saving || activating"
   >
@@ -11,42 +12,34 @@
       subtitle="Configure versioned sleeve targets, replacement ETF candidates, holding overrides, and every persisted tax and batch setting. Target values remain exact decimal strings."
     >
       <template #actions>
-        <q-btn
-          no-caps
+        <Button
           type="button"
-          class="secondary-button"
-          outline
-          color="primary"
+          variant="outline"
           size="sm"
-          :disable="loading"
+          :disabled="loading"
           @click="refreshPolicy"
         >
           {{ loading ? 'Loading…' : 'Refresh policy list' }}
-        </q-btn>
-        <q-btn
-          unelevated
-          no-caps
+        </Button>
+        <Button
           type="button"
-          class="primary-button"
-          color="primary"
+          variant="default"
           size="sm"
-          :disable="!canSave"
+          class="primary-button"
+          :disabled="!canSave"
           @click="saveDraft"
         >
           {{ saving ? 'Saving…' : 'Save new draft revision' }}
-        </q-btn>
-        <q-btn
-          no-caps
+        </Button>
+        <Button
           type="button"
-          class="secondary-button"
-          outline
-          color="primary"
+          variant="outline"
           size="sm"
-          :disable="!canActivate"
+          :disabled="!canActivate"
           @click="activateSaved"
         >
           {{ activating ? 'Activating…' : 'Activate saved revision' }}
-        </q-btn>
+        </Button>
       </template>
     </WorkspacePageHeader>
 
@@ -56,7 +49,7 @@
       values are preserved as entered.
     </WorkspaceCapabilityNotice>
 
-    <div class="error-stack column no-wrap q-gutter-y-sm" aria-label="Policy request errors">
+    <div class="tw:grid tw:gap-2" aria-label="Policy request errors">
       <ApiActionError
         :error="store.actionState.loadPolicy.error"
         title="Policy could not be loaded"
@@ -77,139 +70,150 @@
 
     <ResourceFreshnessNotice :resources="['portfolio', 'policy']" />
 
-    <q-card
-      tag="section"
-      flat
-      bordered
-      class="revision-panel q-pa-md"
-      aria-labelledby="revision-title"
-    >
-      <div class="section-heading items-center row justify-between q-gutter-md q-mb-md">
-        <div>
-          <h2 class="q-ma-none text-subtitle1 text-blue-grey-10" id="revision-title">
-            Policy revision
-          </h2>
-          <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
-            Revisions are immutable after save. Editing a revision always creates a new revision
-            from the selected source; unsaved form edits are never replaced by refreshes.
-          </p>
-        </div>
-        <q-badge rounded color="teal-1" text-color="teal-10">
-          {{ revisionStatus }}
-        </q-badge>
-      </div>
-      <div class="revision-controls items-end">
-        <label class="field revision-select column no-wrap q-gutter-y-xs">
-          <span>Select source revision</span>
-          <q-select
-            v-model="revisionChoice"
-            :options="[
-              { label: 'New policy (no source revision)', value: '' },
-              ...revisions.map((revision) => ({
-                label: `Revision ${revision.revision_number} · ${revision.status} · ${revision.id}`,
-                value: revision.id,
-              })),
-            ]"
-            emit-value
-            map-options
-            outlined
-            dense
-            hide-bottom-space
-            :disable="saving || activating"
-            aria-label="Select policy source revision"
-            @update:model-value="requestRevisionChange"
-          />
-        </label>
-        <div class="revision-id column no-wrap q-gutter-y-xs">
-          <span>Source revision ID</span>
-          <code>{{ sourceRevisionId ?? 'None — creating the first policy revision' }}</code>
-        </div>
-        <q-btn
-          no-caps
-          type="button"
-          class="text-button"
-          flat
-          color="primary"
-          size="sm"
-          :disable="loading"
-          @click="refreshPolicy"
+    <section class="revision-panel" aria-labelledby="revision-title">
+      <Card>
+        <CardHeader
+          class="tw:gap-3 tw:md:flex tw:md:flex-row tw:md:items-start tw:md:justify-between"
         >
-          Load latest revisions
-        </q-btn>
-      </div>
-      <q-banner
-        v-if="pendingRevisionId !== null"
-        dense
-        rounded
-        class="q-gutter-y-sm bg-amber-1 text-brown-10"
-        role="alert"
-      >
-        <p class="q-mr-none q-mb-none q-ml-none">
-          There are unsaved edits. Loading another revision will discard them.
-        </p>
-        <div class="button-row row q-gutter-sm items-center">
-          <q-btn
-            unelevated
-            no-caps
-            type="button"
-            class="primary-button"
-            color="primary"
-            size="sm"
-            :disable="!canSave"
-            @click="saveAndLoadRevision"
+          <div class="tw:space-y-2">
+            <h2 id="revision-title" class="tw:m-0! tw:text-lg tw:font-semibold tw:leading-tight">
+              Policy revision
+            </h2>
+            <p class="tw:m-0! tw:max-w-prose tw:text-sm tw:text-muted-foreground">
+              Revisions are immutable after save. Editing a revision always creates a new revision
+              from the selected source; unsaved form edits are never replaced by refreshes.
+            </p>
+          </div>
+          <Badge as="span" variant="secondary" role="status">{{ revisionStatus }}</Badge>
+        </CardHeader>
+        <CardContent class="tw:grid tw:gap-4">
+          <div class="tw:grid tw:items-end tw:gap-4 tw:md:grid-cols-[minmax(0,1fr)_auto_auto]">
+            <revisionForm.Field name="revisionId">
+              <template #default="{ field }">
+                <Field class="tw:max-w-xl">
+                  <FieldLabel for="policy-revision-select">Select source revision</FieldLabel>
+                  <Select
+                    :model-value="revisionSelectValue"
+                    :disabled="saving || activating"
+                    @update:model-value="handleRevisionSelection"
+                  >
+                    <SelectTrigger
+                      id="policy-revision-select"
+                      aria-label="Select policy source revision"
+                      :aria-invalid="field.state.meta.errors.length ? 'true' : undefined"
+                      :aria-describedby="
+                        field.state.meta.errors.length ? 'policy-revision-select-error' : undefined
+                      "
+                    >
+                      <SelectValue placeholder="Select a policy revision" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem :value="NEW_POLICY_SELECT_VALUE">
+                          New policy (no source revision)
+                        </SelectItem>
+                        <SelectItem
+                          v-for="revision in revisions"
+                          :key="revision.id"
+                          :value="revision.id"
+                        >
+                          Revision {{ revision.revision_number }} · {{ revision.status }} ·
+                          {{ revision.id }}
+                        </SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <FieldError
+                    v-if="field.state.meta.errors.length"
+                    id="policy-revision-select-error"
+                    :errors="field.state.meta.errors"
+                  />
+                </Field>
+              </template>
+            </revisionForm.Field>
+            <div class="tw:grid tw:gap-1">
+              <span class="tw:text-sm tw:font-medium">Source revision ID</span>
+              <code class="tw:break-all tw:text-sm">{{
+                sourceRevisionId ?? 'None — creating the first policy revision'
+              }}</code>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              :disabled="loading"
+              @click="refreshPolicy"
+            >
+              Load latest revisions
+            </Button>
+          </div>
+
+          <Alert
+            v-if="pendingRevisionId !== null"
+            role="alert"
+            class="tw:border-amber-300 tw:bg-amber-50 tw:text-amber-950"
           >
-            Save edits and load
-          </q-btn>
-          <q-btn
-            no-caps
-            type="button"
-            class="secondary-button"
-            outline
-            color="primary"
-            size="sm"
-            :disable="saving || activating"
-            @click="cancelRevisionChange"
+            <AlertDescription class="tw:text-current">
+              <p class="tw:m-0!">
+                There are unsaved edits. Loading another revision will discard them.
+              </p>
+            </AlertDescription>
+            <div class="tw:flex tw:flex-wrap tw:items-center tw:gap-2">
+              <Button
+                type="button"
+                variant="default"
+                size="sm"
+                class="primary-button"
+                :disabled="!canSave"
+                @click="saveAndLoadRevision"
+              >
+                Save edits and load
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                :disabled="saving || activating"
+                @click="cancelRevisionChange"
+              >
+                Keep editing
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                :disabled="saving || activating"
+                @click="discardAndLoadRevision"
+              >
+                Discard edits and load
+              </Button>
+            </div>
+          </Alert>
+          <Alert v-if="dirty" role="status" class="tw:border-sky-200 tw:bg-sky-50">
+            <AlertDescription>
+              Unsaved changes. This draft stays in memory while the workspace is open; reload would
+              discard it. Activation is unavailable until this exact form is saved as a revision.
+            </AlertDescription>
+          </Alert>
+          <Alert
+            v-else-if="savedRevisionId"
+            role="status"
+            class="tw:border-emerald-200 tw:bg-emerald-50"
           >
-            Keep editing
-          </q-btn>
-          <q-btn
-            no-caps
-            type="button"
-            class="danger-button"
-            outline
-            color="negative"
-            size="sm"
-            :disable="saving || activating"
-            @click="discardAndLoadRevision"
+            <AlertDescription>
+              Current form matches saved revision {{ savedRevisionId }}. Only this saved content can
+              be activated.
+            </AlertDescription>
+          </Alert>
+          <p
+            v-else-if="!loading && initialized"
+            class="tw:m-0! tw:text-sm tw:text-muted-foreground"
           >
-            Discard edits and load
-          </q-btn>
-        </div>
-      </q-banner>
-      <q-banner
-        v-if="dirty"
-        dense
-        rounded
-        class="q-mt-md q-mb-none q-mx-none bg-blue-grey-1 text-blue-grey-10"
-        role="status"
-      >
-        Unsaved changes. This draft stays in memory while the workspace is open; reload would
-        discard it. Activation is unavailable until this exact form is saved as a revision.
-      </q-banner>
-      <q-banner
-        v-else-if="savedRevisionId"
-        dense
-        rounded
-        class="q-mt-md q-mb-none q-mx-none bg-green-1 text-green-10"
-        role="status"
-      >
-        Current form matches saved revision {{ savedRevisionId }}. Only this saved content can be
-        activated.
-      </q-banner>
-      <p v-else-if="!loading && initialized" class="state-message q-mt-md q-mb-none q-mx-none">
-        Save this configuration to create an immutable revision before activation.
-      </p>
-    </q-card>
+            Save this configuration to create an immutable revision before activation.
+          </p>
+        </CardContent>
+      </Card>
+    </section>
 
     <PolicySleevesEditor
       :draft="editorState.draft"
@@ -233,91 +237,95 @@
       @update:overrides="updateOverrides"
     />
 
-    <PolicyTaxBatchSettings :settings="settings" @update:settings="updateSettings" />
-    <q-banner
+    <PolicyTaxBatchSettings
+      :settings="settings"
+      :source-revision-id="sourceRevisionId"
+      @update:settings="updateSettings"
+    />
+
+    <Alert
       v-if="formIssues.length"
-      dense
-      rounded
-      class="q-my-sm bg-red-1 text-red-10"
       role="alert"
       aria-label="Form fields that must be completed before saving"
+      variant="destructive"
     >
-      <ul class="q-ma-none q-pl-lg">
-        <li v-for="issue in formIssues" :key="issue">{{ issue }}</li>
-      </ul>
-    </q-banner>
-
-    <q-card
-      tag="section"
-      flat
-      bordered
-      class="activation-panel q-pa-md"
-      aria-labelledby="activation-title"
-    >
-      <div class="section-heading items-center row justify-between q-gutter-md q-mb-md">
-        <div>
-          <h2 class="q-ma-none text-subtitle1 text-blue-grey-10" id="activation-title">
-            Activation validation
-          </h2>
-          <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
-            Invalid exact target sums may be saved as drafts. Only a saved, unchanged revision can
-            be activated; the backend remains authoritative.
-          </p>
-        </div>
-        <q-badge
-          rounded
-          :color="activationIssues.length ? 'amber-1' : 'teal-1'"
-          :text-color="activationIssues.length ? 'brown-10' : 'teal-10'"
-        >
-          {{ activationIssues.length ? 'Needs attention' : 'Target sums valid' }}
-        </q-badge>
-      </div>
-      <q-banner
-        v-if="activationIssues.length"
-        dense
-        rounded
-        class="q-my-md bg-amber-1 text-brown-10"
-        role="status"
-      >
-        <strong>Activation errors for saved revision</strong>
-        <ul class="q-my-sm q-mx-none q-pl-md">
-          <li v-for="issue in activationIssues" :key="issue">{{ issue }}</li>
+      <AlertDescription>
+        <ul class="tw:list-disc tw:pl-5">
+          <li v-for="issue in formIssues" :key="issue">{{ issue }}</li>
         </ul>
-      </q-banner>
-      <p v-else class="success-card q-my-md q-mx-none q-pa-md">
-        No target-sum errors are currently reported. Other backend validation can still reject
-        activation.
-      </p>
-      <p
-        v-if="lastSavedRevision?.activation_errors?.length"
-        class="api-errors-label q-mt-md q-mb-xs q-mx-none"
-      >
-        Backend activation_errors for revision {{ lastSavedRevision.id }}:
-      </p>
-      <ul
-        v-if="lastSavedRevision?.activation_errors?.length"
-        class="backend-errors q-my-sm q-mx-none q-pl-md"
-        aria-label="Backend activation errors"
-      >
-        <li
-          v-for="error in lastSavedRevision.activation_errors"
-          :key="`${error.code}:${error.message}`"
+      </AlertDescription>
+    </Alert>
+
+    <section class="activation-panel" aria-labelledby="activation-title">
+      <Card>
+        <CardHeader
+          class="tw:gap-3 tw:md:flex tw:md:flex-row tw:md:items-start tw:md:justify-between"
         >
-          <strong>{{ error.code }}</strong> — {{ error.message }}
-        </li>
-      </ul>
-      <p class="capability-note q-mt-md q-mb-none q-mx-none q-pt-md">
-        The accepted policy API persists sleeves, ETF candidate metadata, overrides and the fields
-        shown above. It does not expose per-sleeve tracking/exposure tolerances, liquidity limits,
-        or ETF-consolidation preference; those controls are not invented here. Portfolio
-        look-through suitability is stored only as the API's user-entered text.
-      </p>
-    </q-card>
-  </q-page>
+          <div class="tw:space-y-2">
+            <h2 id="activation-title" class="tw:m-0! tw:text-lg tw:font-semibold tw:leading-tight">
+              Activation validation
+            </h2>
+            <p class="tw:m-0! tw:max-w-prose tw:text-sm tw:text-muted-foreground">
+              Invalid exact target sums may be saved as drafts. Only a saved, unchanged revision can
+              be activated; the backend remains authoritative.
+            </p>
+          </div>
+          <Badge
+            as="span"
+            :variant="activationIssues.length ? 'destructive' : 'secondary'"
+            role="status"
+          >
+            {{ activationIssues.length ? 'Needs attention' : 'Target sums valid' }}
+          </Badge>
+        </CardHeader>
+        <CardContent class="tw:grid tw:gap-4">
+          <Alert
+            v-if="activationIssues.length"
+            role="status"
+            class="tw:border-amber-300 tw:bg-amber-50"
+          >
+            <AlertDescription class="tw:text-amber-950">
+              <strong>Activation errors for saved revision</strong>
+              <ul class="tw:mt-2 tw:list-disc tw:pl-5">
+                <li v-for="issue in activationIssues" :key="issue">{{ issue }}</li>
+              </ul>
+            </AlertDescription>
+          </Alert>
+          <p
+            v-else
+            class="tw:m-0! tw:rounded-lg tw:border tw:border-emerald-200 tw:bg-emerald-50 tw:p-4 tw:text-sm"
+          >
+            No target-sum errors are currently reported. Other backend validation can still reject
+            activation.
+          </p>
+          <template v-if="lastSavedRevision?.activation_errors?.length">
+            <p class="tw:m-0! tw:text-sm tw:font-medium">
+              Backend activation_errors for revision {{ lastSavedRevision.id }}:
+            </p>
+            <ul aria-label="Backend activation errors" class="tw:list-disc tw:space-y-1 tw:pl-5">
+              <li
+                v-for="error in lastSavedRevision.activation_errors"
+                :key="`${error.code}:${error.message}`"
+              >
+                <strong>{{ error.code }}</strong> — {{ error.message }}
+              </li>
+            </ul>
+          </template>
+          <p class="tw:m-0! tw:border-t tw:pt-4 tw:text-sm tw:text-muted-foreground">
+            The accepted policy API persists sleeves, ETF candidate metadata, overrides and the
+            fields shown above. It does not expose per-sleeve tracking/exposure tolerances,
+            liquidity limits, or ETF-consolidation preference; those controls are not invented here.
+            Portfolio look-through suitability is stored only as the API's user-entered text.
+          </p>
+        </CardContent>
+      </Card>
+    </section>
+  </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, toRef } from 'vue';
+import { computed, onMounted, toRef, watch } from 'vue';
+import { useForm } from '@tanstack/vue-form';
 import type { AllowedSecurityInput, OverrideInput } from '@/types/api';
 import ApiActionError from '@/components/ApiActionError.vue';
 import WorkspacePageHeader from '@/components/WorkspacePageHeader.vue';
@@ -328,10 +336,27 @@ import PolicyHoldingOverridesEditor from '@/components/PolicyHoldingOverridesEdi
 import PolicyReplacementSetsEditor from '@/components/PolicyReplacementSetsEditor.vue';
 import PolicySleevesEditor from '@/components/PolicySleevesEditor.vue';
 import PolicyTaxBatchSettings from '@/components/PolicyTaxBatchSettings.vue';
-import { useWorkspaceStore } from '@/stores/workspace-store';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { Field, FieldError, FieldLabel } from '@/components/ui/field';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { useWorkspace } from '@/composables/use-workspace';
 import type { EditablePolicyDraft, EditablePolicySettings, EditableSleeve } from './policy-form';
+import {
+  createPolicyRevisionSelectionSchema,
+  type PolicyRevisionFormValues,
+} from '@/forms/policy-revision';
 
-const store = useWorkspaceStore();
+const store = useWorkspace();
 const editor = store.policyEditor;
 const editorState = editor.state;
 const settings = editorState.draft.settings;
@@ -362,6 +387,22 @@ const revisions = computed(() => {
     )
     .sort((left, right) => left.revision_number - right.revision_number);
 });
+const NEW_POLICY_SELECT_VALUE = '__new_policy__';
+const revisionSelectionSchema = createPolicyRevisionSelectionSchema(() =>
+  revisions.value.map((revision) => revision.id),
+);
+const revisionForm = useForm({
+  defaultValues: { revisionId: revisionChoice.value } satisfies PolicyRevisionFormValues,
+  validators: { onChange: revisionSelectionSchema },
+});
+const revisionFormValues = revisionForm.useSelector((state) => state.values);
+const revisionSelectValue = computed(() =>
+  revisionFormValues.value.revisionId === ''
+    ? NEW_POLICY_SELECT_VALUE
+    : revisionFormValues.value.revisionId,
+);
+
+watch(revisionChoice, (revisionId) => revisionForm.reset({ revisionId }), { flush: 'sync' });
 const portfolio = computed(() => (store.portfolio?.status === 'ready' ? store.portfolio : null));
 const revisionStatus = computed(() => {
   if (lastSavedRevision.value?.status === 'ACTIVE')
@@ -499,6 +540,14 @@ function requestRevisionChange(value: string): void {
   editor.requestRevisionChange(value, revisions.value);
 }
 
+function handleRevisionSelection(value: unknown): void {
+  if (typeof value !== 'string') return;
+  const revisionId = value === NEW_POLICY_SELECT_VALUE ? '' : value;
+  revisionForm.setFieldValue('revisionId', revisionId);
+  if (!revisionSelectionSchema.safeParse({ revisionId }).success) return;
+  requestRevisionChange(revisionId);
+  revisionForm.reset({ revisionId: revisionChoice.value });
+}
 function cancelRevisionChange(): void {
   editor.cancelRevisionChange();
 }
@@ -531,4 +580,16 @@ onMounted(() => {
 });
 </script>
 
-<style scoped src="../components/policy-editor-sections.css"></style>
+<style scoped>
+.policy-page :deep(.page-actions) {
+  flex-wrap: wrap;
+}
+
+.policy-page > .revision-panel h2,
+.policy-page > .activation-panel h2 {
+  color: var(--foreground);
+  font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+</style>

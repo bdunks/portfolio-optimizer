@@ -56,18 +56,18 @@ Keep remote fetching and cache policy in query/mutation composables, transport a
 - Prefer standard shadcn-vue components, documented variants, and semantic design tokens. Do not create a custom visual design, bespoke theme, or unnecessary component styling.
 - Keep work limited to the frontend migration. Preserve existing product behavior, financial meaning, backend/API contracts, routes, and tests; do not introduce live brokerage access or unrelated features.
 - Use the installed `shadcn-vue` skill and its focused rules. Consult the installed shadcn-vue MCP, current CLI documentation, and current upstream documentation/metadata before depending on component APIs or versions. If an expected MCP or capability is unavailable, report it as a blocker.
-- Run `frontend/scripts/quasar-inventory.mjs` at discovery and repeat its candidate audit as shared code and feature slices migrate and before removing Quasar. Treat its findings as candidates for review, not proof of completeness.
+- Run `frontend/scripts/quasar-inventory.mjs` at discovery and repeat its candidate audit as shared code and feature slices migrate and before retiring legacy setup. Treat its findings as candidates for review, not proof of completeness.
 
 ## Preserve application contracts
 
-Use `frontend/quasar.config.ts` as the authoritative source for current runtime behavior while replacing its tooling. Preserve:
+Use `frontend/vite.config.ts` as the authoritative source for current runtime behavior. Preserve:
 
 - Local-only binding to `127.0.0.1`, port `9000`, and strict port selection.
 - `PORTFOLIO_API_TARGET` behavior, including the default target `http://127.0.0.1:8000`, and `/api/v1` plus `/health` proxies.
 - Hash-based Vue Router behavior and the production `dist/spa` output contract.
 - Existing environment handling, entry/router/store initialization, and functional development and production serving.
 
-Plan CSS coexistence explicitly while Quasar and migrated code temporarily run together. Identify and control resets, global styles, CSS variables, fonts, and utility collisions; verify that both migrated and not-yet-migrated views remain functional at every intermediate step.
+Plan CSS coexistence explicitly while existing and migrated code temporarily run together. Identify and control resets, global styles, CSS variables, fonts, and utility collisions; verify that both migrated and not-yet-migrated views remain functional at every intermediate step.
 
 ## Implementation sequence and technical requirements
 
@@ -76,13 +76,13 @@ Plan CSS coexistence explicitly while Quasar and migrated code temporarily run t
 3. **Preserve financial and form semantics.** Use TanStack Form with Zod for typed form state and validation. Preserve existing financial `Decimal` precision for money, tax, and cash decisions; do not convert exact financial checks to floating-point `Number` arithmetic.
 4. **Preserve interactive data tables.** Use TanStack Table for required table state and behavior, including sorting, filtering, pagination, and selection, while retaining accessible labels, clear empty/loading/error states, and usable narrow-screen layouts.
 5. **Preserve accessible chart behavior.** Use TanStack Charts only after verified Vue compatibility. Provide accessible text summaries or equivalent non-visual data, handle container resizing, and clean up observers/listeners on unmount.
-6. **Remove Quasar only after audits.** Replace remaining framework-dependent code, tests, helpers, styles, generated types, configuration, and documentation. Repeat the inventory audit, inspect every remaining candidate, and confirm no active Quasar runtime or dependency remains before uninstalling its packages and deleting obsolete setup.
+6. **Retire the legacy UI framework only after audits.** Replace remaining framework-dependent code, tests, helpers, styles, generated types, configuration, and documentation. Repeat the inventory audit, inspect every remaining candidate, and confirm no active legacy UI framework runtime or dependency remains before uninstalling its packages and deleting obsolete setup.
 
 ## Completion and evidence
 
 The migration is complete only when all of the following are verified and recorded with actual outcomes:
 
-- No active Quasar dependency, runtime API, generated setup, stylesheet, or tooling remains.
+- No active legacy UI framework dependency, runtime API, generated setup, stylesheet, or tooling remains.
 - A clean dependency installation, local development startup, production build and serving, lint, typecheck, unit, integration, and E2E checks pass as applicable.
 - Every route is reviewed in a browser at desktop and mobile sizes, including keyboard/focus behavior, navigation, financial tables, and charts. Compilation and automated tests alone are not visual approval.
 - The final handoff records resolved package versions, significant compatibility decisions, commands and results, and any remaining issues.

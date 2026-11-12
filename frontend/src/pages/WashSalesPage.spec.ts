@@ -1,11 +1,10 @@
 // @vitest-environment jsdom
-import { flushPromises, mount } from '@vue/test-utils';
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import type { WashSalesResponse } from '@/types/api';
 import WashSalesPage from './WashSalesPage.vue';
-import { QBadge, QBanner, QCard, QMarkupTable, QSelect } from 'quasar';
-import { setQuasarModelValue } from '@/test-utils/quasar-mount';
+import { Select } from '@/components/ui/select';
 
 const response: WashSalesResponse = {
   demo: true,
@@ -29,6 +28,16 @@ const response: WashSalesResponse = {
       transaction_time: '2025-02-10T14:30:00Z',
       shares: '0.5000',
       source: 'synthetic-history',
+      is_acquisition: false,
+    },
+    {
+      broker_transaction_key: 'TX-DIV-3',
+      ticker: 'SYN',
+      transaction_kind: 'DIVIDEND',
+      trade_date: '2025-02-11',
+      transaction_time: '2025-02-11T14:30:00Z',
+      shares: '0.0100',
+      source: 'synthetic-dividend-source',
       is_acquisition: false,
     },
   ],
@@ -69,11 +78,41 @@ const response: WashSalesResponse = {
   warnings: ['Synthetic coverage warning; no live validation.'],
 };
 
+const emptyResponse: WashSalesResponse = {
+  demo: true,
+  source: 'synthetic-empty-source',
+  history: [],
+  acquisitions: [],
+  current_restrictions: [],
+  proposed_restrictions: [],
+  warnings: [],
+};
+
+const mountedWrappers: VueWrapper[] = [];
+
+function mountWashSalesPage(): VueWrapper {
+  const wrapper = mount(WashSalesPage);
+  mountedWrappers.push(wrapper);
+  return wrapper;
+}
+
+function rootElement(wrapper: VueWrapper): HTMLElement {
+  return wrapper.element as HTMLElement;
+}
+
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+function tableByCaption(wrapper: VueWrapper, captionText: string): HTMLTableElement {
+  const table = Array.from(rootElement(wrapper).querySelectorAll('table')).find(
+    (candidate) => candidate.caption?.textContent?.replace(/\s+/g, ' ').trim() === captionText,
+  );
+  if (!table) throw new Error(`Wash-sales table not found: ${captionText}`);
+  return table;
 }
 
 beforeEach(() => {
@@ -82,98 +121,149 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  mountedWrappers.splice(0).forEach((wrapper) => wrapper.unmount());
   vi.unstubAllGlobals();
 });
 
 describe('WashSalesPage', () => {
-  it('renders API history, current and proposed restrictions, next eligible dates, and coverage limits', async () => {
-    const fetcher = vi.fn<typeof fetch>(() => Promise.resolve(jsonResponse(response)));
-    vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(WashSalesPage);
-    await flushPromises();
-    const cards = wrapper.findAllComponents(QCard);
-    expect(cards).toHaveLength(4);
-    expect(wrapper.get('form[aria-label="Wash-sale filters"]').classes()).toContain('q-card');
-    expect(wrapper.get('.coverage-card').element.tagName).toBe('SECTION');
-    expect(wrapper.get('.data-card[aria-labelledby="history-title"]').element.tagName).toBe(
-      'SECTION',
+  it('renders accessible history and labeled current/proposed restrictions', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(() => Promise.resolve(jsonResponse(response))),
     );
-    const markupTables = wrapper.findAllComponents(QMarkupTable);
-    expect(markupTables).toHaveLength(3);
-    expect(
-      markupTables.map((markup) =>
-        markup.element.querySelector('caption')?.textContent?.replace(/\s+/g, ' ').trim(),
-      ),
-    ).toEqual([
+    const wrapper = mountWashSalesPage();
+    await flushPromises();
+
+    expect(wrapper.get('[data-wash-sales-root]').attributes('aria-labelledby')).toBe('wash-title');
+    const tables = Array.from(rootElement(wrapper).querySelectorAll('table'));
+    expect(tables.map((table) => table.caption?.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
       'Acquisition history with API-provided lookback dates',
       'Managed-account transaction history returned by the API',
       'Current and proposed purchase restrictions',
     ]);
-    for (const markup of markupTables) {
-      expect(markup.element.querySelectorAll('table')).toHaveLength(1);
-      const table = markup.element.querySelector('table');
-      expect(table?.querySelectorAll('thead th[scope="col"]')).toHaveLength(
-        table?.querySelectorAll('thead th').length,
-      );
-      expect(markup.element.getAttribute('tabindex')).toBe('0');
-      expect(markup.element.closest('[role="region"]')?.getAttribute('tabindex')).toBe('0');
+
+    const regions = Array.from(rootElement(wrapper).querySelectorAll('[role="region"]'));
+    expect(regions.map((region) => region.getAttribute('aria-label'))).toEqual([
+      'Wash-sale acquisition rows',
+      'Wash-sale transaction history',
+      'Wash-sale purchase restrictions',
+    ]);
+    for (const region of regions) expect(region.getAttribute('tabindex')).toBe('0');
+    for (const table of tables) {
+      const columnHeaders = Array.from(table.querySelectorAll('thead th'));
+      expect(columnHeaders.length).toBeGreaterThan(0);
+      expect(columnHeaders.every((header) => header.getAttribute('scope') === 'col')).toBe(true);
+      const rowHeaders = Array.from(table.querySelectorAll('tbody th'));
+      expect(rowHeaders.length).toBeGreaterThan(0);
+      expect(rowHeaders.every((header) => header.getAttribute('scope') === 'row')).toBe(true);
     }
 
-    expect(wrapper.get('.workspace-page').classes()).toContain('workspace-page');
-    expect(wrapper.text()).toContain('synthetic-test-source');
-    expect(wrapper.text()).toContain('TX-BUY-1');
-    expect(wrapper.text()).toContain('2025-02-03');
-    expect(wrapper.text()).toContain('Current');
-    expect(wrapper.text()).toContain('Proposed');
-    expect(wrapper.text()).toContain('2025-03-14');
-    expect(wrapper.text()).toContain('Synthetic coverage warning; no live validation.');
-    expect(wrapper.text()).toContain('affected tax-lot IDs are not included');
-    expect(wrapper.text()).toContain('DEMO ONLY');
-
-    const provenanceBadge = wrapper.findComponent(QBadge);
-    expect(provenanceBadge.text()).toBe('DEMO');
-    expect(provenanceBadge.attributes('role')).toBe('status');
-    expect(provenanceBadge.props('color')).toBe('amber-1');
-    await wrapper.find('input[type="search"]').setValue('synthetic-proposed-loss');
-    expect(wrapper.text()).toContain('synthetic-proposed-loss');
-    expect(wrapper.text()).not.toContain('synthetic-current-loss');
-  });
-  it('labels API-sourced wash data with the same status widget', async () => {
-    const fetcher = vi.fn<typeof fetch>(() =>
-      Promise.resolve(jsonResponse({ ...response, demo: false })),
+    const historyTable = tableByCaption(
+      wrapper,
+      'Managed-account transaction history returned by the API',
     );
-    vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(WashSalesPage);
-    await flushPromises();
+    expect(historyTable.textContent).toContain('TX-BUY-1');
+    expect(historyTable.textContent).toContain('1.2500');
+    expect(historyTable.textContent).toContain('TX-SELL-2');
+    expect(
+      tableByCaption(wrapper, 'Acquisition history with API-provided lookback dates').textContent,
+    ).toContain('2025-02-03');
 
-    const provenanceBadge = wrapper.findComponent(QBadge);
-    expect(provenanceBadge.text()).toBe('API');
-    expect(provenanceBadge.attributes('role')).toBe('status');
-    expect(provenanceBadge.props('color')).toBe('amber-1');
+    expect(wrapper.text()).toContain('Source: synthetic-test-source');
+    const restrictionRows = Array.from(
+      tableByCaption(wrapper, 'Current and proposed purchase restrictions').querySelectorAll(
+        'tbody tr',
+      ),
+    );
+    expect(
+      restrictionRows.map((row) => row.querySelector('th[scope="row"]')?.textContent?.trim()),
+    ).toEqual(['Current', 'Proposed']);
+    const restrictionsText =
+      tableByCaption(wrapper, 'Current and proposed purchase restrictions').textContent ?? '';
+    expect(restrictionsText).toContain('synthetic-current-source');
+    expect(restrictionsText).toContain('synthetic-proposed-source');
+    expect(restrictionsText).toContain('2025-03-13');
+    expect(restrictionsText).toContain('2025-03-14');
+    expect(wrapper.text()).toContain('Proposed records are not represented as executed sales.');
+    expect(wrapper.text()).toContain('Overall API coverage is unknown beyond returned rows.');
+    expect(wrapper.text()).toContain(
+      'Conflicting-transaction links and affected tax-lot IDs are not included',
+    );
+    expect(wrapper.get('[aria-label="API coverage warnings"]').text()).toContain(
+      'Synthetic coverage warning; no live validation.',
+    );
+    expect(wrapper.get('[data-slot="badge"]').text()).toBe('DEMO');
   });
 
-  it('filters transaction history by kind without changing API-supplied decimal quantities', async () => {
-    const fetcher = vi.fn<typeof fetch>(() => Promise.resolve(jsonResponse(response)));
-    vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(WashSalesPage);
+  it('distinguishes API and demo data and states broker actions are unavailable', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(() => Promise.resolve(jsonResponse({ ...response, demo: false }))),
+    );
+    const wrapper = mountWashSalesPage();
     await flushPromises();
 
-    await setQuasarModelValue(wrapper, QSelect, 'Transaction kind', 'BUY');
-    expect(wrapper.text()).toContain('1.2500');
-    expect(wrapper.text()).not.toContain('TX-SELL-2');
+    expect(wrapper.get('[data-slot="badge"]').text()).toBe('API');
+    expect(wrapper.text()).toContain('DEMO ONLY.');
+    expect(wrapper.text()).toContain('not live E*TRADE validation');
+    expect(wrapper.text()).toContain(
+      'no broker connection, OAuth, preview, or trade submission is available.',
+    );
+    const orderButtons = wrapper
+      .findAll('button')
+      .filter((button) => /place order|preview order/i.test(button.text()));
+    expect(orderButtons).toHaveLength(0);
   });
 
-  it('reports request errors, retries, and displays explicit empty states', async () => {
+  it('filters source fields case-insensitively and by transaction kind', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(() => Promise.resolve(jsonResponse(response))),
+    );
+    const wrapper = mountWashSalesPage();
+    await flushPromises();
+
+    const search = wrapper.get('input[type="search"]');
+    await search.setValue('  TX-bUy-1  ');
+    const historyText =
+      tableByCaption(wrapper, 'Managed-account transaction history returned by the API')
+        .textContent ?? '';
+    expect(historyText).toContain('TX-BUY-1');
+    expect(historyText).not.toContain('TX-SELL-2');
+    const acquisitionText =
+      tableByCaption(wrapper, 'Acquisition history with API-provided lookback dates').textContent ??
+      '';
+    expect(acquisitionText).toContain('TX-BUY-1');
+
+    await search.setValue(' SYNTHETIC-PROPOSED-LOSS ');
+    const restrictions = tableByCaption(wrapper, 'Current and proposed purchase restrictions');
+    expect(restrictions.textContent).toContain('synthetic-proposed-loss');
+    expect(restrictions.textContent).not.toContain('synthetic-current-loss');
+
+    await search.setValue('');
+    const transactionKindSelect = wrapper.findComponent(Select);
+    expect(transactionKindSelect.exists()).toBe(true);
+    transactionKindSelect.vm.$emit('update:modelValue', 'DIVIDEND');
+    await flushPromises();
+
+    const filteredHistory = tableByCaption(
+      wrapper,
+      'Managed-account transaction history returned by the API',
+    );
+    expect(filteredHistory.textContent).toContain('TX-DIV-3');
+    expect(filteredHistory.textContent).not.toContain('TX-BUY-1');
+    expect(filteredHistory.textContent).not.toContain('TX-SELL-2');
+    expect(wrapper.get('#wash-transaction-kind').text()).toContain('DIVIDEND');
+    const restrictionsAfterKind =
+      tableByCaption(wrapper, 'Current and proposed purchase restrictions').textContent ?? '';
+    expect(restrictionsAfterKind).toContain('synthetic-current-loss');
+    expect(restrictionsAfterKind).toContain('synthetic-proposed-loss');
+    expect(restrictionsAfterKind).toContain('2025-03-13');
+    expect(restrictionsAfterKind).toContain('2025-03-14');
+  });
+
+  it('reports a request error, retries, and displays API-provided empty states', async () => {
     let calls = 0;
-    const emptyResponse: WashSalesResponse = {
-      demo: true,
-      source: 'synthetic-empty-source',
-      history: [],
-      acquisitions: [],
-      current_restrictions: [],
-      proposed_restrictions: [],
-      warnings: [],
-    };
     const fetcher = vi.fn<typeof fetch>(() => {
       calls += 1;
       if (calls === 1) {
@@ -192,18 +282,26 @@ describe('WashSalesPage', () => {
       return Promise.resolve(jsonResponse(emptyResponse));
     });
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(WashSalesPage);
+    const wrapper = mountWashSalesPage();
     await flushPromises();
 
-    expect(wrapper.text()).toContain('wash_unavailable');
-    expect(wrapper.text()).toContain('Synthetic wash API error');
-    await wrapper.get('button').trigger('click');
+    expect(wrapper.get('[role="alert"]').text()).toContain('wash_unavailable');
+    expect(wrapper.get('[role="alert"]').text()).toContain('Synthetic wash API error');
+    const retry = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('Retry loading wash data'));
+    if (!retry) throw new Error('Wash-sales retry button is missing');
+    await retry.trigger('click');
     await flushPromises();
+
+    expect(wrapper.text()).toContain('The API returned no acquisition rows.');
     expect(wrapper.text()).toContain('The API returned no transaction-history rows.');
     expect(wrapper.text()).toContain('The API returned no current or proposed restrictions.');
+    expect(wrapper.text()).toContain('The API returned no coverage warnings.');
     expect(calls).toBe(2);
   });
-  it('shows the conditional wash-sale loading state as a polite banner', async () => {
+
+  it('announces loading politely and clears it after the API response', async () => {
     let resolveWashSales!: (value: Response) => void;
     const fetcher = vi.fn<typeof fetch>(
       () =>
@@ -212,22 +310,22 @@ describe('WashSalesPage', () => {
         }),
     );
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(WashSalesPage);
+    const wrapper = mountWashSalesPage();
     await flushPromises();
 
-    const loadingBanner = wrapper
-      .findAllComponents(QBanner)
-      .find((banner) => banner.text().includes('Loading wash-sale history and restrictions'));
-    expect(loadingBanner?.attributes('role')).toBe('status');
-    expect(loadingBanner?.text()).toContain('from the local API');
+    const loading = Array.from(rootElement(wrapper).querySelectorAll('[role="status"]')).find(
+      (notice) => notice.textContent?.includes('Loading wash-sale history and restrictions'),
+    );
+    expect(loading?.getAttribute('aria-live')).toBe('polite');
+    expect(loading?.textContent).toContain('from the local API');
+    expect(wrapper.get('button').attributes('disabled')).toBeDefined();
 
     resolveWashSales(jsonResponse(response));
     await flushPromises();
     expect(
-      wrapper
-        .findAllComponents(QBanner)
-        .some((banner) => banner.text().includes('Loading wash-sale history and restrictions')),
+      Array.from(rootElement(wrapper).querySelectorAll('[role="status"]')).some((notice) =>
+        notice.textContent?.includes('Loading wash-sale history and restrictions'),
+      ),
     ).toBe(false);
-    wrapper.unmount();
   });
 });

@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 import { mount } from '@vue/test-utils';
-import { reactive } from 'vue';
-import { QBanner, QCard, QCheckbox, QMarkupTable, QSelect } from 'quasar';
-import { findQuasarComponent, setQuasarModelValue } from '@/test-utils/quasar-mount';
+import { nextTick, reactive } from 'vue';
 import { describe, expect, it } from 'vitest';
 import PolicyHoldingOverridesEditor from './PolicyHoldingOverridesEditor.vue';
 import PolicyReplacementSetsEditor from './PolicyReplacementSetsEditor.vue';
 import PolicySleevesEditor from './PolicySleevesEditor.vue';
 import PolicyTaxBatchSettings from './PolicyTaxBatchSettings.vue';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Select, SelectItem } from '@/components/ui/select';
 import {
   createEmptyPolicyDraft,
   createEmptyPolicySettings,
@@ -51,29 +51,212 @@ function position(
   };
 }
 
-function expectRealMarkupTable(wrapper: ReturnType<typeof mount>, caption: string): void {
-  expectRealQuasarCard(wrapper);
-  const markup = wrapper.findComponent(QMarkupTable);
-  expect(markup.exists()).toBe(true);
-  expect(markup.attributes('tabindex')).toBe('0');
-  const tables = markup.element.querySelectorAll('table');
-  expect(tables).toHaveLength(1);
-  const table = tables.item(0);
-  expect(table.querySelector('caption')?.textContent?.replace(/\s+/g, ' ').trim()).toBe(caption);
-  const headers = table.querySelectorAll('thead th');
-  expect(headers.length).toBeGreaterThan(0);
-  expect(table.querySelectorAll('thead th[scope="col"]')).toHaveLength(headers.length);
-  const region = markup.element.closest('[role="region"]');
-  expect(region?.getAttribute('tabindex')).toBe('0');
-  expect(region?.getAttribute('aria-label')).toBeTruthy();
+function expectSleeveTable(wrapper: ReturnType<typeof mount>, caption: string): void {
+  const editor = wrapper.find('[data-policy-sleeves-root]');
+  expect(editor.exists()).toBe(true);
+  expect(editor.find('[data-slot="card"]').exists()).toBe(true);
+  const region = editor.find('[role="region"][aria-label="Sleeve allocation policy settings"]');
+  expect(region.exists()).toBe(true);
+  expect(region.attributes('tabindex')).toBe('0');
+  const table = region.get('table');
+  expect(table.find('caption').text().replace(/\s+/g, ' ').trim()).toBe(caption);
+  expect(table.findAll('thead th[scope="col"]').map((header) => header.text().trim())).toEqual([
+    'Order / sleeve key',
+    'Name',
+    'Parent',
+    'Target (%)',
+    'Drift band (pp)',
+    'Designations',
+    'Enabled',
+    'Actions',
+  ]);
+  const controls = editor.findAll(
+    'input, button[data-slot="checkbox"], button[data-slot="select-trigger"]',
+  );
+  const ids = controls.map((control) => control.attributes('id'));
+  expect(ids.every(Boolean)).toBe(true);
+  expect(new Set(ids).size).toBe(ids.length);
 }
 
-function expectRealQuasarCard(wrapper: ReturnType<typeof mount>, tagName = 'section'): void {
-  const card = wrapper.findComponent(QCard);
-  expect(card.exists()).toBe(true);
-  expect(card.element.tagName.toLowerCase()).toBe(tagName);
-  expect(card.classes()).toContain('q-card');
-  expect(card.classes()).toContain('q-pa-md');
+function sleeveCheckbox(wrapper: ReturnType<typeof mount>, labelText: string) {
+  const label = wrapper
+    .findAll('label')
+    .find((candidate) => candidate.text().replace(/\s+/g, ' ').trim() === labelText);
+  if (!label) throw new Error(`Sleeve checkbox label not found: ${labelText}`);
+  const id = label.attributes('for');
+  if (!id) throw new Error(`Sleeve checkbox label is not associated: ${labelText}`);
+  return wrapper.get(`[data-slot="checkbox"][id="${id}"]`);
+}
+
+async function setSleeveCheckboxValue(
+  wrapper: ReturnType<typeof mount>,
+  labelText: string,
+  checked: boolean,
+): Promise<void> {
+  const checkbox = sleeveCheckbox(wrapper, labelText);
+  if (checkbox.attributes('aria-checked') !== String(checked)) await checkbox.trigger('click');
+  await nextTick();
+}
+
+function sleeveDeletionPanel(wrapper: ReturnType<typeof mount>) {
+  return wrapper.findAll('[role="group"]').find((candidate) => candidate.find('h3').exists());
+}
+
+function sleeveSelect(wrapper: ReturnType<typeof mount>, labelText: string) {
+  const label = wrapper
+    .findAll('label')
+    .find((candidate) => candidate.text().replace(/\s+/g, ' ').trim() === labelText);
+  if (!label) throw new Error(`Sleeve select label not found: ${labelText}`);
+  const labelId = label.attributes('id');
+  if (!labelId) throw new Error(`Sleeve select label has no ID: ${labelText}`);
+  const select = wrapper
+    .findAllComponents(Select)
+    .find((candidate) =>
+      candidate.find(`[data-slot="select-trigger"][aria-labelledby="${labelId}"]`).exists(),
+    );
+  if (!select) throw new Error(`Sleeve select not found: ${labelText}`);
+  return {
+    select,
+    triggerId: select
+      .get(`[data-slot="select-trigger"][aria-labelledby="${labelId}"]`)
+      .attributes('id'),
+  };
+}
+
+async function setSleeveSelectValue(
+  wrapper: ReturnType<typeof mount>,
+  labelText: string,
+  optionLabel: string,
+): Promise<void> {
+  const { select, triggerId } = sleeveSelect(wrapper, labelText);
+  const sectionLabel = wrapper.get('[data-policy-sleeves-root]').attributes('aria-labelledby');
+  const sectionId = sectionLabel?.replace(/-title$/, '');
+  if (!sectionId || !triggerId) throw new Error(`Sleeve select has no stable ID: ${labelText}`);
+  let kind: string;
+  if (triggerId.startsWith(`${sectionId}-delete-parent-`)) {
+    kind = `delete-parent-${decodeURIComponent(triggerId.slice(`${sectionId}-delete-parent-`.length))}`;
+  } else if (triggerId.endsWith('-parent')) {
+    kind = 'parent';
+  } else {
+    kind = 'reassignment';
+  }
+  let domainValue: string | null;
+  if (optionLabel === 'Top level') {
+    domainValue = null;
+  } else if (optionLabel === 'Choose destination' || optionLabel === 'Choose new parent') {
+    domainValue = '';
+  } else {
+    const row = wrapper.findAll('tbody tr').find((candidate) => {
+      const nameInput = candidate.find('input[aria-label^="Sleeve display name for "]');
+      const key = candidate.find('.sleeve-key').text().trim();
+      return (
+        (nameInput.exists() &&
+          nameInput.attributes('aria-label') === `Sleeve display name for ${optionLabel}`) ||
+        key.toLowerCase() === optionLabel.toLowerCase()
+      );
+    });
+
+    if (!row) throw new Error(`Sleeve select option not found: ${optionLabel}`);
+    domainValue = row.get('.sleeve-key').text().trim();
+  }
+  const token = `${sectionId}-${kind}-${domainValue === null ? 'none' : `value-${encodeURIComponent(domainValue)}`}`;
+  select.vm.$emit('update:modelValue', token);
+  await nextTick();
+}
+
+function expectOverrideTable(wrapper: ReturnType<typeof mount>, caption: string): HTMLTableElement {
+  const editor = wrapper.find('[data-policy-holding-overrides-root]');
+  expect(editor.exists()).toBe(true);
+  expect(editor.find('[data-slot="card"]').exists()).toBe(true);
+  const region = editor.find('[role="region"][aria-label="Holding sleeve overrides"]');
+  expect(region.exists()).toBe(true);
+  expect(region.attributes('tabindex')).toBe('0');
+  const table = region.get('table');
+  expect(table.find('caption').text().replace(/\s+/g, ' ').trim()).toBe(caption);
+  const headers = table.findAll('thead th[scope="col"]');
+  expect(headers.map((header) => header.text().trim())).toEqual([
+    'Ticker',
+    'Current API resolution',
+    'Explicit override',
+  ]);
+  const controls = table.findAll('button[data-slot="select-trigger"]');
+  const controlIds = controls.map((control) => control.attributes('id'));
+  expect(controlIds.every(Boolean)).toBe(true);
+  expect(new Set(controlIds).size).toBe(controlIds.length);
+  for (const control of controls) {
+    const labelId = control.attributes('aria-labelledby');
+    const label = labelId ? wrapper.element.querySelector(`[id="${labelId}"]`) : null;
+    expect(label?.textContent).toMatch(/^\s*Explicit override for \S+\s*$/);
+  }
+  return table.element;
+}
+function expectReplacementTable(
+  wrapper: ReturnType<typeof mount>,
+  caption: string,
+): HTMLTableElement {
+  const editor = wrapper.find('[data-policy-replacement-sets-root]');
+  expect(editor.exists()).toBe(true);
+  expect(editor.find('[data-slot="card"]').exists()).toBe(true);
+  const region = editor.find('[role="region"][aria-label="Replacement security candidates"]');
+  expect(region.exists()).toBe(true);
+  expect(region.attributes('tabindex')).toBe('0');
+  const table = region.get('table');
+  expect(table.find('caption').text().replace(/\s+/g, ' ').trim()).toBe(caption);
+  expect(table.findAll('thead th[scope="col"]').map((header) => header.text().trim())).toEqual([
+    'Order',
+    'Ticker',
+    'Replacement set ID',
+    'Priority',
+    'Parent sleeve',
+    'Sub-sleeve',
+    'Exposure suitability (API note)',
+    'Enabled',
+    'Actions',
+  ]);
+  return table.element;
+}
+
+function replacementInput(wrapper: ReturnType<typeof mount>, labelText: string) {
+  const label = wrapper
+    .findAll('label')
+    .find((candidate) => candidate.text().replace(/\s+/g, ' ').trim() === labelText);
+  if (!label) throw new Error(`Replacement input label not found: ${labelText}`);
+  const inputId = label.attributes('for');
+  if (!inputId) throw new Error(`Replacement input label is not associated: ${labelText}`);
+  return wrapper.get(`[id="${inputId}"]`);
+}
+
+function overrideSelect(wrapper: ReturnType<typeof mount>, ticker: string) {
+  const row = wrapper
+    .findAll('tbody tr')
+    .find((candidate) => candidate.find('th[scope="row"]').text().trim() === ticker);
+  if (!row) throw new Error(`Override table row not found: ${ticker}`);
+  const select = row.findComponent(Select);
+  if (!select.exists()) throw new Error(`Override select not found: ${ticker}`);
+  return select;
+}
+
+async function setOverrideSelectValue(
+  wrapper: ReturnType<typeof mount>,
+  ticker: string,
+  value: string,
+): Promise<void> {
+  overrideSelect(wrapper, ticker).vm.$emit('update:modelValue', value);
+  await nextTick();
+}
+
+async function openOverrideSelect(
+  wrapper: ReturnType<typeof mount>,
+  ticker: string,
+): Promise<void> {
+  await overrideSelect(wrapper, ticker).get('[data-slot="select-trigger"]').trigger('click');
+  await nextTick();
+}
+
+function findOverrideOption(wrapper: ReturnType<typeof mount>, label: string) {
+  return wrapper
+    .findAllComponents(SelectItem)
+    .find((item) => item.text().replace(/\s+/g, ' ').trim() === label);
 }
 
 describe('purpose-built policy editor sections', () => {
@@ -82,25 +265,37 @@ describe('purpose-built policy editor sections', () => {
     const wrapper = mount(PolicyTaxBatchSettings, {
       props: {
         settings,
+        sourceRevisionId: null,
         'onUpdate:settings': (next: EditablePolicySettings) => Object.assign(settings, next),
       },
     });
-    expectRealQuasarCard(wrapper);
-    const field = (label: string) =>
-      wrapper.findAll('label').find((candidate) => candidate.text().includes(label))!;
+    expect(wrapper.find('section[data-policy-tax-settings-root]').exists()).toBe(true);
+    expect(wrapper.get('[role="heading"][aria-level="2"]').text()).toContain(
+      'Tax & Batch Settings',
+    );
+    const label = (labelText: string) =>
+      wrapper.findAll('label').find((candidate) => candidate.text().includes(labelText))!;
+    const field = (labelText: string) =>
+      wrapper.get(`[id="${label(labelText).attributes('for')}"]`);
 
-    await field('Short-term marginal tax rate').get('input').setValue('0.2500000000000000001');
+    const shortTermLabel = label('Short-term marginal tax rate');
+    const shortTermInput = field('Short-term marginal tax rate');
+    expect(shortTermLabel.attributes('for')).toBe(shortTermInput.attributes('id'));
+    await shortTermInput.setValue('0.2500000000000000001');
     expect(settings.short_term_tax_rate).toBe('0.2500000000000000001');
-    await field('ST loss carryforward').get('input').setValue('');
+    await field('ST loss carryforward').setValue('');
     expect(settings.st_loss_carryforward_usd).toBe('');
-    await field('Maximum sell tickers per batch').get('input').setValue('12');
+    await field('Maximum sell tickers per batch').setValue('12');
     expect(settings.max_sell_tickers_per_batch).toBe('12');
-    await field('Cash reserve').get('input').setValue('0.00');
+    await field('Cash reserve').setValue('0.00');
     expect(settings.cash_reserve_usd).toBe('0.00');
-    await setQuasarModelValue(wrapper, QSelect, 'Prefer ETF buys', false);
+    const preference = wrapper.findComponent(Select);
+    expect(preference.exists()).toBe(true);
+    preference.vm.$emit('update:modelValue', 'disabled');
     expect(settings.prefer_etf_buys).toBe(false);
+    preference.vm.$emit('update:modelValue', 'choose');
+    expect(settings.prefer_etf_buys).toBeNull();
   });
-
   it('gives multiple instances distinct accessible section IDs', () => {
     const host = {
       components: { PolicyTaxBatchSettings },
@@ -108,14 +303,17 @@ describe('purpose-built policy editor sections', () => {
         first: reactive(createEmptyPolicySettings()),
         second: reactive(createEmptyPolicySettings()),
       }),
-      template:
-        '<div><PolicyTaxBatchSettings :settings="first" /><PolicyTaxBatchSettings :settings="second" /></div>',
+      template: `
+        <div>
+          <PolicyTaxBatchSettings :settings="first" source-revision-id="first" />
+          <PolicyTaxBatchSettings :settings="second" source-revision-id="second" />
+        </div>
+      `,
     };
     const wrapper = mount(host);
-    const cards = wrapper.findAllComponents(QCard);
-    expect(cards).toHaveLength(2);
-    expect(cards.map((card) => card.element.tagName.toLowerCase())).toEqual(['section', 'section']);
-    const headings = wrapper.findAll('h2');
+    const sections = wrapper.findAll('section[data-policy-tax-settings-root]');
+    expect(sections).toHaveLength(2);
+    const headings = wrapper.findAll('[role="heading"][aria-level="2"]');
     const ids = headings.map((heading) => heading.attributes('id'));
     expect(new Set(ids).size).toBe(2);
     expect(headings[0]?.element.closest('section')?.getAttribute('aria-labelledby')).toBe(ids[0]);
@@ -139,6 +337,7 @@ describe('purpose-built policy editor sections', () => {
       sleeve('cash', { display_name: 'Cash', is_cash_sleeve: true }),
       sleeve('other', { display_name: 'Other' }),
     ];
+    const originalSleeves = draft.sleeves;
     const wrapper = mount(PolicySleevesEditor, {
       props: {
         draft,
@@ -157,11 +356,17 @@ describe('purpose-built policy editor sections', () => {
         },
       },
     });
-    expectRealMarkupTable(wrapper, 'Configured sleeves and their allocation policy settings');
+    expectSleeveTable(wrapper, 'Configured sleeves and their allocation policy settings');
+    expect(wrapper.text()).toContain(
+      'Top-level targets and every populated nested allocation must total exactly 100%. Drift bands use percentage points. No tolerance, implicit cash sleeve, or normalization is applied. Transition progress uses an explicitly designated destination sub-sleeve and all descendants regardless of security type; it remains unavailable when no destination is configured.',
+    );
 
-    await wrapper.find('input[aria-label="Target percent"]').setValue('45.000000000000001');
+    await wrapper
+      .get('input[aria-label="Target percent for US equities"]')
+      .setValue('45.000000000000001');
+    expect(draft.sleeves).not.toBe(originalSleeves);
     expect(draft.sleeves[0]?.target_pct).toBe('45.000000000000001');
-    await wrapper.find('button[aria-label="Move Direct indexing down"]').trigger('click');
+    await wrapper.get('button[aria-label="Move Direct indexing down"]').trigger('click');
     expect(draft.sleeves.map((item) => item.sleeve_key)).toEqual([
       'us',
       'destination',
@@ -169,48 +374,43 @@ describe('purpose-built policy editor sections', () => {
       'cash',
       'other',
     ]);
-    await wrapper.find('button[aria-label="Move Other up"]').trigger('click');
+    await wrapper.get('button[aria-label="Move Other up"]').trigger('click');
     expect(draft.sleeves.map((item) => item.sleeve_key).slice(-2)).toEqual(['other', 'cash']);
 
-    const container = wrapper.findAllComponents(QCheckbox)[0]!;
-    const otherContainer = wrapper
-      .findAllComponents(QCheckbox)
-      .find(
-        (checkbox) =>
-          checkbox.props().label === 'Direct-index container' &&
-          checkbox.element.closest('tr')?.querySelector('.sleeve-key')?.textContent?.trim() ===
-            'other',
-      )!;
-    const designationCell = otherContainer.element.closest('td');
-    expect(designationCell?.classList.contains('text-caption')).toBe(true);
-    expect(designationCell?.classList.contains('text-blue-grey-8')).toBe(true);
-    otherContainer.vm.$emit('update:modelValue', true);
+    await setSleeveCheckboxValue(wrapper, 'Direct-index container for Other', true);
     expect(draft.sleeves.find((item) => item.sleeve_key === 'us')?.is_direct_index_container).toBe(
       false,
     );
     expect(
       draft.sleeves.find((item) => item.sleeve_key === 'other')?.is_direct_index_container,
     ).toBe(true);
-    expect(container.exists()).toBe(true);
-    expect(draft.sleeves.find((item) => item.sleeve_key === 'cash')?.is_cash_sleeve).toBe(true);
+    await setSleeveCheckboxValue(wrapper, 'Direct-index sleeve for Other', true);
+    expect(draft.sleeves.find((item) => item.sleeve_key === 'legacy')?.is_direct_index_sleeve).toBe(
+      true,
+    );
+    expect(draft.sleeves.find((item) => item.sleeve_key === 'other')?.is_direct_index_sleeve).toBe(
+      true,
+    );
+    await setSleeveCheckboxValue(wrapper, 'Transition destination sub-sleeve for Other', true);
     expect(
       draft.sleeves.find((item) => item.sleeve_key === 'destination')?.is_transition_destination,
+    ).toBe(false);
+    expect(
+      draft.sleeves.find((item) => item.sleeve_key === 'other')?.is_transition_destination,
     ).toBe(true);
+    expect(draft.sleeves.find((item) => item.sleeve_key === 'cash')?.is_cash_sleeve).toBe(true);
 
-    await wrapper
-      .findAll('button')
-      .find(
-        (button) =>
-          button.text() === 'Delete' &&
-          button.element.closest('tr')?.querySelector('.sleeve-key')?.textContent?.trim() === 'us',
-      )!
-      .trigger('click');
-    const deletePanel = wrapper.get('.delete-panel.q-card[role="group"]');
+    await wrapper.get('button[aria-label="Delete US equities"]').trigger('click');
+    const deletePanel = sleeveDeletionPanel(wrapper)!;
     expect(deletePanel.attributes('aria-labelledby')).toBe(deletePanel.get('h3').attributes('id'));
-    await setQuasarModelValue(wrapper, QSelect, 'Holding reassignment destination', 'other');
-    await setQuasarModelValue(wrapper, QSelect, 'New parent for Direct indexing', 'other');
-    await setQuasarModelValue(wrapper, QSelect, 'New parent for Transition destination', 'other');
-    await wrapper.find('button.danger-button:not(.small-button)').trigger('click');
+    await setSleeveSelectValue(wrapper, 'Holding reassignment destination', 'Other');
+    await setSleeveSelectValue(wrapper, 'Move child “Direct indexing” under', 'Other');
+    await setSleeveSelectValue(wrapper, 'Move child “Transition destination” under', 'Other');
+    const confirmDelete = wrapper
+      .findAll('button')
+      .find((button) => button.text() === 'Confirm delete');
+    expect(confirmDelete).toBeDefined();
+    await confirmDelete!.trigger('click');
 
     expect(draft.sleeves.some((item) => item.sleeve_key === 'us')).toBe(false);
     expect(draft.sleeves.find((item) => item.sleeve_key === 'legacy')?.parent_sleeve_key).toBe(
@@ -221,6 +421,148 @@ describe('purpose-built policy editor sections', () => {
     );
     expect(draft.reassignments).toEqual({ us: 'other' });
     expect(draft.reassignmentHoldings).toEqual({ us: ['AAPL'] });
+  });
+
+  it('adds unique new sleeves without coercing blank target and drift strings', async () => {
+    const draft = reactive(createEmptyPolicyDraft());
+    draft.sleeves = [sleeve('sleeve-new-1')];
+    const wrapper = mount(PolicySleevesEditor, {
+      props: {
+        draft,
+        positions: null,
+        targetIssues: [],
+        sourceRevisionId: null,
+        'onUpdate:sleeves': (next: EditableSleeve[]) => {
+          draft.sleeves = next;
+        },
+      },
+    });
+
+    const addButton = wrapper.findAll('button').find((button) => button.text() === 'Add sleeve');
+    expect(addButton).toBeDefined();
+    await addButton!.trigger('click');
+
+    expect(draft.sleeves.map((item) => item.sleeve_key)).toEqual(['sleeve-new-1', 'sleeve-new-2']);
+    expect(draft.sleeves[1]).toMatchObject({
+      target_pct: '',
+      drift_band_pp: '',
+      parent_sleeve_key: null,
+      enabled: true,
+    });
+    expect(typeof draft.sleeves[1]?.target_pct).toBe('string');
+    expect(typeof draft.sleeves[1]?.drift_band_pp).toBe('string');
+  });
+
+  it('requires an explicit holdings destination when disabling and clears reassignment on reenable', async () => {
+    const draft = reactive(createEmptyPolicyDraft());
+    draft.sleeves = [
+      sleeve('us', { display_name: 'US equities' }),
+      sleeve('other', { display_name: 'Other' }),
+    ];
+    draft.reassignments = { us: 'stale' };
+    draft.reassignmentHoldings = { us: ['OLD'] };
+    const wrapper = mount(PolicySleevesEditor, {
+      props: {
+        draft,
+        positions: [position('AAPL', 'us'), position('BND', null, 'us')],
+        targetIssues: [],
+        sourceRevisionId: null,
+        'onUpdate:sleeves': (next: EditableSleeve[]) => {
+          draft.sleeves = next;
+        },
+        'onUpdate:reassignments': (
+          next: Record<string, string>,
+          holdings: Record<string, string[]>,
+        ) => {
+          draft.reassignments = next;
+          draft.reassignmentHoldings = holdings;
+        },
+      },
+    });
+
+    await setSleeveCheckboxValue(wrapper, 'Enabled US equities', false);
+    expect(draft.sleeves.find((item) => item.sleeve_key === 'us')?.enabled).toBe(false);
+    await setSleeveSelectValue(wrapper, 'Reassign holdings from US equities', 'Other');
+    expect(draft.reassignments).toEqual({ us: 'other' });
+    expect(draft.reassignmentHoldings).toEqual({ us: ['AAPL', 'BND'] });
+
+    await setSleeveCheckboxValue(wrapper, 'Disabled US equities', true);
+    expect(draft.sleeves.find((item) => item.sleeve_key === 'us')?.enabled).toBe(true);
+    expect(draft.reassignments).toEqual({});
+    expect(draft.reassignmentHoldings).toEqual({});
+  });
+
+  it('cancels two-step deletion and resets pending child choices on source revision changes', async () => {
+    const draft = reactive(createEmptyPolicyDraft());
+    draft.sleeves = [
+      sleeve('parent', { display_name: 'Parent' }),
+      sleeve('child', { display_name: 'Child', parent_sleeve_key: 'parent' }),
+      sleeve('other', { display_name: 'Other' }),
+    ];
+    const wrapper = mount(PolicySleevesEditor, {
+      props: {
+        draft,
+        positions: null,
+        targetIssues: [],
+        sourceRevisionId: 'revision-1',
+        'onUpdate:sleeves': (next: EditableSleeve[]) => {
+          draft.sleeves = next;
+        },
+      },
+    });
+
+    await wrapper.get('button[aria-label="Delete Parent"]').trigger('click');
+    await setSleeveSelectValue(wrapper, 'Move child “Child” under', 'Other');
+    const cancelButton = wrapper.findAll('button').find((button) => button.text() === 'Cancel');
+    expect(cancelButton).toBeDefined();
+    await cancelButton!.trigger('click');
+    expect(sleeveDeletionPanel(wrapper) !== undefined).toBe(false);
+    expect(draft.sleeves.map((item) => item.sleeve_key)).toEqual(['parent', 'child', 'other']);
+
+    await wrapper.get('button[aria-label="Delete Parent"]').trigger('click');
+    await setSleeveSelectValue(wrapper, 'Move child “Child” under', 'Other');
+    await wrapper.setProps({ sourceRevisionId: 'revision-2' });
+    expect(sleeveDeletionPanel(wrapper) !== undefined).toBe(false);
+    expect(draft.sleeves.map((item) => item.sleeve_key)).toEqual(['parent', 'child', 'other']);
+  });
+
+  it('displays a top-level child reparent selection before deletion is confirmed', async () => {
+    const draft = reactive(createEmptyPolicyDraft());
+    draft.sleeves = [
+      sleeve('parent', { display_name: 'Parent' }),
+      sleeve('child', { display_name: 'Child', parent_sleeve_key: 'parent' }),
+    ];
+    const wrapper = mount(PolicySleevesEditor, {
+      props: {
+        draft,
+        positions: null,
+        targetIssues: [],
+        sourceRevisionId: 'revision-1',
+        'onUpdate:sleeves': (next: EditableSleeve[]) => {
+          draft.sleeves = next;
+        },
+      },
+    });
+
+    await wrapper.get('button[aria-label="Delete Parent"]').trigger('click');
+    const childParentLabel = 'Move child “Child” under';
+    await setSleeveSelectValue(wrapper, childParentLabel, 'Top level');
+
+    const { triggerId } = sleeveSelect(wrapper, childParentLabel);
+    const childParentTrigger = wrapper.get(`[data-slot="select-trigger"][id="${triggerId}"]`);
+    expect(childParentTrigger.text()).toContain('Top level');
+    expect(draft.sleeves.find((item) => item.sleeve_key === 'child')?.parent_sleeve_key).toBe(
+      'parent',
+    );
+
+    const confirmButton = wrapper
+      .findAll('button')
+      .find((button) => button.text() === 'Confirm delete');
+    expect(confirmButton).toBeDefined();
+    await confirmButton!.trigger('click');
+    expect(draft.sleeves.find((item) => item.sleeve_key === 'parent')).toBeUndefined();
+    expect(draft.sleeves.find((item) => item.sleeve_key === 'child')?.parent_sleeve_key).toBeNull();
+    wrapper.unmount();
   });
 
   it('keeps replacement candidate ordering grouped by set and edits enabled metadata', async () => {
@@ -257,22 +599,28 @@ describe('purpose-built policy editor sections', () => {
         },
       },
     });
-    expectRealMarkupTable(wrapper, 'Configured ETF replacement candidates and policy settings');
-    const enabledToggle = findQuasarComponent(wrapper, QCheckbox, 'Enabled');
-    expect(enabledToggle.classes()).toEqual(
-      expect.arrayContaining(['text-caption', 'text-weight-bold', 'text-blue-grey-8']),
+    const table = expectReplacementTable(
+      wrapper,
+      'Configured ETF replacement candidates and policy settings',
     );
+    const enabledToggle = wrapper.findAllComponents(Checkbox)[0]!;
+    expect(enabledToggle.props('modelValue')).toBe(true);
+    expect(table.querySelectorAll('tbody tr')).toHaveLength(2);
 
     await wrapper.find('button[aria-label="Move VTI down"]').trigger('click');
     expect(draft.allowedSecurities.map((item) => [item.ticker, item.priority])).toEqual([
       ['ITOT', 0],
       ['VTI', 1],
     ]);
-    await wrapper
-      .find('input[aria-label="Exposure suitability note"]')
-      .setValue('Total-market ETF');
+
+    await replacementInput(wrapper, 'Exposure suitability note').setValue('Total-market ETF');
     expect(draft.allowedSecurities[0]?.exposure_suitability).toBe('Total-market ETF');
-    await setQuasarModelValue(wrapper, QCheckbox, 'Enabled', false);
+    const itotRow = wrapper
+      .findAll('tbody tr')
+      .find((row) => row.find('button[aria-label="Remove ITOT"]').exists());
+    if (!itotRow) throw new Error('Replacement row not found: ITOT');
+    itotRow.findComponent(Checkbox).vm.$emit('update:modelValue', false);
+    await nextTick();
     expect(draft.allowedSecurities[0]?.enabled).toBe(false);
     await wrapper.find('button[aria-label="Remove ITOT"]').trigger('click');
     expect(draft.allowedSecurities.map((item) => item.ticker)).toEqual(['VTI']);
@@ -289,11 +637,12 @@ describe('purpose-built policy editor sections', () => {
     draft.overrides = [
       { ticker: 'AAPL', sleeve_key: 'us', sub_sleeve_key: 'direct' },
       { ticker: 'OLD', sleeve_key: 'disabled', sub_sleeve_key: null },
+      { ticker: 'GONE', sleeve_key: 'deleted', sub_sleeve_key: null },
     ];
     const wrapper = mount(PolicyHoldingOverridesEditor, {
       props: {
         draft,
-        positions: [position('AAPL', 'us', 'direct')],
+        positions: [position('AAPL', 'us', 'direct'), position('AAPL', 'us', 'direct')],
         portfolioAvailable: true,
         portfolioLoading: false,
         'onUpdate:overrides': (next) => {
@@ -301,24 +650,69 @@ describe('purpose-built policy editor sections', () => {
         },
       },
     });
-    expectRealMarkupTable(
+    const table = expectOverrideTable(
       wrapper,
       'Current API sleeve resolutions and explicit overrides by ticker',
     );
+    expect(
+      [...table.querySelectorAll('tbody th[scope="row"]')].map((cell) => cell.textContent?.trim()),
+    ).toEqual(['AAPL', 'OLD', 'GONE']);
+    expect(table.querySelectorAll('tbody tr')).toHaveLength(3);
+    expect(table.querySelector('tbody tr:first-child td')?.textContent).toContain('us → direct');
 
-    expect(wrapper.text()).toContain('us → direct');
-    expect(findQuasarComponent(wrapper, QSelect, 'Explicit override for OLD').text()).toContain(
-      'Current assignment — disabled',
-    );
-    await setQuasarModelValue(wrapper, QSelect, 'Explicit override for AAPL', 'other');
-    expect(draft.overrides.find((item) => item.ticker === 'AAPL')).toEqual({
+    await openOverrideSelect(wrapper, 'OLD');
+    const disabledAssignment = wrapper
+      .findAllComponents(SelectItem)
+      .find((item) => item.text().includes('Current assignment — disabled'));
+    expect(disabledAssignment).toBeDefined();
+    expect(disabledAssignment!.props('disabled')).toBe(true);
+    await setOverrideSelectValue(wrapper, 'OLD', 'disabled');
+    expect(draft.overrides[1]).toEqual({
+      ticker: 'OLD',
+      sleeve_key: 'disabled',
+      sub_sleeve_key: null,
+    });
+    await setOverrideSelectValue(wrapper, 'OLD', 'other');
+    expect(draft.overrides[1]).toEqual({
+      ticker: 'OLD',
+      sleeve_key: 'other',
+      sub_sleeve_key: null,
+    });
+
+    await openOverrideSelect(wrapper, 'GONE');
+    const missingAssignment = wrapper
+      .findAllComponents(SelectItem)
+      .find((item) => item.text().includes('Current assignment — missing target'));
+    expect(missingAssignment).toBeDefined();
+    expect(missingAssignment!.props('disabled')).toBe(true);
+    await setOverrideSelectValue(wrapper, 'GONE', 'deleted');
+    expect(draft.overrides[2]).toEqual({
+      ticker: 'GONE',
+      sleeve_key: 'deleted',
+      sub_sleeve_key: null,
+    });
+
+    await openOverrideSelect(wrapper, 'AAPL');
+    const defaultOption = findOverrideOption(wrapper, 'Use default resolution');
+    expect(defaultOption).toBeDefined();
+    const defaultValue = defaultOption!.props('value') as string;
+    await setOverrideSelectValue(wrapper, 'AAPL', 'other');
+    expect(draft.overrides[0]).toEqual({
       ticker: 'AAPL',
       sleeve_key: 'other',
       sub_sleeve_key: null,
     });
-    await setQuasarModelValue(wrapper, QSelect, 'Explicit override for AAPL', '');
-    expect(draft.overrides.map((item) => item.ticker)).toEqual(['OLD']);
+    await setOverrideSelectValue(wrapper, 'AAPL', 'direct');
+    expect(draft.overrides[0]).toEqual({
+      ticker: 'AAPL',
+      sleeve_key: 'us',
+      sub_sleeve_key: 'direct',
+    });
+    await setOverrideSelectValue(wrapper, 'AAPL', defaultValue);
+    expect(draft.overrides.map((item) => item.ticker)).toEqual(['OLD', 'GONE']);
     expect(wrapper.text()).toContain('OLD');
+    expect(wrapper.text()).toContain('GONE');
+    wrapper.unmount();
   });
   it('emits typed section updates without mutating draft props before the parent applies them', async () => {
     const sleeveDraft = reactive(createEmptyPolicyDraft());
@@ -332,7 +726,7 @@ describe('purpose-built policy editor sections', () => {
         sourceRevisionId: 'source',
       },
     });
-    await sleeveWrapper.find('input[aria-label="Target percent"]').setValue('0.00000001');
+    await sleeveWrapper.find('input[aria-label="Target percent for us"]').setValue('0.00000001');
     expect(sleeveDraft.sleeves).toBe(sleevesBefore);
     expect(sleeveDraft.sleeves[0]?.target_pct).toBe('0');
     const sleeveUpdate = sleeveWrapper.emitted('update:sleeves')?.[0]?.[0] as EditableSleeve[];
@@ -353,9 +747,8 @@ describe('purpose-built policy editor sections', () => {
     const replacementWrapper = mount(PolicyReplacementSetsEditor, {
       props: { draft: replacementDraft },
     });
-    await replacementWrapper
-      .find('input[aria-label="Exposure suitability note"]')
-      .setValue('After edit');
+
+    await replacementInput(replacementWrapper, 'Exposure suitability note').setValue('After edit');
     expect(replacementDraft.allowedSecurities).toBe(securitiesBefore);
     expect(replacementDraft.allowedSecurities[0]?.exposure_suitability).toBe('Before edit');
     const securityUpdate = replacementWrapper.emitted('update:allowed-securities')?.[0]?.[0] as {
@@ -375,7 +768,7 @@ describe('purpose-built policy editor sections', () => {
         portfolioLoading: false,
       },
     });
-    await setQuasarModelValue(overrideWrapper, QSelect, 'Explicit override for AAPL', 'other');
+    await setOverrideSelectValue(overrideWrapper, 'AAPL', 'other');
     expect(overrideDraft.overrides).toBe(overridesBefore);
     expect(overrideDraft.overrides[0]?.sleeve_key).toBe('us');
     const overrideUpdate = overrideWrapper.emitted('update:overrides')?.[0]?.[0] as {
@@ -389,7 +782,87 @@ describe('purpose-built policy editor sections', () => {
     replacementWrapper.unmount();
     overrideWrapper.unmount();
   });
-  it('renders policy feedback as explicit polite or assertive Quasar banners', async () => {
+
+  it('resets form selections on same and new draft updates with unique row and instance labels', async () => {
+    const draft = reactive(createEmptyPolicyDraft());
+    draft.sleeves = [sleeve('us'), sleeve('direct', { parent_sleeve_key: 'us' }), sleeve('other')];
+    draft.overrides = [{ ticker: 'AAPL', sleeve_key: 'us', sub_sleeve_key: null }];
+    const wrapper = mount(PolicyHoldingOverridesEditor, {
+      props: {
+        draft,
+        positions: [position('AAPL', 'us')],
+        portfolioAvailable: true,
+        portfolioLoading: false,
+        'onUpdate:overrides': (next) => {
+          draft.overrides = next;
+        },
+      },
+    });
+    const initialControl = overrideSelect(wrapper, 'AAPL');
+    expect(initialControl.props('modelValue')).toBe('us');
+
+    await setOverrideSelectValue(wrapper, 'AAPL', 'other');
+    expect(draft.overrides[0]?.sleeve_key).toBe('other');
+    expect(overrideSelect(wrapper, 'AAPL').props('modelValue')).toBe('other');
+    draft.overrides = [{ ticker: 'AAPL', sleeve_key: 'direct', sub_sleeve_key: null }];
+    await nextTick();
+    expect(overrideSelect(wrapper, 'AAPL').props('modelValue')).toBe('direct');
+
+    const replacementDraft = reactive(createEmptyPolicyDraft());
+    replacementDraft.sleeves = [sleeve('us'), sleeve('other')];
+    replacementDraft.overrides = [{ ticker: 'MSFT', sleeve_key: 'other', sub_sleeve_key: null }];
+    await wrapper.setProps({ draft: replacementDraft, positions: [position('MSFT', 'us')] });
+    expect(overrideSelect(wrapper, 'MSFT').props('modelValue')).toBe('other');
+    const table = expectOverrideTable(
+      wrapper,
+      'Current API sleeve resolutions and explicit overrides by ticker',
+    );
+    expect(
+      [...table.querySelectorAll('tbody th[scope="row"]')].map((cell) => cell.textContent?.trim()),
+    ).toEqual(['MSFT']);
+
+    const siblingDraft = reactive(createEmptyPolicyDraft());
+    siblingDraft.sleeves = [sleeve('us'), sleeve('other')];
+    siblingDraft.overrides = [{ ticker: 'GOOG', sleeve_key: 'us', sub_sleeve_key: null }];
+    const siblings = mount({
+      components: { PolicyHoldingOverridesEditor },
+      setup: () => ({
+        firstDraft: replacementDraft,
+        secondDraft: siblingDraft,
+        firstPositions: [position('MSFT', 'us')],
+        secondPositions: [position('GOOG', 'us')],
+      }),
+      template: `
+        <div>
+          <PolicyHoldingOverridesEditor
+            :draft="firstDraft"
+            :positions="firstPositions"
+            :portfolio-available="true"
+            :portfolio-loading="false"
+          />
+          <PolicyHoldingOverridesEditor
+            :draft="secondDraft"
+            :positions="secondPositions"
+            :portfolio-available="true"
+            :portfolio-loading="false"
+          />
+        </div>
+      `,
+    });
+    const controls = siblings.findAll('button[data-slot="select-trigger"]');
+    expect(controls).toHaveLength(2);
+    expect(new Set(controls.map((control) => control.attributes('id'))).size).toBe(2);
+    const labelIds = controls.map((control) => control.attributes('aria-labelledby'));
+    expect(new Set(labelIds).size).toBe(2);
+    expect(
+      labelIds.map((labelId) =>
+        siblings.element.querySelector(`[id="${labelId}"]`)?.textContent?.trim(),
+      ),
+    ).toEqual(['Explicit override for MSFT', 'Explicit override for GOOG']);
+    wrapper.unmount();
+    siblings.unmount();
+  });
+  it('renders holding feedback with shadcn alerts and accessible roles', async () => {
     const loading = mount(PolicyHoldingOverridesEditor, {
       props: {
         draft: createEmptyPolicyDraft(),
@@ -398,10 +871,54 @@ describe('purpose-built policy editor sections', () => {
         portfolioLoading: true,
       },
     });
-    const loadingBanner = loading.getComponent(QBanner);
+    const loadingBanner = loading.get('[data-slot="alert"]');
     expect(loadingBanner.attributes('role')).toBe('status');
     expect(loadingBanner.text()).toContain('Loading the current single-account holding list');
 
+    const unavailableDraft = reactive(createEmptyPolicyDraft());
+    unavailableDraft.sleeves = [sleeve('us'), sleeve('other')];
+    unavailableDraft.overrides = [{ ticker: 'SAVED', sleeve_key: 'us', sub_sleeve_key: null }];
+    const unavailable = mount(PolicyHoldingOverridesEditor, {
+      props: {
+        draft: unavailableDraft,
+        positions: null,
+        portfolioAvailable: false,
+        portfolioLoading: false,
+      },
+    });
+    expect(unavailable.get('[data-slot="alert"]').text()).toContain(
+      'Current holdings are unavailable. Existing saved overrides remain editable below; no holdings are guessed.',
+    );
+    const unavailableTable = expectOverrideTable(
+      unavailable,
+      'Current API sleeve resolutions and explicit overrides by ticker',
+    );
+    expect(
+      [...unavailableTable.querySelectorAll('tbody th[scope="row"]')].map((cell) =>
+        cell.textContent?.trim(),
+      ),
+    ).toEqual(['SAVED']);
+    expect(unavailable.find('button[data-slot="select-trigger"]').exists()).toBe(true);
+
+    const empty = mount(PolicyHoldingOverridesEditor, {
+      props: {
+        draft: createEmptyPolicyDraft(),
+        positions: [],
+        portfolioAvailable: true,
+        portfolioLoading: false,
+      },
+    });
+    const emptyTable = expectOverrideTable(
+      empty,
+      'Current API sleeve resolutions and explicit overrides by ticker',
+    );
+    expect(emptyTable.querySelector('[data-slot="empty-title"]')?.textContent).toBe(
+      'No current holdings or explicit overrides',
+    );
+    expect(emptyTable.querySelectorAll('tbody th[scope="row"]')).toHaveLength(0);
+    loading.unmount();
+    unavailable.unmount();
+    empty.unmount();
     const invalidDraft = reactive(createEmptyPolicyDraft());
     invalidDraft.sleeves = [sleeve('us')];
     const validation = mount(PolicySleevesEditor, {
@@ -412,10 +929,12 @@ describe('purpose-built policy editor sections', () => {
         sourceRevisionId: null,
       },
     });
-    const validationBanner = validation.getComponent(QBanner);
-    expect(validationBanner.attributes('role')).toBe('status');
-    expect(validationBanner.attributes('aria-live')).toBe('polite');
-    expect(validationBanner.text()).toContain('Enabled targets must sum exactly 100%');
+    const validationAlert = validation.get('[role="status"]');
+    expect(validationAlert.attributes('aria-live')).toBe('polite');
+    expect(validationAlert.text()).toContain('Enabled targets must sum exactly 100%');
+    expect(validationAlert.text()).toContain(
+      'These client-side checks are guidance only; the backend response is authoritative.',
+    );
 
     const errorDraft = reactive(createEmptyPolicyDraft());
     errorDraft.sleeves = [sleeve('parent'), sleeve('child', { parent_sleeve_key: 'parent' })];
@@ -427,11 +946,10 @@ describe('purpose-built policy editor sections', () => {
         sourceRevisionId: null,
       },
     });
-    await setQuasarModelValue(editor, QCheckbox, 'Enabled', false);
-    const alertBanner = editor
-      .findAllComponents(QBanner)
-      .find((banner) => banner.attributes('role') === 'alert');
-    expect(alertBanner).toBeDefined();
-    expect(alertBanner!.text()).toContain('Disable or reparent enabled child sleeves');
+    await setSleeveCheckboxValue(editor, 'Enabled parent', false);
+    const alert = editor.get('[role="alert"]');
+    expect(alert.text()).toBe(
+      'Disable or reparent enabled child sleeves before disabling this parent.',
+    );
   });
 });

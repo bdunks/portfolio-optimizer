@@ -1,366 +1,290 @@
 <template>
-  <q-card tag="section" class="target-panel q-pa-md" :aria-labelledby="`${sectionId}-title`">
-    <div class="section-heading items-center row justify-between q-gutter-md q-mb-md">
-      <div>
-        <h2 class="q-ma-none text-h6" :id="`${sectionId}-title`">Sleeves and allocation targets</h2>
-        <p class="section-subtitle q-mt-sm q-mb-none q-mx-none">
-          Top-level targets and every populated nested allocation must total exactly 100%. Drift
-          bands use percentage points. No tolerance, implicit cash sleeve, or normalization is
-          applied. Transition progress uses an explicitly designated destination sub-sleeve and all
-          descendants regardless of security type; it remains unavailable when no destination is
-          configured.
-        </p>
-      </div>
-      <q-btn
-        no-caps
-        type="button"
-        class="secondary-button"
-        outline
-        color="primary"
-        size="sm"
-        @click="addSleeve"
-        >+ Add sleeve</q-btn
-      >
-    </div>
+  <section
+    class="policy-sleeves-editor-root workspace-foundation tw:min-w-0"
+    data-workspace-foundation
+    data-policy-sleeves-root
+    :aria-labelledby="`${sectionId}-title`"
+  >
+    <Card class="tw:min-w-0">
+      <CardHeader>
+        <div
+          class="tw:flex tw:flex-col tw:gap-4 tw:md:flex-row tw:md:items-start tw:md:justify-between"
+        >
+          <div class="tw:min-w-0 tw:flex-1">
+            <h2 :id="`${sectionId}-title`" class="policy-sleeves-title">
+              Sleeves and allocation targets
+            </h2>
+            <CardDescription class="policy-sleeves-description">
+              Top-level targets and every populated nested allocation must total exactly 100%. Drift
+              bands use percentage points. No tolerance, implicit cash sleeve, or normalization is
+              applied. Transition progress uses an explicitly designated destination sub-sleeve and
+              all descendants regardless of security type; it remains unavailable when no
+              destination is configured.
+            </CardDescription>
+          </div>
+          <Button type="button" variant="outline" size="sm" @click="addSleeve">
+            <Plus aria-hidden="true" />
+            Add sleeve
+          </Button>
+        </div>
+      </CardHeader>
 
-    <q-banner
-      v-if="targetIssues.length"
-      class="q-my-md rounded bg-amber-1 text-brown-10"
-      role="status"
-      aria-live="polite"
-    >
-      <strong>Target check — activation is not valid yet</strong>
-      <ul class="q-my-sm q-mx-none q-pl-md">
-        <li v-for="issue in targetIssues" :key="issue">{{ issue }}</li>
-      </ul>
-      <p class="q-mt-xs q-mb-none q-mx-none">
-        These client-side checks are guidance only; the backend response is authoritative.
-      </p>
-    </q-banner>
-    <q-banner v-else rounded class="q-my-md bg-green-1 text-green-10" role="status">
-      Enabled top-level and nested target sums are exactly 100%.
-    </q-banner>
-    <q-banner
-      v-if="deleteError && !pendingDeleteSleeve"
-      dense
-      rounded
-      class="q-my-sm bg-red-1 text-red-10"
-      role="alert"
-    >
-      {{ deleteError }}
-    </q-banner>
-    <WorkspaceTableFrame label="Sleeve allocation policy settings">
-      <q-markup-table class="editor-table sleeves-table" wrap-cells>
-        <caption class="sr-only">
-          Configured sleeves and their allocation policy settings
-        </caption>
-        <thead>
-          <tr>
-            <th scope="col">Order / sleeve key</th>
-            <th scope="col">Name</th>
-            <th scope="col">Parent</th>
-            <th scope="col">Target (%)</th>
-            <th scope="col">Drift band (pp)</th>
-            <th scope="col">Designations</th>
-            <th scope="col">Enabled</th>
-            <th scope="col">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="(sleeve, index) in sleeves"
-            :key="`${sleeve.sleeve_key}-${index}`"
-            :class="{ 'disabled-row': !sleeve.enabled }"
-          >
-            <td>
-              <div class="order-tools row no-wrap q-gutter-xs q-mb-xs">
-                <q-btn
-                  no-caps
-                  type="button"
-                  class="icon-button"
-                  outline
-                  color="primary"
-                  dense
-                  size="sm"
-                  :aria-label="`Move ${sleeve.display_name || 'sleeve'} up`"
-                  :disable="!canMoveSleeve(index, -1)"
-                  @click="moveSleeve(index, -1)"
-                >
-                  ↑
-                </q-btn>
-                <q-btn
-                  no-caps
-                  type="button"
-                  class="icon-button"
-                  outline
-                  color="primary"
-                  dense
-                  size="sm"
-                  :aria-label="`Move ${sleeve.display_name || 'sleeve'} down`"
-                  :disable="!canMoveSleeve(index, 1)"
-                  @click="moveSleeve(index, 1)"
-                >
-                  ↓
-                </q-btn>
-              </div>
-              <code class="sleeve-key">{{ sleeve.sleeve_key || 'new sleeve' }}</code>
-            </td>
-            <td>
-              <label class="compact-field column no-wrap q-gutter-y-xs"
-                ><span class="sr-only">Sleeve name</span
-                ><q-input
-                  outlined
-                  dense
-                  hide-bottom-space
-                  :model-value="sleeve.display_name"
-                  @update:model-value="
-                    setSleeveText(sleeve.sleeve_key, 'display_name', String($event ?? ''))
-                  "
-                  aria-label="Sleeve display name"
-                  placeholder="Display name"
-              /></label>
-            </td>
-            <td>
-              <label class="compact-field column no-wrap q-gutter-y-xs"
-                ><span class="sr-only">Parent sleeve</span>
-                <q-select
-                  :model-value="sleeve.parent_sleeve_key"
-                  :options="[
-                    { label: 'Top level', value: null },
-                    ...parentOptions(sleeve).map((parent) => ({
-                      label: parent.display_name || parent.sleeve_key,
-                      value: parent.sleeve_key,
-                    })),
-                  ]"
-                  emit-value
-                  map-options
-                  outlined
-                  dense
-                  hide-bottom-space
-                  aria-label="Parent sleeve"
-                  @update:model-value="setSleeveParent(sleeve.sleeve_key, $event)"
-                />
-              </label>
-            </td>
-            <td>
-              <label class="compact-field target-input column no-wrap q-gutter-y-xs"
-                ><span class="sr-only">Target percent</span
-                ><q-input
-                  outlined
-                  dense
-                  hide-bottom-space
-                  :model-value="sleeve.target_pct"
-                  @update:model-value="
-                    setSleeveText(sleeve.sleeve_key, 'target_pct', String($event ?? ''))
-                  "
-                  inputmode="decimal"
-                  aria-label="Target percent"
-                  placeholder="0"
-              /></label>
-            </td>
-            <td>
-              <label class="compact-field target-input column no-wrap q-gutter-y-xs"
-                ><span class="sr-only">Drift band percentage points</span
-                ><q-input
-                  outlined
-                  dense
-                  hide-bottom-space
-                  :model-value="sleeve.drift_band_pp"
-                  @update:model-value="
-                    setSleeveText(sleeve.sleeve_key, 'drift_band_pp', String($event ?? ''))
-                  "
-                  inputmode="decimal"
-                  aria-label="Drift band in percentage points"
-                  placeholder="0"
-              /></label>
-            </td>
-            <td class="designation-cell text-caption text-weight-bold text-blue-grey-8">
-              <q-checkbox
-                dense
-                color="primary"
-                :model-value="sleeve.is_direct_index_container"
-                label="Direct-index container"
-                @update:model-value="setDirectIndexContainer(sleeve.sleeve_key, $event)"
-              />
-              <q-checkbox
-                dense
-                color="primary"
-                :model-value="sleeve.is_direct_index_sleeve"
-                label="Direct-index sleeve"
-                @update:model-value="
-                  setSleeveRole(sleeve.sleeve_key, 'is_direct_index_sleeve', $event)
-                "
-              />
-              <q-checkbox
-                dense
-                color="primary"
-                label="Transition destination sub-sleeve"
-                :model-value="sleeve.is_transition_destination"
-                @update:model-value="setTransitionDestination(sleeve.sleeve_key, $event)"
-              />
-              <q-checkbox
-                dense
-                color="primary"
-                :model-value="sleeve.is_cash_sleeve"
-                label="Cash sleeve"
-                @update:model-value="setSleeveRole(sleeve.sleeve_key, 'is_cash_sleeve', $event)"
-              />
-            </td>
-            <td>
-              <q-checkbox
-                class="text-caption text-weight-bold text-blue-grey-8"
-                dense
-                color="primary"
-                :model-value="sleeve.enabled"
-                :label="sleeve.enabled ? 'Enabled' : 'Disabled'"
-                @update:model-value="setSleeveEnabled(sleeve.sleeve_key, $event)"
-              />
-              <label
-                v-if="!sleeve.enabled"
-                class="compact-field reassignment-field column no-wrap q-gutter-y-xs"
-              >
-                <span>Reassign held assets to</span>
-                <q-select
-                  :model-value="reassignments[sleeve.sleeve_key] ?? ''"
-                  :options="[
-                    { label: 'Choose destination', value: '' },
-                    ...reassignmentOptions(sleeve.sleeve_key).map((target) => ({
-                      label: target.display_name || target.sleeve_key,
-                      value: target.sleeve_key,
-                    })),
-                  ]"
-                  emit-value
-                  map-options
-                  outlined
-                  dense
-                  hide-bottom-space
-                  :aria-label="`Reassign holdings from ${sleeve.display_name || sleeve.sleeve_key}`"
-                  @update:model-value="setReassignment(sleeve.sleeve_key, $event)"
-                />
-              </label>
-            </td>
-            <td>
-              <q-btn
-                no-caps
-                type="button"
-                class="danger-button small-button"
-                outline
-                color="negative"
-                size="0.68rem"
-                @click="beginDeleteSleeve(sleeve.sleeve_key)"
-              >
-                Delete
-              </q-btn>
-            </td>
-          </tr>
-          <tr v-if="sleeves.length === 0">
-            <td colspan="8" class="empty-cell">
-              No sleeves configured. Add a sleeve and enter its policy values.
-            </td>
-          </tr>
-        </tbody>
-      </q-markup-table>
-    </WorkspaceTableFrame>
-    <q-card
-      tag="div"
-      v-if="pendingDeleteSleeve"
-      bordered
-      class="delete-panel q-pa-md column no-wrap q-gutter-y-sm"
-      role="group"
-      :aria-labelledby="`${sectionId}-delete-title`"
-    >
-      <h3 class="q-mr-none q-mb-none q-ml-none text-subtitle1" :id="`${sectionId}-delete-title`">
-        Delete {{ pendingDeleteSleeve.display_name || pendingDeleteSleeve.sleeve_key }}
-      </h3>
-      <p class="q-mr-none q-mb-none q-ml-none">
-        Choose an enabled destination for any holdings currently assigned here. Reassignments are
-        explicit; no holdings are silently orphaned.
-      </p>
-      <label
-        v-if="heldInSleeve(pendingDeleteSleeve.sleeve_key).length"
-        class="field column no-wrap q-gutter-y-xs"
-      >
-        <span>Holding reassignment destination</span>
-        <q-select
-          v-model="deleteTargetKey"
-          :options="[
-            { label: 'Choose destination', value: '' },
-            ...reassignmentOptions(pendingDeleteSleeve.sleeve_key).map((target) => ({
-              label: target.display_name || target.sleeve_key,
-              value: target.sleeve_key,
-            })),
-          ]"
-          emit-value
-          map-options
-          outlined
-          dense
-          hide-bottom-space
-          aria-label="Holding reassignment destination"
-        />
-      </label>
-      <div
-        v-for="child in childrenOf(pendingDeleteSleeve.sleeve_key)"
-        :key="child.sleeve_key"
-        class="reparent-row"
-      >
-        <label class="field column no-wrap q-gutter-y-xs"
-          ><span>Move child “{{ child.display_name || child.sleeve_key }}” under</span>
-          <q-select
-            v-model="childReparents[child.sleeve_key]"
-            :options="[
-              { label: 'Choose new parent', value: '' },
-              { label: 'Top level', value: null },
-              ...reparentOptions(pendingDeleteSleeve.sleeve_key, child.sleeve_key).map(
-                (parent) => ({
-                  label: parent.display_name || parent.sleeve_key,
-                  value: parent.sleeve_key,
-                }),
-              ),
-            ]"
-            emit-value
-            map-options
-            outlined
-            dense
-            hide-bottom-space
-            :aria-label="`New parent for ${child.display_name || child.sleeve_key}`"
-          />
-        </label>
-      </div>
-      <q-banner v-if="deleteError" dense rounded class="q-my-sm bg-red-1 text-red-10" role="alert">
-        {{ deleteError }}
-      </q-banner>
-      <div class="button-row row q-gutter-sm items-center">
-        <q-btn
-          no-caps
-          type="button"
-          class="danger-button"
-          outline
-          color="negative"
-          size="sm"
-          @click="confirmDeleteSleeve"
+      <CardContent class="tw:min-w-0">
+        <Alert
+          v-if="targetIssues.length"
+          role="status"
+          aria-live="polite"
+          class="tw:mb-4 tw:border-muted-foreground/20 tw:bg-muted/30"
         >
-          Confirm delete
-        </q-btn>
-        <q-btn
-          no-caps
-          type="button"
-          class="text-button"
-          flat
-          color="primary"
-          size="sm"
-          @click="cancelDeleteSleeve"
-          >Cancel</q-btn
+          <AlertTitle>Target check — activation is not valid yet</AlertTitle>
+          <AlertDescription>
+            <ul class="tw:list-disc tw:pl-5">
+              <li v-for="issue in targetIssues" :key="issue">{{ issue }}</li>
+            </ul>
+            <p class="tw:mt-2">
+              These client-side checks are guidance only; the backend response is authoritative.
+            </p>
+          </AlertDescription>
+        </Alert>
+        <Alert v-else role="status" class="tw:mb-4 tw:border-primary/30 tw:bg-primary/5">
+          <AlertDescription>
+            Enabled top-level and nested target sums are exactly 100%.
+          </AlertDescription>
+        </Alert>
+
+        <Alert
+          v-if="deleteError && !pendingDeleteSleeve"
+          variant="destructive"
+          role="alert"
+          class="tw:mb-4"
         >
-      </div>
-    </q-card>
-  </q-card>
+          <AlertDescription>{{ deleteError }}</AlertDescription>
+        </Alert>
+
+        <Table
+          role="region"
+          aria-label="Sleeve allocation policy settings"
+          tabindex="0"
+          class="tw:min-w-[88rem]"
+        >
+          <TableCaption class="tw:sr-only">
+            Configured sleeves and their allocation policy settings
+          </TableCaption>
+          <TableHeader>
+            <TableRow v-for="headerGroup in table.getHeaderGroups()" :key="headerGroup.id">
+              <TableHead v-for="header in headerGroup.headers" :key="header.id" scope="col">
+                <FlexRender v-if="!header.isPlaceholder" :header="header" />
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <sleeveForm.Field name="sleeves">
+            <template #default>
+              <TableBody>
+                <TableRow v-for="row in tableRows" :key="row.id">
+                  <template v-for="cell in row.getAllCells()" :key="cell.id">
+                    <TableHead
+                      v-if="cell.column.id === 'order'"
+                      scope="row"
+                      class="tw:text-left tw:font-medium"
+                    >
+                      <FlexRender :cell="cell" />
+                    </TableHead>
+                    <TableCell v-else>
+                      <FlexRender :cell="cell" />
+                    </TableCell>
+                  </template>
+                </TableRow>
+                <TableEmpty v-if="tableRows.length === 0" :colspan="8">
+                  <Empty class="tw:border-0 tw:bg-transparent">
+                    <EmptyHeader>
+                      <EmptyTitle>No sleeves configured</EmptyTitle>
+                      <EmptyDescription>
+                        No sleeves configured. Add a sleeve and enter its policy values.
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                </TableEmpty>
+              </TableBody>
+            </template>
+          </sleeveForm.Field>
+        </Table>
+
+        <sleeveForm.Field name="deletion">
+          <template #default="{ field }">
+            <Card
+              v-if="pendingDeleteSleeve"
+              role="group"
+              class="tw:mt-4 tw:min-w-0"
+              :aria-labelledby="`${sectionId}-delete-title`"
+            >
+              <CardHeader>
+                <h3 :id="`${sectionId}-delete-title`" class="policy-sleeves-delete-title">
+                  Delete {{ pendingDeleteSleeve.display_name || pendingDeleteSleeve.sleeve_key }}
+                </h3>
+                <CardDescription>
+                  Choose an enabled destination for any holdings currently assigned here.
+                  Reassignments are explicit; no holdings are silently orphaned.
+                </CardDescription>
+              </CardHeader>
+              <CardContent class="tw:min-w-0 tw:gap-3">
+                <FieldGroup class="tw:gap-3">
+                  <Field v-if="heldInSleeve(pendingDeleteSleeve.sleeve_key).length">
+                    <FieldLabel
+                      :id="`${sectionId}-delete-holdings-label`"
+                      :for="`${sectionId}-delete-holdings`"
+                    >
+                      Holding reassignment destination
+                    </FieldLabel>
+                    <Select
+                      :model-value="
+                        selectedOptionValue(
+                          deletionTargetOptions,
+                          'delete-holdings',
+                          field.state.value.targetKey,
+                        )
+                      "
+                      @update:model-value="
+                        setDeletionTarget(field.state.value, String($event ?? ''))
+                      "
+                    >
+                      <SelectTrigger
+                        :id="`${sectionId}-delete-holdings`"
+                        :aria-labelledby="`${sectionId}-delete-holdings-label`"
+                        class="tw:w-full"
+                      >
+                        <SelectValue placeholder="Choose destination" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem
+                            v-for="option in deletionTargetOptions"
+                            :key="option.value"
+                            :value="option.value"
+                          >
+                            {{ option.label }}
+                          </SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+
+                  <FieldGroup
+                    v-for="child in childrenOf(pendingDeleteSleeve.sleeve_key)"
+                    :key="child.sleeve_key"
+                    class="tw:min-w-0"
+                  >
+                    <Field>
+                      <FieldLabel
+                        :id="`${sectionId}-delete-parent-${encodeURIComponent(child.sleeve_key)}-label`"
+                        :for="`${sectionId}-delete-parent-${encodeURIComponent(child.sleeve_key)}`"
+                      >
+                        Move child “{{ child.display_name || child.sleeve_key }}” under
+                      </FieldLabel>
+                      <Select
+                        :model-value="
+                          selectedOptionValue(
+                            deletionParentOptions(pendingDeleteSleeve.sleeve_key, child.sleeve_key),
+                            `delete-parent-${child.sleeve_key}`,
+                            field.state.value.childReparents[child.sleeve_key],
+                          )
+                        "
+                        @update:model-value="
+                          setDeletionParent(
+                            field.state.value,
+                            child.sleeve_key,
+
+                            String($event ?? ''),
+                          )
+                        "
+                      >
+                        <SelectTrigger
+                          :id="`${sectionId}-delete-parent-${encodeURIComponent(child.sleeve_key)}`"
+                          :aria-labelledby="`${sectionId}-delete-parent-${encodeURIComponent(child.sleeve_key)}-label`"
+                          class="tw:w-full"
+                        >
+                          <SelectValue placeholder="Choose new parent" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            <SelectItem
+                              v-for="option in deletionParentOptions(
+                                pendingDeleteSleeve.sleeve_key,
+                                child.sleeve_key,
+                              )"
+                              :key="option.value"
+                              :value="option.value"
+                            >
+                              {{ option.label }}
+                            </SelectItem>
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                  </FieldGroup>
+                </FieldGroup>
+
+                <Alert v-if="deleteError" variant="destructive" role="alert">
+                  <AlertDescription>{{ deleteError }}</AlertDescription>
+                </Alert>
+                <div class="tw:flex tw:flex-wrap tw:items-center tw:gap-2">
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    @click="confirmDeleteSleeve"
+                  >
+                    <Trash2 aria-hidden="true" />
+                    Confirm delete
+                  </Button>
+                  <Button type="button" variant="ghost" size="sm" @click="cancelDeleteSleeve">
+                    Cancel
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </template>
+        </sleeveForm.Field>
+      </CardContent>
+    </Card>
+  </section>
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, useId, watch } from 'vue';
-import WorkspaceTableFrame from '@/components/WorkspaceTableFrame.vue';
-import type { PositionResponse } from '@/types/api';
+import { useForm } from '@tanstack/vue-form';
+import { FlexRender, tableFeatures as createTableFeatures, useTable } from '@tanstack/vue-table';
+import type { ColumnDef } from '@tanstack/vue-table';
+import { Plus, Trash2 } from '@lucide/vue';
+import type { Component } from 'vue';
+import { computed, h, shallowRef, useId, watch } from 'vue';
+import PolicySleeveTableCell from '@/components/PolicySleeveTableCell.vue';
+import type { PolicySleeveColumnKind } from '@/components/PolicySleeveTableCell.vue';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card';
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
+import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableEmpty,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { policySleevesFormSchema } from '@/forms/policy-sleeves';
+import type { PolicySleeveFormRow, PolicySleevesFormValues } from '@/forms/policy-sleeves';
 import type { EditablePolicyDraft, EditableSleeve } from '@/pages/policy-form';
+import type { PositionResponse } from '@/types/api';
 
 const props = defineProps<{
   draft: EditablePolicyDraft;
@@ -375,22 +299,91 @@ const emit = defineEmits<{
     reassignmentHoldings: Record<string, string[]>,
   ];
 }>();
+
 const sectionId = useId();
+let nextSleeveNumber = 1;
+
+function copySleeves(sleeves: readonly PolicySleeveFormRow[]): PolicySleeveFormRow[] {
+  return sleeves.map((sleeve) => ({ ...sleeve }));
+}
+
+function toFormSleeve(sleeve: EditableSleeve, index: number): PolicySleeveFormRow {
+  return {
+    sleeve_key: sleeve.sleeve_key,
+    display_name: sleeve.display_name,
+    sort_order: sleeve.sort_order ?? index,
+    parent_sleeve_key: sleeve.parent_sleeve_key ?? null,
+    target_pct: sleeve.target_pct,
+    drift_band_pp: sleeve.drift_band_pp,
+    is_direct_index_container: sleeve.is_direct_index_container ?? false,
+    is_direct_index_sleeve: sleeve.is_direct_index_sleeve ?? false,
+    is_transition_destination: sleeve.is_transition_destination ?? false,
+    is_cash_sleeve: sleeve.is_cash_sleeve ?? false,
+    enabled: sleeve.enabled ?? true,
+  };
+}
+
+function toEditableSleeve(sleeve: PolicySleeveFormRow): EditableSleeve {
+  return { ...sleeve };
+}
+
+function sameSleeves(left: readonly EditableSleeve[], right: readonly EditableSleeve[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((sleeve, index) => {
+      const other = right[index];
+      if (!other) return false;
+      const keys = new Set([...Object.keys(sleeve), ...Object.keys(other)]);
+      return Array.from(keys).every(
+        (key) =>
+          Object.prototype.hasOwnProperty.call(sleeve, key) ===
+            Object.prototype.hasOwnProperty.call(other, key) &&
+          Object.is(sleeve[key as keyof EditableSleeve], other[key as keyof EditableSleeve]),
+      );
+    })
+  );
+}
+
+const initialFormValues: PolicySleevesFormValues = {
+  sleeves: props.draft.sleeves.map(toFormSleeve),
+  deletion: { sleeveKey: '', targetKey: '', childReparents: {} },
+};
+const sleeveForm = useForm({
+  defaultValues: initialFormValues,
+  validators: { onChange: policySleevesFormSchema },
+});
+const formValues = sleeveForm.useSelector((state) => state.values);
+const sleeves = computed(() => formValues.value.sleeves);
+const deletion = computed(() => formValues.value.deletion);
 const targetIssues = computed(() => props.targetIssues);
-const sleeves = computed(() => props.draft.sleeves);
 const reassignments = computed(() => props.draft.reassignments);
-const portfolio = computed(() => (props.positions ? { positions: props.positions } : null));
 const enabledSleeves = computed(() => sleeves.value.filter((sleeve) => sleeve.enabled !== false));
 const enabledTopLevelSleeves = computed(() =>
   enabledSleeves.value.filter((sleeve) => !sleeve.parent_sleeve_key),
 );
-const deleteSleeveKey = ref<string | null>(null);
-const deleteTargetKey = ref('');
-const childReparents = reactive<Record<string, string | null>>({});
-const deleteError = ref('');
-const nextSleeveNumber = ref(1);
 const pendingDeleteSleeve = computed(
-  () => sleeves.value.find((sleeve) => sleeve.sleeve_key === deleteSleeveKey.value) ?? null,
+  () => sleeves.value.find((sleeve) => sleeve.sleeve_key === deletion.value.sleeveKey) ?? null,
+);
+
+watch(
+  formValues,
+  (values) => {
+    const nextSleeves = values.sleeves.map(toEditableSleeve);
+    if (!sameSleeves(nextSleeves, props.draft.sleeves)) {
+      emit('update:sleeves', nextSleeves);
+    }
+  },
+  { deep: true, flush: 'sync' },
+);
+
+watch(
+  () => props.draft.sleeves,
+  (nextSleeves) => {
+    if (!sameSleeves(sleeves.value.map(toEditableSleeve), nextSleeves)) {
+      sleeveForm.setFieldValue('sleeves', nextSleeves.map(toFormSleeve));
+    }
+  },
+  { deep: true, flush: 'sync' },
 );
 
 watch(
@@ -399,13 +392,13 @@ watch(
   cancelDeleteSleeve,
 );
 
-function emitSleeves(next: EditableSleeve[]): void {
-  emit('update:sleeves', next);
+function setSleeves(next: PolicySleeveFormRow[]): void {
+  sleeveForm.setFieldValue('sleeves', copySleeves(next));
 }
 
-function updateSleeve(key: string, patch: Partial<EditableSleeve>): void {
+function updateSleeve(key: string, patch: Partial<PolicySleeveFormRow>): void {
   if (!sleeves.value.some((sleeve) => sleeve.sleeve_key === key)) return;
-  emitSleeves(
+  setSleeves(
     sleeves.value.map((sleeve) => (sleeve.sleeve_key === key ? { ...sleeve, ...patch } : sleeve)),
   );
 }
@@ -420,17 +413,106 @@ function setSleeveText(
   else updateSleeve(key, { drift_band_pp: value });
 }
 
-function setSleeveParent(key: string, value: string | null): void {
-  updateSleeve(key, { parent_sleeve_key: value });
+type PolicySleeveSelectOption = { value: string; label: string };
+
+function optionToken(kind: string, domainValue: string | null): string {
+  return `${sectionId}-${kind}-${domainValue === null ? 'none' : `value-${encodeURIComponent(domainValue)}`}`;
+}
+
+function choice(
+  kind: string,
+  domainValue: string | null,
+  label: string,
+): PolicySleeveSelectOption & { domainValue: string | null } {
+  return { value: optionToken(kind, domainValue), label, domainValue };
+}
+
+function selectedOptionValue(
+  options: readonly (PolicySleeveSelectOption & { domainValue: string | null })[],
+  kind: string,
+  domainValue: string | null | undefined,
+): string {
+  return (
+    options.find((option) => option.domainValue === domainValue)?.value ?? optionToken(kind, '')
+  );
+}
+
+function selectedDomainValue(
+  options: readonly (PolicySleeveSelectOption & { domainValue: string | null })[],
+  value: string,
+): string | null | undefined {
+  return options.find((option) => option.value === value)?.domainValue;
+}
+
+function parentOptions(sleeve: PolicySleeveFormRow) {
+  return [
+    choice('parent', null, 'Top level'),
+    ...enabledSleeves.value
+      .filter(
+        (candidate) =>
+          candidate.sleeve_key !== sleeve.sleeve_key &&
+          !isDescendant(candidate.sleeve_key, sleeve.sleeve_key),
+      )
+      .map((parent) =>
+        choice('parent', parent.sleeve_key, parent.display_name || parent.sleeve_key),
+      ),
+  ];
+}
+
+function reassignmentOptions(excludedKey: string) {
+  return [
+    choice('reassignment', '', 'Choose destination'),
+    ...enabledSleeves.value
+      .filter((sleeve) => sleeve.sleeve_key !== excludedKey)
+      .map((sleeve) =>
+        choice('reassignment', sleeve.sleeve_key, sleeve.display_name || sleeve.sleeve_key),
+      ),
+  ];
+}
+
+function deletionTargetOptionsFor(key: string) {
+  return reassignmentOptions(key);
+}
+
+const deletionTargetOptions = computed(() =>
+  pendingDeleteSleeve.value ? deletionTargetOptionsFor(pendingDeleteSleeve.value.sleeve_key) : [],
+);
+
+function deletionParentOptions(deletingKey: string, childKey: string) {
+  return [
+    choice(`delete-parent-${childKey}`, '', 'Choose new parent'),
+    choice(`delete-parent-${childKey}`, null, 'Top level'),
+    ...enabledTopLevelSleeves.value
+      .filter(
+        (sleeve) =>
+          sleeve.sleeve_key !== deletingKey &&
+          sleeve.sleeve_key !== childKey &&
+          !isDescendant(sleeve.sleeve_key, childKey),
+      )
+      .map((parent) =>
+        choice(
+          `delete-parent-${childKey}`,
+          parent.sleeve_key,
+          parent.display_name || parent.sleeve_key,
+        ),
+      ),
+  ];
+}
+
+function setSleeveParent(key: string, value: string): void {
+  const sleeve = sleeves.value.find((candidate) => candidate.sleeve_key === key);
+  if (!sleeve) return;
+  const nextParent = selectedDomainValue(parentOptions(sleeve), value);
+  if (nextParent !== undefined) updateSleeve(key, { parent_sleeve_key: nextParent });
 }
 
 function addSleeve(): void {
   let key: string;
   do {
-    key = `sleeve-new-${nextSleeveNumber.value++}`;
+    key = `sleeve-new-${nextSleeveNumber++}`;
   } while (sleeves.value.some((sleeve) => sleeve.sleeve_key === key));
 
-  emitSleeves([
+  setSleeves([
     ...sleeves.value,
     {
       sleeve_key: key,
@@ -456,7 +538,7 @@ function hasEnabledChild(key: string): boolean {
 
 function heldInSleeve(key: string): Array<{ ticker: string }> {
   return (
-    portfolio.value?.positions.filter(
+    props.positions?.filter(
       (position) => position.sleeve_key === key || position.sub_sleeve_key === key,
     ) ?? []
   );
@@ -479,9 +561,12 @@ function updateReassignment(sourceKey: string, targetKey: string | null): void {
   emitReassignments(next, holdings);
 }
 
-function setReassignment(sourceKey: string, targetKey: string): void {
-  updateReassignment(sourceKey, targetKey || null);
+function setReassignment(sourceKey: string, value: string): void {
+  const domainValue = selectedDomainValue(reassignmentOptions(sourceKey), value);
+  updateReassignment(sourceKey, domainValue || null);
 }
+
+const deleteError = shallowRef('');
 
 function setSleeveEnabled(key: string, enabled: boolean): void {
   if (!enabled && hasEnabledChild(key)) {
@@ -494,7 +579,7 @@ function setSleeveEnabled(key: string, enabled: boolean): void {
 }
 
 function setDirectIndexContainer(key: string, enabled: boolean): void {
-  emitSleeves(
+  setSleeves(
     sleeves.value.map((sleeve) => ({
       ...sleeve,
       is_direct_index_container: sleeve.sleeve_key === key && enabled,
@@ -507,12 +592,16 @@ function setSleeveRole(
   role: 'is_direct_index_sleeve' | 'is_cash_sleeve',
   enabled: boolean,
 ): void {
-  if (role === 'is_direct_index_sleeve') updateSleeve(key, { is_direct_index_sleeve: enabled });
-  else updateSleeve(key, { is_cash_sleeve: enabled });
+  updateSleeve(
+    key,
+    role === 'is_direct_index_sleeve'
+      ? { is_direct_index_sleeve: enabled }
+      : { is_cash_sleeve: enabled },
+  );
 }
 
 function setTransitionDestination(key: string, enabled: boolean): void {
-  emitSleeves(
+  setSleeves(
     sleeves.value.map((sleeve) => ({
       ...sleeve,
       is_transition_destination: sleeve.sleeve_key === key && enabled,
@@ -520,7 +609,7 @@ function setTransitionDestination(key: string, enabled: boolean): void {
   );
 }
 
-function childrenOf(key: string): EditableSleeve[] {
+function childrenOf(key: string): PolicySleeveFormRow[] {
   return sleeves.value.filter((sleeve) => sleeve.parent_sleeve_key === key);
 }
 
@@ -531,14 +620,6 @@ function isDescendant(candidateKey: string, ancestorKey: string): boolean {
     current = sleeves.value.find((sleeve) => sleeve.sleeve_key === current?.parent_sleeve_key);
   }
   return false;
-}
-
-function parentOptions(sleeve: EditableSleeve): EditableSleeve[] {
-  return enabledSleeves.value.filter(
-    (candidate) =>
-      candidate.sleeve_key !== sleeve.sleeve_key &&
-      !isDescendant(candidate.sleeve_key, sleeve.sleeve_key),
-  );
 }
 
 function sleeveSiblingTargetIndex(index: number, direction: -1 | 1): number | null {
@@ -555,67 +636,204 @@ function canMoveSleeve(index: number, direction: -1 | 1): boolean {
   return sleeveSiblingTargetIndex(index, direction) !== null;
 }
 
-function moveSleeve(index: number, direction: -1 | 1): void {
+function moveSleeve(key: string, direction: -1 | 1): void {
+  const index = sleeves.value.findIndex((sleeve) => sleeve.sleeve_key === key);
+  if (index < 0) return;
   const targetIndex = sleeveSiblingTargetIndex(index, direction);
   if (targetIndex === null) return;
-  const next = sleeves.value.map((sleeve) => ({ ...sleeve }));
+  const next = copySleeves(sleeves.value);
   [next[index], next[targetIndex]] = [next[targetIndex]!, next[index]!];
-  emitSleeves(next);
-}
-
-function reassignmentOptions(excludedKey: string): EditableSleeve[] {
-  return enabledSleeves.value.filter((sleeve) => sleeve.sleeve_key !== excludedKey);
+  setSleeves(next);
 }
 
 function beginDeleteSleeve(key: string): void {
-  deleteSleeveKey.value = key;
-  deleteTargetKey.value = '';
-  deleteError.value = '';
+  const childReparents: Record<string, string | null> = {};
   for (const child of childrenOf(key)) childReparents[child.sleeve_key] = '';
+  sleeveForm.setFieldValue('deletion', { sleeveKey: key, targetKey: '', childReparents });
+  deleteError.value = '';
 }
 
-function reparentOptions(deletingKey: string, childKey: string): EditableSleeve[] {
-  return enabledTopLevelSleeves.value.filter(
-    (sleeve) =>
-      sleeve.sleeve_key !== deletingKey &&
-      sleeve.sleeve_key !== childKey &&
-      !isDescendant(sleeve.sleeve_key, childKey),
-  );
+function setDeletionTarget(current: PolicySleevesFormValues['deletion'], value: string): void {
+  const domainValue = selectedDomainValue(deletionTargetOptions.value, value);
+  if (typeof domainValue === 'string') {
+    sleeveForm.setFieldValue('deletion', { ...current, targetKey: domainValue });
+  }
+}
+
+function setDeletionParent(
+  current: PolicySleevesFormValues['deletion'],
+  childKey: string,
+  value: string,
+): void {
+  const options = pendingDeleteSleeve.value
+    ? deletionParentOptions(pendingDeleteSleeve.value.sleeve_key, childKey)
+    : [];
+  const domainValue = selectedDomainValue(options, value);
+  if (domainValue !== undefined) {
+    sleeveForm.setFieldValue('deletion', {
+      ...current,
+      childReparents: { ...current.childReparents, [childKey]: domainValue },
+    });
+  }
 }
 
 function confirmDeleteSleeve(): void {
-  const key = deleteSleeveKey.value;
+  const key = deletion.value.sleeveKey;
   if (!key) return;
   const children = childrenOf(key);
-  if (children.some((child) => childReparents[child.sleeve_key] === '')) {
+  if (children.some((child) => deletion.value.childReparents[child.sleeve_key] === '')) {
     deleteError.value = 'Choose a new parent or top-level placement for every child sleeve.';
     return;
   }
   const holdings = heldInSleeve(key);
-  if (holdings.length && !deleteTargetKey.value) {
+  if (holdings.length && !deletion.value.targetKey) {
     deleteError.value =
       'Choose an enabled holding reassignment destination before deleting this sleeve.';
     return;
   }
-  updateReassignment(key, holdings.length ? deleteTargetKey.value : null);
+  updateReassignment(key, holdings.length ? deletion.value.targetKey : null);
   const next = sleeves.value
     .filter((sleeve) => sleeve.sleeve_key !== key)
     .map((sleeve) =>
       sleeve.parent_sleeve_key === key
-        ? { ...sleeve, parent_sleeve_key: childReparents[sleeve.sleeve_key] || null }
+        ? { ...sleeve, parent_sleeve_key: deletion.value.childReparents[sleeve.sleeve_key] || null }
         : sleeve,
     );
-  emitSleeves(next);
-  deleteSleeveKey.value = null;
+  setSleeves(next);
+  sleeveForm.setFieldValue('deletion', { sleeveKey: '', targetKey: '', childReparents: {} });
   deleteError.value = '';
 }
 
 function cancelDeleteSleeve(): void {
-  deleteSleeveKey.value = null;
-  deleteTargetKey.value = '';
+  sleeveForm.setFieldValue('deletion', { sleeveKey: '', targetKey: '', childReparents: {} });
   deleteError.value = '';
-  for (const key of Object.keys(childReparents)) delete childReparents[key];
 }
+
+function cellProps(kind: PolicySleeveColumnKind, sleeve: PolicySleeveFormRow, rowIndex: number) {
+  const parents = kind === 'parent' ? parentOptions(sleeve) : [];
+  const reassignments = kind === 'enabled' ? reassignmentOptions(sleeve.sleeve_key) : [];
+  return {
+    kind,
+    sleeve,
+    rowIndex,
+    sectionId,
+    parentOptions: parents,
+    reassignmentOptions: reassignments,
+    parentValue: selectedOptionValue(parents, 'parent', sleeve.parent_sleeve_key ?? null),
+    reassignmentValue: selectedOptionValue(
+      reassignments,
+      'reassignment',
+      props.draft.reassignments[sleeve.sleeve_key] ?? '',
+    ),
+    canMoveUp: kind === 'order' && canMoveSleeve(rowIndex, -1),
+    canMoveDown: kind === 'order' && canMoveSleeve(rowIndex, 1),
+  };
+}
+
+function renderSleeveCell(
+  kind: PolicySleeveColumnKind,
+  sleeve: PolicySleeveFormRow,
+  rowIndex: number,
+) {
+  return h(PolicySleeveTableCell as Component, {
+    ...cellProps(kind, sleeve, rowIndex),
+    onEditText: setSleeveText,
+    onEditParent: setSleeveParent,
+    onEditContainer: setDirectIndexContainer,
+    onEditRole: setSleeveRole,
+    onEditTransition: setTransitionDestination,
+    onEditEnabled: setSleeveEnabled,
+    onEditReassignment: setReassignment,
+    onMove: moveSleeve,
+    onDelete: beginDeleteSleeve,
+  });
+}
+
+const sleeveTableFeatures = createTableFeatures({});
+const makeColumn = (
+  kind: PolicySleeveColumnKind,
+  header: string,
+  accessor: (sleeve: PolicySleeveFormRow) => unknown,
+): ColumnDef<typeof sleeveTableFeatures, PolicySleeveFormRow> => ({
+  id: kind,
+  header,
+  accessorFn: accessor,
+  cell: ({ row }) => renderSleeveCell(kind, row.original, row.index),
+});
+const columns: Array<ColumnDef<typeof sleeveTableFeatures, PolicySleeveFormRow>> = [
+  makeColumn('order', 'Order / sleeve key', (sleeve) => sleeve.sleeve_key),
+  makeColumn('name', 'Name', (sleeve) => sleeve.display_name),
+  makeColumn('parent', 'Parent', (sleeve) => sleeve.parent_sleeve_key),
+  makeColumn('target', 'Target (%)', (sleeve) => sleeve.target_pct),
+  makeColumn('drift', 'Drift band (pp)', (sleeve) => sleeve.drift_band_pp),
+  makeColumn('designations', 'Designations', (sleeve) => sleeve.is_direct_index_container),
+  makeColumn('enabled', 'Enabled', (sleeve) => sleeve.enabled),
+  makeColumn('actions', 'Actions', (sleeve) => sleeve.sleeve_key),
+];
+const tableData = shallowRef(sleeves.value);
+const table = useTable({
+  features: sleeveTableFeatures,
+  columns,
+  data: tableData,
+  getRowId: (sleeve: PolicySleeveFormRow) => sleeve.sleeve_key,
+});
+watch(
+  sleeves,
+  (nextSleeves) => {
+    tableData.value = nextSleeves;
+    table.setOptions((previous) => ({ ...previous, data: nextSleeves }));
+  },
+  { deep: true, flush: 'sync' },
+);
+const tableRows = computed(() => (tableData.value.length === 0 ? [] : table.getRowModel().rows));
 </script>
 
-<style scoped src="./policy-editor-sections.css"></style>
+<style scoped>
+.policy-sleeves-editor-root {
+  color: var(--foreground);
+}
+
+.policy-sleeves-editor-root :deep(h2),
+.policy-sleeves-editor-root :deep(h3) {
+  all: initial;
+  display: block;
+  color: var(--foreground);
+  font-family: inherit;
+  font-size: var(--tw-text-lg);
+  font-weight: var(--tw-font-weight-semibold);
+  letter-spacing: var(--tw-tracking-tight);
+  line-height: var(--tw-text-lg--line-height);
+}
+
+.policy-sleeves-editor-root :deep(p) {
+  all: initial;
+  display: block;
+  color: var(--muted-foreground);
+  font-family: inherit;
+  font-size: var(--tw-text-sm);
+  font-weight: var(--tw-font-weight-normal);
+  line-height: var(--tw-text-sm--line-height);
+}
+
+.policy-sleeves-editor-root :deep(button[data-slot='button']),
+.policy-sleeves-editor-root :deep(button[data-slot='checkbox']) {
+  font-family: inherit;
+  text-transform: none;
+}
+
+.policy-sleeves-editor-root :deep(button[data-slot='select-trigger']) {
+  appearance: none;
+  border: 1px solid var(--input);
+  background-color: transparent;
+  color: var(--foreground);
+  font-family: inherit;
+  font-size: var(--tw-text-sm);
+  line-height: var(--tw-text-sm--line-height);
+  text-transform: none;
+}
+
+.policy-sleeves-editor-root :deep([data-slot='table-container']:focus-visible) {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+</style>

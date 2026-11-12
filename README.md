@@ -9,7 +9,7 @@ The developer creates the project scaffold **before** running Codex, following `
 - Linux with mise already installed and shell-activated.
 - `mise.toml` selects **CPython 3.14** (fallback 3.13 if needed), **Node 24 LTS** and **uv via mise**.
 - `backend/`: uv-managed Python project; SQLite, SQLAlchemy/Alembic, FastAPI, CVXPY/OSQP/CLARABEL.
-- `frontend/`: Vue 3 + Quasar CLI/Vite, TypeScript, Pinia, Vue Router.
+- `frontend/`: Vue 3 + Vite and shadcn-vue, TypeScript, Pinia, Vue Router.
 - `docs/`: `01_functional_specification.md`, `02_technical_specification.md`, `portfolio_tax_optimizer_reference.html`.
 
 Do **not** regenerate existing projects or introduce Docker/PostgreSQL/React. SQLite requires no server. The mockup is a design reference, **not** an authoritative source of investment data.
@@ -29,7 +29,7 @@ npm install
 npm run dev
 ```
 
-API: http://127.0.0.1:8000/docs. Use the URL printed by Quasar for the web app.
+API: http://127.0.0.1:8000/docs. Use the URL printed by Vite for the web app.
 
 ```bash
 # Backend tests

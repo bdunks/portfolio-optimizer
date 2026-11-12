@@ -10,7 +10,7 @@ import type {
   ResourceFreshness,
   WorkspaceResourceFreshness,
   WorkspaceResourceKey,
-} from './workspace-resources';
+} from '../types/workspace-resources';
 
 type RunView = 'current' | 'saved' | 'stale' | null;
 type ReadinessInput = {

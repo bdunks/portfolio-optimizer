@@ -1,18 +1,25 @@
 <template>
-  <q-banner
-    class="workspace-empty-state bg-blue-grey-1 text-blue-grey-10"
-    dense
-    rounded
+  <Alert
+    class="workspace-empty-state workspace-foundation"
+    data-workspace-foundation
     role="status"
     aria-live="polite"
   >
-    <h2 class="q-ma-none text-primary text-subtitle1">{{ title }}</h2>
-    <p class="q-ma-none text-blue-grey-7"><slot /></p>
+    <AlertTitle
+      class="tw:text-base tw:font-semibold tw:text-foreground"
+      role="heading"
+      aria-level="2"
+    >
+      {{ title }}
+    </AlertTitle>
+    <AlertDescription><slot /></AlertDescription>
     <slot name="details" />
     <slot name="action" />
-  </q-banner>
+  </Alert>
 </template>
 
 <script setup lang="ts">
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+
 defineProps<{ title: string }>();
 </script>

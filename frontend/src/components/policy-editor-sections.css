@@ -1,4 +1,4 @@
-/* Grid gaps use Quasar's spacing scale; negative-margin gutters distort grid tracks. */
+/* Grid gaps use the shared 4px spacing scale; negative-margin gutters distort grid tracks. */
 /* Policy editor sections share the existing policy-page visual language. */
 .section-subtitle {
   max-width: 58rem;

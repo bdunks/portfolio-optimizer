@@ -1,6 +1,7 @@
 <template>
   <section
-    class="workspace-page activity-page q-my-none q-mx-auto q-pa-md"
+    class="workspace-page activity-page tw:mx-auto tw:my-0 tw:min-w-0 tw:max-w-[1600px] tw:px-4 tw:py-4"
+    data-activity-root
     aria-labelledby="activity-title"
   >
     <WorkspacePageHeader
@@ -10,18 +11,9 @@
       subtitle="Timestamped API events, structured details, and saved optimizer-run reopening. Reopening a run does not approve any trade."
     >
       <template #actions>
-        <q-btn
-          unelevated
-          no-caps
-          type="button"
-          class="primary-button"
-          color="primary"
-          size="sm"
-          :disable="isLoading"
-          @click="refresh"
-        >
+        <Button type="button" variant="outline" size="sm" :disabled="isLoading" @click="refresh">
           {{ isLoading ? 'Loading…' : 'Refresh activity' }}
-        </q-btn>
+        </Button>
       </template>
     </WorkspacePageHeader>
 
@@ -30,7 +22,11 @@
       controls.
     </WorkspaceCapabilityNotice>
 
-    <div class="error-stack column no-wrap q-gutter-y-sm">
+    <div
+      v-if="store.actionState.loadActivity.error || store.actionState.openSavedRun.error"
+      class="tw:grid tw:min-w-0 tw:gap-2"
+      aria-label="Activity request errors"
+    >
       <ApiActionError
         :error="store.actionState.loadActivity.error"
         title="Activity could not be loaded"
@@ -51,216 +47,315 @@
       :pending="store.actionState.openSavedRun.pending"
     />
 
-    <q-card
-      tag="form"
-      flat
-      bordered
-      aria-label="Activity filters"
-      class="filter-panel row items-end q-gutter-sm q-pa-md"
-      @submit.prevent="applyFilters"
-    >
-      <label class="column no-wrap q-gutter-y-xs">
-        <span class="text-caption text-weight-bold text-blue-grey-8">Event type</span>
-        <q-input
-          outlined
-          dense
-          hide-bottom-space
-          v-model="eventType"
-          type="search"
-          placeholder="Exact API event type"
-        />
-      </label>
-      <label class="column no-wrap q-gutter-y-xs">
-        <span class="text-caption text-weight-bold text-blue-grey-8">Status</span>
-        <q-input
-          outlined
-          dense
-          hide-bottom-space
-          v-model="status"
-          type="search"
-          placeholder="Exact API status"
-        />
-      </label>
-      <label class="column no-wrap q-gutter-y-xs">
-        <span class="text-caption text-weight-bold text-blue-grey-8">Correlation ID</span>
-        <q-input
-          outlined
-          dense
-          hide-bottom-space
-          v-model="correlationId"
-          type="search"
-          placeholder="Correlation ID"
-        />
-      </label>
-      <label class="column no-wrap q-gutter-y-xs">
-        <span class="text-caption text-weight-bold text-blue-grey-8">Since (UTC)</span>
-        <q-input
-          outlined
-          dense
-          hide-bottom-space
-          v-model="since"
-          type="datetime-local"
-          step="any"
-          @update:model-value="markDateTimeEdited('since')"
-        />
-      </label>
-      <label class="column no-wrap q-gutter-y-xs">
-        <span class="text-caption text-weight-bold text-blue-grey-8">Until (UTC)</span>
-        <q-input
-          outlined
-          dense
-          hide-bottom-space
-          v-model="until"
-          type="datetime-local"
-          step="any"
-          @update:model-value="markDateTimeEdited('until')"
-        />
-      </label>
-      <label class="column no-wrap q-gutter-y-xs">
-        <span class="text-caption text-weight-bold text-blue-grey-8">Rows per page</span>
-        <q-select
-          v-model="pageLimit"
-          :options="[
-            { label: '25', value: 25 },
-            { label: '50', value: 50 },
-            { label: '100', value: 100 },
-            { label: '250', value: 250 },
-          ]"
-          emit-value
-          map-options
-          outlined
-          dense
-          hide-bottom-space
-          aria-label="Rows per page"
-        />
-      </label>
-      <q-btn
-        no-caps
-        type="submit"
-        class="secondary-button"
-        outline
-        color="primary"
-        size="sm"
-        :disable="isLoading"
-        >Apply filters</q-btn
-      >
-      <q-btn
-        no-caps
-        type="button"
-        class="text-button"
-        flat
-        color="primary"
-        size="sm"
-        :disable="isLoading"
-        @click="clearFilters"
-      >
-        Clear filters
-      </q-btn>
-    </q-card>
+    <form aria-label="Activity filters" class="tw:min-w-0" @submit.prevent="applyFilters">
+      <Card class="tw:min-w-0">
+        <CardHeader class="tw:sr-only">
+          <CardTitle id="activity-filter-title" role="heading" aria-level="2">
+            Activity filters
+          </CardTitle>
+          <CardDescription>Filter API events and choose the returned page size.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <FieldGroup
+            class="tw:grid tw:min-w-0 tw:grid-cols-1 tw:gap-4 tw:md:grid-cols-2 tw:lg:grid-cols-3"
+            data-activity-filter-grid
+          >
+            <filterForm.Field name="eventType">
+              <template #default="{ field }">
+                <UiField :data-invalid="field.state.meta.errors.length ? 'true' : undefined">
+                  <FieldLabel for="activity-event-type">Event type</FieldLabel>
+                  <Input
+                    id="activity-event-type"
+                    type="search"
+                    :model-value="field.state.value"
+                    placeholder="Exact API event type"
+                    :aria-invalid="field.state.meta.errors.length ? 'true' : undefined"
+                    :aria-describedby="
+                      field.state.meta.errors.length ? 'activity-event-type-error' : undefined
+                    "
+                    @update:model-value="(value) => setTextFilter('eventType', value)"
+                    @blur="field.handleBlur"
+                  />
+                  <FieldError id="activity-event-type-error" :errors="field.state.meta.errors" />
+                </UiField>
+              </template>
+            </filterForm.Field>
 
-    <q-banner
+            <filterForm.Field name="status">
+              <template #default="{ field }">
+                <UiField :data-invalid="field.state.meta.errors.length ? 'true' : undefined">
+                  <FieldLabel for="activity-status">Status</FieldLabel>
+                  <Input
+                    id="activity-status"
+                    type="search"
+                    :model-value="field.state.value"
+                    placeholder="Exact API status"
+                    :aria-invalid="field.state.meta.errors.length ? 'true' : undefined"
+                    :aria-describedby="
+                      field.state.meta.errors.length ? 'activity-status-error' : undefined
+                    "
+                    @update:model-value="(value) => setTextFilter('status', value)"
+                    @blur="field.handleBlur"
+                  />
+                  <FieldError id="activity-status-error" :errors="field.state.meta.errors" />
+                </UiField>
+              </template>
+            </filterForm.Field>
+
+            <filterForm.Field name="correlationId">
+              <template #default="{ field }">
+                <UiField :data-invalid="field.state.meta.errors.length ? 'true' : undefined">
+                  <FieldLabel for="activity-correlation-id">Correlation ID</FieldLabel>
+                  <Input
+                    id="activity-correlation-id"
+                    type="search"
+                    :model-value="field.state.value"
+                    placeholder="Correlation ID"
+                    :aria-invalid="field.state.meta.errors.length ? 'true' : undefined"
+                    :aria-describedby="
+                      field.state.meta.errors.length ? 'activity-correlation-id-error' : undefined
+                    "
+                    @update:model-value="(value) => setTextFilter('correlationId', value)"
+                    @blur="field.handleBlur"
+                  />
+                  <FieldError
+                    id="activity-correlation-id-error"
+                    :errors="field.state.meta.errors"
+                  />
+                </UiField>
+              </template>
+            </filterForm.Field>
+
+            <filterForm.Field name="since">
+              <template #default="{ field }">
+                <UiField :data-invalid="field.state.meta.errors.length ? 'true' : undefined">
+                  <FieldLabel for="activity-since">Since (UTC)</FieldLabel>
+                  <Input
+                    id="activity-since"
+                    type="datetime-local"
+                    step="any"
+                    :model-value="field.state.value"
+                    :aria-invalid="field.state.meta.errors.length ? 'true' : undefined"
+                    :aria-describedby="
+                      field.state.meta.errors.length ? 'activity-since-error' : undefined
+                    "
+                    @update:model-value="(value) => setDateFilter('since', value)"
+                    @blur="field.handleBlur"
+                  />
+                  <FieldError id="activity-since-error" :errors="field.state.meta.errors" />
+                </UiField>
+              </template>
+            </filterForm.Field>
+
+            <filterForm.Field name="until">
+              <template #default="{ field }">
+                <UiField :data-invalid="field.state.meta.errors.length ? 'true' : undefined">
+                  <FieldLabel for="activity-until">Until (UTC)</FieldLabel>
+                  <Input
+                    id="activity-until"
+                    type="datetime-local"
+                    step="any"
+                    :model-value="field.state.value"
+                    :aria-invalid="field.state.meta.errors.length ? 'true' : undefined"
+                    :aria-describedby="
+                      field.state.meta.errors.length ? 'activity-until-error' : undefined
+                    "
+                    @update:model-value="(value) => setDateFilter('until', value)"
+                    @blur="field.handleBlur"
+                  />
+                  <FieldError id="activity-until-error" :errors="field.state.meta.errors" />
+                </UiField>
+              </template>
+            </filterForm.Field>
+
+            <filterForm.Field name="limit">
+              <template #default="{ field }">
+                <UiField :data-invalid="field.state.meta.errors.length ? 'true' : undefined">
+                  <FieldLabel for="activity-page-limit">Rows per page</FieldLabel>
+                  <Select
+                    :model-value="String(field.state.value)"
+                    @update:model-value="updatePageLimit"
+                  >
+                    <SelectTrigger
+                      id="activity-page-limit"
+                      class="tw:w-full"
+                      aria-label="Rows per page"
+                      :aria-invalid="field.state.meta.errors.length ? 'true' : undefined"
+                      :aria-describedby="
+                        field.state.meta.errors.length ? 'activity-page-limit-error' : undefined
+                      "
+                      @blur="field.handleBlur"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent class="activity-select-content">
+                      <SelectGroup>
+                        <SelectItem
+                          v-for="limit in ACTIVITY_PAGE_LIMITS"
+                          :key="limit"
+                          :value="String(limit)"
+                        >
+                          {{ limit }}
+                        </SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <FieldError id="activity-page-limit-error" :errors="field.state.meta.errors" />
+                </UiField>
+              </template>
+            </filterForm.Field>
+          </FieldGroup>
+
+          <div class="tw:mt-4 tw:flex tw:flex-wrap tw:items-center tw:gap-2">
+            <Button type="submit" size="sm" :disabled="isLoading">Apply filters</Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              :disabled="isLoading"
+              @click="clearFilters"
+            >
+              Clear filters
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </form>
+
+    <Alert
       v-if="store.actionState.loadActivity.pending && !activity"
-      dense
-      rounded
-      class="q-my-sm bg-blue-grey-1 text-blue-grey-10"
       role="status"
+      aria-live="polite"
     >
-      Loading activity from the local API…
-    </q-banner>
-    <WorkspaceEmptyState v-else-if="!activity" title="No activity page loaded">
-      Retry to request current activity. No events are generated by this page.
-      <template #action>
-        <q-btn
-          no-caps
-          type="button"
-          class="secondary-button"
-          outline
-          color="primary"
-          size="sm"
-          :disable="isLoading"
-          @click="refresh"
-        >
+      <AlertDescription>Loading activity from the local API…</AlertDescription>
+    </Alert>
+
+    <Empty
+      v-else-if="!activity"
+      class="tw:my-2 tw:border tw:border-border"
+      role="status"
+      aria-live="polite"
+    >
+      <EmptyHeader>
+        <EmptyTitle role="heading" aria-level="2">No activity page loaded</EmptyTitle>
+        <EmptyDescription class="tw:m-0">
+          Retry to request current activity. No events are generated by this page.
+        </EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent>
+        <Button type="button" variant="outline" size="sm" :disabled="isLoading" @click="refresh">
           Retry loading activity
-        </q-btn>
-      </template>
-    </WorkspaceEmptyState>
-    <WorkspaceEmptyState v-else-if="activity.total === 0" title="No activity events returned">
-      The API returned no events for the selected filters.
-    </WorkspaceEmptyState>
+        </Button>
+      </EmptyContent>
+    </Empty>
+
+    <Empty
+      v-else-if="activity.total === 0"
+      class="tw:my-2 tw:border tw:border-border"
+      role="status"
+      aria-live="polite"
+    >
+      <EmptyHeader>
+        <EmptyTitle role="heading" aria-level="2">No activity events returned</EmptyTitle>
+        <EmptyDescription class="tw:m-0">
+          The API returned no events for the selected filters.
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
+
     <template v-else>
-      <p class="results-summary q-ma-none">
+      <p class="tw:m-0 tw:text-sm tw:leading-relaxed tw:text-muted-foreground">
         {{ activity.items.length }} events on this page · {{ activity.total }} matching events ·
         page {{ pageNumber }} of {{ pageCount }}
       </p>
-      <WorkspaceEmptyState v-if="activity.items.length === 0" title="No events on this page">
-        The API returned no events for this offset. Use the filters or return to a previous page.
-      </WorkspaceEmptyState>
+      <Empty
+        v-if="activity.items.length === 0"
+        class="tw:my-2 tw:border tw:border-border"
+        role="status"
+        aria-live="polite"
+      >
+        <EmptyHeader>
+          <EmptyTitle role="heading" aria-level="2">No events on this page</EmptyTitle>
+          <EmptyDescription class="tw:m-0">
+            The API returned no events for this offset. Use the filters or return to a previous
+            page.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
       <ol
         v-else
-        class="event-list q-mr-none q-mb-none q-ml-none q-pa-none column no-wrap q-gutter-y-sm"
+        class="tw:m-0 tw:grid tw:min-w-0 tw:list-none tw:gap-3 tw:p-0"
         aria-label="Activity events"
       >
-        <q-card
-          v-for="event in activity.items"
-          :key="event.id"
-          tag="li"
-          flat
-          bordered
-          class="event-card q-pa-md"
-        >
-          <header
-            class="event-heading row no-wrap justify-between q-gutter-md items-center q-mb-sm"
-          >
-            <div>
-              <h2 class="q-ma-none text-subtitle2 text-blue-grey-10 text-capitalize">
-                {{ event.event_type }}
-              </h2>
-              <p class="q-mt-xs q-mb-none q-mx-none text-caption text-blue-grey-7">
-                {{ event.created_at }}
-              </p>
-            </div>
-            <q-badge
-              rounded
-              :color="statusBadgeColors(event.status).color"
-              :text-color="statusBadgeColors(event.status).textColor"
+        <li v-for="event in activity.items" :key="event.id" class="tw:min-w-0">
+          <Card class="event-card tw:min-w-0">
+            <CardHeader
+              class="tw:flex tw:min-w-0 tw:flex-row tw:items-start tw:justify-between tw:gap-4"
             >
-              {{ event.status }}
-            </q-badge>
-          </header>
-          <dl class="event-meta q-mt-none q-mb-sm q-mx-none">
-            <div class="q-pa-sm">
-              <dt>Correlation ID</dt>
-              <dd class="q-mt-xs q-mb-none q-mx-none">{{ event.correlation_id }}</dd>
-            </div>
-            <div class="q-pa-sm">
-              <dt>Event ID</dt>
-              <dd class="q-mt-xs q-mb-none q-mx-none">{{ event.id }}</dd>
-            </div>
-          </dl>
-          <q-expansion-item>
-            <template #header>Event details, including any returned error information</template>
-            <pre class="q-ma-none q-pa-sm">{{ formatJson(event.details) }}</pre>
-          </q-expansion-item>
-          <q-btn
-            no-caps
-            v-if="savedRunId(event)"
-            type="button"
-            class="secondary-button reopen-button"
-            outline
-            color="primary"
-            size="sm"
-            :disable="store.actionState.openSavedRun.pending"
-            @click="reopenRun(savedRunId(event)!)"
-          >
-            {{
-              store.actionState.openSavedRun.pending
-                ? 'Opening saved run…'
-                : 'Reopen saved optimizer run'
-            }}
-          </q-btn>
-        </q-card>
+              <div class="tw:grid tw:min-w-0 tw:gap-1">
+                <h2 class="tw:m-0! tw:break-words tw:text-base tw:font-semibold tw:leading-snug">
+                  {{ event.event_type }}
+                </h2>
+                <p class="tw:m-0 tw:break-all tw:text-sm tw:text-muted-foreground">
+                  <time :datetime="event.created_at">{{ event.created_at }}</time>
+                </p>
+              </div>
+              <Badge
+                as="span"
+                role="status"
+                class="tw:shrink-0"
+                :variant="statusBadgeVariant(event.status)"
+              >
+                {{ event.status }}
+              </Badge>
+            </CardHeader>
+            <CardContent class="tw:grid tw:min-w-0 tw:gap-4">
+              <dl class="tw:m-0 tw:grid tw:min-w-0 tw:grid-cols-1 tw:gap-2 tw:sm:grid-cols-2">
+                <div
+                  class="tw:grid tw:min-w-0 tw:gap-1 tw:rounded-lg tw:border tw:border-border tw:bg-muted/30 tw:p-3"
+                >
+                  <dt class="tw:text-xs tw:text-muted-foreground">Correlation ID</dt>
+                  <dd class="tw:m-0 tw:break-all tw:text-sm tw:font-medium">
+                    {{ event.correlation_id }}
+                  </dd>
+                </div>
+                <div
+                  class="tw:grid tw:min-w-0 tw:gap-1 tw:rounded-lg tw:border tw:border-border tw:bg-muted/30 tw:p-3"
+                >
+                  <dt class="tw:text-xs tw:text-muted-foreground">Event ID</dt>
+                  <dd class="tw:m-0 tw:break-all tw:text-sm tw:font-medium">{{ event.id }}</dd>
+                </div>
+              </dl>
+              <details class="tw:min-w-0">
+                <summary class="tw:cursor-pointer tw:font-medium">
+                  Event details, including any returned error information
+                </summary>
+                <pre
+                  class="tw:mt-2 tw:max-h-80 tw:min-w-0 tw:overflow-auto tw:rounded-md tw:bg-muted/50 tw:p-3 tw:text-xs tw:text-foreground tw:whitespace-pre-wrap tw:break-all"
+                  >{{ formatJson(event.details) }}</pre>
+              </details>
+            </CardContent>
+            <CardFooter v-if="savedRunId(event)" class="tw:flex tw:flex-wrap tw:gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                class="reopen-button"
+                :disabled="store.actionState.openSavedRun.pending"
+                @click="reopenRun(savedRunId(event)!)"
+              >
+                {{
+                  store.actionState.openSavedRun.pending
+                    ? 'Opening saved run…'
+                    : 'Reopen saved optimizer run'
+                }}
+              </Button>
+            </CardFooter>
+          </Card>
+        </li>
       </ol>
     </template>
+
     <WorkspacePagination
       v-if="activity"
       :offset="activity.offset"
@@ -276,33 +371,70 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
+import { useForm } from '@tanstack/vue-form';
 import ApiActionError from '@/components/ApiActionError.vue';
 import RunSummary from '@/components/RunSummary.vue';
 import WorkspacePageHeader from '@/components/WorkspacePageHeader.vue';
 import WorkspaceCapabilityNotice from '@/components/WorkspaceCapabilityNotice.vue';
-import WorkspaceEmptyState from '@/components/WorkspaceEmptyState.vue';
 import WorkspacePagination from '@/components/WorkspacePagination.vue';
-import { getPaginationMetadata } from '@/components/workspace-pagination-state';
-
 import ResourceFreshnessNotice from '@/components/ResourceFreshnessNotice.vue';
-import { useWorkspaceStore } from '@/stores/workspace-store';
+import { getPaginationMetadata } from '@/components/workspace-pagination-state';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from '@/components/ui/empty';
+import { FieldError, FieldGroup, FieldLabel, Field as UiField } from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { useWorkspace } from '@/composables/use-workspace';
+import {
+  ACTIVITY_PAGE_LIMITS,
+  activityFilterDefaults,
+  activityFilterSchema,
+  isActivityPageLimit,
+  selectedDateTimeFilter,
+  type ActivityFilterValues,
+} from '@/forms/activity-filters';
 import type { ActivityQuery } from '@/services/api';
 import type { ActivityEventResponse } from '@/types/api';
 
-const store = useWorkspaceStore();
+const store = useWorkspace();
 const router = useRouter();
 const activity = computed(() => store.activity);
 const savedRunSummary = computed(() => store.currentRunSummary);
-const eventType = ref(store.activityFilters.event_type ?? '');
-const status = ref(store.activityFilters.status ?? '');
-const correlationId = ref(store.activityFilters.correlation_id ?? '');
-const since = ref(utcFilterToDateTimeLocal(store.activityFilters.since));
-const until = ref(utcFilterToDateTimeLocal(store.activityFilters.until));
 const savedSinceBound = store.activityFilters.since ?? null;
 const savedUntilBound = store.activityFilters.until ?? null;
 const sinceEdited = ref(false);
 const untilEdited = ref(false);
-const pageLimit = ref(store.activityFilters.limit ?? 25);
+const filterForm = useForm({
+  defaultValues: activityFilterDefaults(store.activityFilters),
+  validators: { onChange: activityFilterSchema },
+  onSubmit: async ({ value }) => {
+    await loadActivity(0, value);
+  },
+});
+const filters = filterForm.useSelector((state) => state.values);
 const isLoading = computed(() => store.actionState.loadActivity.pending);
 const pagination = computed(() => {
   const page = activity.value;
@@ -310,6 +442,8 @@ const pagination = computed(() => {
 });
 const pageNumber = computed(() => pagination.value.pageNumber);
 const pageCount = computed(() => pagination.value.pageCount);
+
+type ActivityTextFilterField = 'eventType' | 'status' | 'correlationId';
 
 function formatJson(value: unknown): string {
   return JSON.stringify(value, null, 2) ?? 'Unavailable';
@@ -323,77 +457,71 @@ function savedRunId(event: ActivityEventResponse): string | null {
   return typeof runId === 'string' && runId.length > 0 ? runId : null;
 }
 
-function statusBadgeColors(value: string): { color: string; textColor: string } {
+function statusBadgeVariant(value: string): 'destructive' | 'secondary' {
   return value.toLocaleLowerCase() === 'error' || value.toLocaleLowerCase() === 'failed'
-    ? { color: 'red-1', textColor: 'red-10' }
-    : { color: 'blue-grey-1', textColor: 'blue-grey-10' };
+    ? 'destructive'
+    : 'secondary';
 }
 
-function markDateTimeEdited(bound: 'since' | 'until'): void {
-  if (bound === 'since') sinceEdited.value = true;
+function setTextFilter(field: ActivityTextFilterField, value: string | number): void {
+  filterForm.setFieldValue(field, String(value));
+}
+
+function setDateFilter(field: 'since' | 'until', value: string | number): void {
+  if (typeof value !== 'string') return;
+  filterForm.setFieldValue(field, value);
+  if (field === 'since') sinceEdited.value = true;
   else untilEdited.value = true;
 }
 
-function utcFilterToDateTimeLocal(value: string | null | undefined): string {
-  if (!value) return '';
-  const timestamp = new Date(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(value) ? value : `${value}Z`);
-  return Number.isNaN(timestamp.getTime())
-    ? ''
-    : timestamp
-        .toISOString()
-        .replace(/\.000Z$/, '')
-        .replace(/Z$/, '');
+function updatePageLimit(value: unknown): void {
+  if (typeof value !== 'string') return;
+  const limit = Number(value);
+  if (isActivityPageLimit(limit)) filterForm.setFieldValue('limit', limit);
 }
 
-function dateTimeLocalToUtcFilter(value: string): string {
-  return `${value.length === 16 ? `${value}:00` : value}Z`;
-}
-
-function selectedDateTimeFilter(
-  value: string,
-  edited: boolean,
-  savedBound: string | null,
-): string | undefined {
-  if (!edited && savedBound) return savedBound;
-  return value ? dateTimeLocalToUtcFilter(value) : undefined;
-}
-
-function currentFilters(offset: number): ActivityQuery {
-  const sinceFilter = selectedDateTimeFilter(since.value, sinceEdited.value, savedSinceBound);
-  const untilFilter = selectedDateTimeFilter(until.value, untilEdited.value, savedUntilBound);
+function currentFilters(values: ActivityFilterValues, offset: number): ActivityQuery {
+  const sinceFilter = selectedDateTimeFilter(values.since, sinceEdited.value, savedSinceBound);
+  const untilFilter = selectedDateTimeFilter(values.until, untilEdited.value, savedUntilBound);
   return {
-    ...(eventType.value.trim() ? { event_type: eventType.value.trim() } : {}),
-    ...(status.value.trim() ? { status: status.value.trim() } : {}),
-    ...(correlationId.value.trim() ? { correlation_id: correlationId.value.trim() } : {}),
+    ...(values.eventType.trim() ? { event_type: values.eventType.trim() } : {}),
+    ...(values.status.trim() ? { status: values.status.trim() } : {}),
+    ...(values.correlationId.trim() ? { correlation_id: values.correlationId.trim() } : {}),
     ...(sinceFilter ? { since: sinceFilter } : {}),
     ...(untilFilter ? { until: untilFilter } : {}),
     offset,
-    limit: pageLimit.value,
+    limit: values.limit,
   };
 }
 
-async function loadActivity(offset: number): Promise<void> {
+async function loadActivity(
+  offset: number,
+  values: ActivityFilterValues = filters.value,
+): Promise<void> {
   try {
-    await store.loadActivity(currentFilters(offset));
+    await store.loadActivity(currentFilters(values, offset));
   } catch {
     // The shared store retains the structured API error for the page.
   }
 }
 
 function applyFilters(): void {
-  void loadActivity(0);
+  void filterForm.handleSubmit();
 }
 
 function clearFilters(): void {
-  eventType.value = '';
-  status.value = '';
-  correlationId.value = '';
-  since.value = '';
-  until.value = '';
+  const clearedFilters: ActivityFilterValues = {
+    eventType: '',
+    status: '',
+    correlationId: '',
+    since: '',
+    until: '',
+    limit: 25,
+  };
+  filterForm.reset(clearedFilters);
   sinceEdited.value = true;
   untilEdited.value = true;
-  pageLimit.value = 25;
-  void loadActivity(0);
+  void loadActivity(0, clearedFilters);
 }
 
 function refresh(): void {
@@ -410,78 +538,55 @@ async function reopenRun(runId: string): Promise<void> {
 }
 
 onMounted(() => {
-  void loadActivity(store.activityFilters.offset ?? 0);
+  void loadActivity(store.activityFilters.offset ?? 0, filters.value);
 });
 </script>
 
 <style scoped>
-/* Grid gaps use Quasar's spacing scale; negative-margin gutters distort grid tracks. */
-.activity-page {
-  max-width: 1600px;
+:global([data-activity-root]) {
+  color: var(--foreground);
 }
 
-.filter-panel,
-.event-card {
-  min-width: 0;
+:global([data-activity-root] .event-card h2) {
+  color: var(--foreground);
+  font-size: var(--tw-text-base);
+  font-weight: 600;
+  line-height: 1.375;
 }
 
-.filter-panel label {
-  min-width: min(13rem, 100%);
+:global([data-activity-root] input[data-slot='input']) {
+  appearance: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-md);
+  background-color: transparent;
+  color: var(--foreground);
+  font-family: inherit;
+  font-size: var(--tw-text-sm);
+  line-height: var(--tw-text-sm--line-height);
 }
-.event-meta {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+
+:global([data-activity-root] button[data-slot='button']),
+:global([data-activity-root] button[data-slot='select-trigger']) {
+  appearance: none;
+  font-family: inherit;
+  font-size: var(--tw-text-sm);
+  line-height: var(--tw-text-sm--line-height);
+  text-transform: none;
 }
-.event-meta > div {
-  min-width: 0;
-  border: 1px solid #eaf0f3;
-  border-radius: 0.55rem;
+
+:global([data-activity-root] button[data-slot='select-trigger']) {
+  border: 1px solid var(--input);
+  background-color: transparent;
+  color: var(--foreground);
 }
-dl dt {
-  color: #647c8b;
-  font-size: 0.7rem;
-}
-dl dd {
-  color: #29475a;
-  font-size: 0.76rem;
-  font-weight: 700;
+
+:global([data-activity-root] pre) {
   overflow-wrap: anywhere;
 }
-pre {
-  max-height: 20rem;
-  overflow: auto;
-  border-radius: 0.5rem;
-  background: #f5f8fa;
-  color: #29475a;
-  font-size: 0.7rem;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.results-summary {
-  color: #657d8b;
-  font-size: 0.78rem;
-  line-height: 1.5;
-}
-
-.event-list {
-  list-style: none;
-}
-
-.event-meta {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-@media (max-width: 650px) {
-  .event-heading {
-    align-items: stretch;
-    flex-direction: column;
-  }
-  .filter-panel label {
-    width: 100%;
-  }
-  .event-meta {
-    grid-template-columns: 1fr;
-  }
+:global(.activity-select-content) {
+  color: var(--popover-foreground);
+  font-family: inherit;
+  font-size: var(--tw-text-sm);
+  line-height: var(--tw-text-sm--line-height);
 }
 </style>

@@ -1,26 +1,10 @@
 import js from '@eslint/js';
 import globals from 'globals';
 import pluginVue from 'eslint-plugin-vue';
-import pluginQuasar from '@quasar/app-vite/eslint';
 import { defineConfigWithVueTs, vueTsConfigs } from '@vue/eslint-config-typescript';
 import prettierSkipFormatting from '@vue/eslint-config-prettier/skip-formatting';
 
 export default defineConfigWithVueTs(
-  {
-    /**
-     * Ignore the following files.
-     * Please note that pluginQuasar.configs.recommended() already ignores
-     * the "node_modules" folder for you (and all other Quasar project
-     * relevant folders and files).
-     *
-     * ESLint requires "ignores" key to be the only one in this object
-     */
-    // ignores: []
-  },
-
-  pluginQuasar.configs.recommended(),
-  js.configs.recommended,
-
   /**
    * https://eslint.vuejs.org
    *
@@ -33,6 +17,7 @@ export default defineConfigWithVueTs(
    * pluginVue.configs["flat/recommended"]
    *   -> Above, plus rules to enforce subjective community defaults to ensure consistency.
    */
+  js.configs.recommended,
   pluginVue.configs['flat/essential'],
 
   {
@@ -43,6 +28,13 @@ export default defineConfigWithVueTs(
   },
   // https://github.com/vuejs/eslint-config-typescript
   vueTsConfigs.recommendedTypeChecked,
+
+  {
+    files: ['src/components/ui/**/*.vue'],
+    rules: {
+      'vue/multi-word-component-names': 'off',
+    },
+  },
 
   {
     languageOptions: {
@@ -64,7 +56,7 @@ export default defineConfigWithVueTs(
     // add your custom rules here
     rules: {
       'prefer-promise-reject-errors': 'off',
-      // slots use the "#" shorthand everywhere, as in the Quasar docs
+      // Keep Vue slots in the consistent shorthand style
       'vue/v-slot-style': ['warn', 'shorthand'],
 
       // allow debugger during development only

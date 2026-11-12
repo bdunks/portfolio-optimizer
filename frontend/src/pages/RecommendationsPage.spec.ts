@@ -4,10 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import type { OptimizerRecommendationsResponse, USTransitionResponse } from '@/types/api';
 
-import { QBanner, QCard, QMarkupTable } from 'quasar';
 import RecommendationsPage from './RecommendationsPage.vue';
-import { useWorkspaceStore } from '@/stores/workspace-store';
+import {
+  mountWorkspaceHarness,
+  seedCurrentRunForTest,
+  currentRunForTest,
+} from '@/test-utils/workspace-harness';
 
+import { workspaceQueryKeys } from '@/composables/queries/workspace-queries';
+import { getTestQueryClient, getTestQueryClientForPinia } from '@/test-utils/workspace-mount';
 function frozenContext(displayName = 'Frozen US equity') {
   return {
     available: true,
@@ -433,16 +438,25 @@ function portfolioWithTransition(revisionId: string) {
 function setup(run: OptimizerRecommendationsResponse | null = makeRun()) {
   const pinia = createPinia();
   setActivePinia(pinia);
-  const store = useWorkspaceStore();
-  store.health = {
+  const store = mountWorkspaceHarness().workspace;
+  if (run) {
+    seedCurrentRunForTest(store, run);
+    store.currentRunView = 'current';
+  }
+  return { pinia, store };
+}
+
+function mountRecommendationsPage(pinia: ReturnType<typeof createPinia>) {
+  const queryClient = getTestQueryClientForPinia(pinia);
+  queryClient.setQueryData(workspaceQueryKeys.health, {
     status: 'ok',
     schema_ready: true,
     broker_mode: 'demo',
     live_broker_enabled: false,
     order_submission_enabled: false,
-  };
-  store.portfolio = readyPortfolio() as never;
-  store.policy = {
+  });
+  queryClient.setQueryData(workspaceQueryKeys.portfolio, readyPortfolio());
+  queryClient.setQueryData(workspaceQueryKeys.policy, {
     active: {
       id: 'policy-r1',
       activation_errors: [],
@@ -450,16 +464,18 @@ function setup(run: OptimizerRecommendationsResponse | null = makeRun()) {
     },
     drafts: [],
     superseded: [],
-  } as never;
-  const confirmedAt = '2025-02-01T12:00:00Z';
-  store.resourceFreshness.health = { status: 'fresh', confirmedAt };
-  store.resourceFreshness.portfolio = { status: 'fresh', confirmedAt };
-  store.resourceFreshness.policy = { status: 'fresh', confirmedAt };
-  if (run) {
-    store.currentRun = run;
-    store.currentRunView = 'current';
-  }
-  return { pinia, store };
+  });
+  return mount(RecommendationsPage, { global: { plugins: [pinia] } });
+}
+
+async function openRecommendationGroup(
+  wrapper: ReturnType<typeof mountRecommendationsPage>,
+  groupId: string,
+): Promise<void> {
+  const trigger = wrapper.get(`button[aria-label="Recommendation group ${groupId}"]`);
+  if (trigger.attributes('aria-expanded') !== 'true') await trigger.trigger('click');
+  expect(trigger.attributes('aria-expanded')).toBe('true');
+  await flushPromises();
 }
 
 beforeEach(() => vi.unstubAllGlobals());
@@ -484,12 +500,10 @@ describe('RecommendationsPage', () => {
       ],
     };
     const { pinia } = setup(unlinkedRun);
-    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const wrapper = mountRecommendationsPage(pinia);
     await flushPromises();
 
-    const warning = wrapper
-      .findAllComponents(QBanner)
-      .find((banner) => banner.attributes('aria-label') === 'Unlinked API legs');
+    const warning = wrapper.find('[aria-label="Unlinked API legs"]');
     expect(warning?.attributes('role')).toBe('region');
     expect(warning?.text()).toContain('Unlinked API legs — not executable');
     expect(warning?.text()).toContain('API group references are missing or inconsistent.');
@@ -498,9 +512,14 @@ describe('RecommendationsPage', () => {
   });
 
   it('uses portfolio keys for allocation and nested transition when successful reads disagree', async () => {
-    const { pinia, store } = setup();
-    store.portfolio = portfolioWithTransition('portfolio-revision-a') as never;
-    store.policy = {
+    const { pinia } = setup();
+    const wrapper = mountRecommendationsPage(pinia);
+    const queryClient = getTestQueryClient(wrapper);
+    queryClient.setQueryData(
+      workspaceQueryKeys.portfolio,
+      portfolioWithTransition('portfolio-revision-a'),
+    );
+    queryClient.setQueryData(workspaceQueryKeys.policy, {
       active: {
         id: 'active-policy-b',
         activation_errors: [],
@@ -511,15 +530,15 @@ describe('RecommendationsPage', () => {
       },
       drafts: [],
       superseded: [],
-    } as never;
-    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    });
     await flushPromises();
 
     expect(wrapper.text()).toContain(
       'Portfolio effects use policy revision portfolio-revision-a; the active policy is active-policy-b.',
     );
+
     const mismatchBanner = wrapper
-      .findAllComponents(QBanner)
+      .findAll('[role="status"]')
       .find((banner) =>
         banner.text().includes('Portfolio effects use policy revision portfolio-revision-a'),
       );
@@ -535,9 +554,14 @@ describe('RecommendationsPage', () => {
   });
 
   it('keeps cached portfolio keys after a failed follow-up portfolio read', async () => {
-    const { pinia, store } = setup();
-    store.portfolio = portfolioWithTransition('portfolio-revision-a') as never;
-    store.policy = {
+    const { pinia } = setup();
+    const wrapper = mountRecommendationsPage(pinia);
+    const queryClient = getTestQueryClient(wrapper);
+    queryClient.setQueryData(
+      workspaceQueryKeys.portfolio,
+      portfolioWithTransition('portfolio-revision-a'),
+    );
+    queryClient.setQueryData(workspaceQueryKeys.policy, {
       active: {
         id: 'active-policy-b',
         activation_errors: [],
@@ -548,13 +572,15 @@ describe('RecommendationsPage', () => {
       },
       drafts: [],
       superseded: [],
-    } as never;
-    vi.stubGlobal(
-      'fetch',
-      vi.fn<typeof fetch>(() => Promise.reject(new Error('portfolio transport failed'))),
-    );
-    await expect(store.loadPortfolio()).rejects.toThrow('portfolio transport failed');
-    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    });
+    await queryClient
+      .fetchQuery({
+        queryKey: workspaceQueryKeys.portfolio,
+        queryFn: () => Promise.reject(new Error('portfolio transport failed')),
+        staleTime: 0,
+        retry: false,
+      })
+      .catch(() => undefined);
     await flushPromises();
 
     expect(wrapper.text()).toContain('cached data is being shown');
@@ -566,22 +592,82 @@ describe('RecommendationsPage', () => {
     wrapper.unmount();
   });
   it('uses shared policy freshness and run provenance selectors before displaying effects', async () => {
-    const { pinia, store } = setup();
-    store.resourceFreshness.policy = { status: 'stale', confirmedAt: '2025-02-01T12:00:00Z' };
-    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const { pinia } = setup();
+    const wrapper = mountRecommendationsPage(pinia);
+    const queryClient = getTestQueryClient(wrapper);
+    await queryClient
+      .fetchQuery({
+        queryKey: workspaceQueryKeys.policy,
+        queryFn: () => Promise.reject(new Error('stale policy fixture')),
+        staleTime: 0,
+        retry: false,
+      })
+      .catch(() => undefined);
     await flushPromises();
 
     expect(wrapper.get('.provenance-banner').text()).toContain('Stale/unverified run · read-only');
     const selectionTools = wrapper.get('.selection-tools');
-    expect(selectionTools.get('.q-input').classes()).toContain('q-field--disabled');
+    expect((selectionTools.get('#recommendation-top-n').element as HTMLInputElement).disabled).toBe(
+      true,
+    );
     for (const button of selectionTools.findAll('button')) {
       expect((button.element as HTMLButtonElement).disabled).toBe(true);
-      expect(button.classes()).toContain('disabled');
     }
     expect(wrapper.get('.effects-panel').text()).toContain(
       'Current portfolio API values with active-policy labels',
     );
     expect(wrapper.text()).toContain('cached data is being shown');
+    wrapper.unmount();
+  });
+
+  it('keeps run and selection actions independent of blank saved-run input', async () => {
+    const { pinia } = setup(null);
+    const run = makeRun('run-after-blank-saved-id');
+    const selectedRun = makeRun(run.run_id, ['group-a', 'group-b']);
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      const url = urlOf(input);
+      if (url.pathname === '/api/v1/optimizer/runs' && init?.method === 'POST')
+        return Promise.resolve(jsonResponse(run));
+      if (url.pathname.endsWith('/selection') && init?.method === 'POST')
+        return Promise.resolve(jsonResponse(selectedRun));
+      return Promise.reject(
+        new Error(`Unexpected request: ${init?.method ?? 'GET'} ${url.pathname}`),
+      );
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const wrapper = mountRecommendationsPage(pinia);
+    await flushPromises();
+
+    await wrapper.get('#recommendation-saved-run-id').setValue('   ');
+    expect((wrapper.get('form.saved-run-form button').element as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    await wrapper.get('form.saved-run-form').trigger('submit');
+    expect(fetcher).not.toHaveBeenCalled();
+
+    await wrapper.get('button.primary-button').trigger('click');
+    await flushPromises();
+    expect(
+      fetcher.mock.calls.some(
+        ([input, init]) =>
+          urlOf(input).pathname === '/api/v1/optimizer/runs' && init?.method === 'POST',
+      ),
+    ).toBe(true);
+
+    const selectTopGroups = wrapper
+      .findAll('button')
+      .find((button) => button.text() === 'Select top N and re-solve');
+    expect(selectTopGroups).toBeDefined();
+    await selectTopGroups!.trigger('click');
+    await flushPromises();
+    const selectionCall = fetcher.mock.calls.find(
+      ([input, init]) => urlOf(input).pathname.endsWith('/selection') && init?.method === 'POST',
+    );
+    expect(selectionCall).toBeDefined();
+    expect(JSON.parse(selectionCall?.[1]?.body as string)).toEqual({
+      selected_group_ids: ['group-a', 'group-b'],
+      selected_sell_lots: { 'group-a': ['BROKER-A1'], 'group-b': ['BROKER-B1'] },
+    });
     wrapper.unmount();
   });
 
@@ -597,7 +683,7 @@ describe('RecommendationsPage', () => {
       );
     });
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const wrapper = mountRecommendationsPage(pinia);
     await flushPromises();
     await wrapper.get('input[type="date"]').setValue('2026-11-06');
     await wrapper.get('button.primary-button').trigger('click');
@@ -617,6 +703,7 @@ describe('RecommendationsPage', () => {
 
   it('keeps review-mutation pending state across recommendation-page unmount and remount', async () => {
     const { pinia, store } = setup();
+    await flushPromises();
     const run = store.currentRun!;
     const response = {
       ...run,
@@ -633,12 +720,12 @@ describe('RecommendationsPage', () => {
     });
     expect(store.reviewMutationPending).toBe(true);
     await Promise.resolve();
-    const firstMount = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const firstMount = mountRecommendationsPage(pinia);
     await flushPromises();
     expect(firstMount.text()).toContain('Previous basket effects are withheld');
     firstMount.unmount();
 
-    const remounted = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const remounted = mountRecommendationsPage(pinia);
     await flushPromises();
     expect(remounted.text()).toContain('Previous basket effects are withheld');
 
@@ -682,15 +769,15 @@ describe('RecommendationsPage', () => {
       );
     });
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const wrapper = mountRecommendationsPage(pinia);
     await flushPromises();
+    await openRecommendationGroup(wrapper, 'group-a');
+    await openRecommendationGroup(wrapper, 'group-b');
     expect(wrapper.get('.run-controls').element.tagName).toBe('SECTION');
     expect(wrapper.get('.effects-panel').element.tagName).toBe('SECTION');
     expect(wrapper.get('.review-panel').element.tagName).toBe('SECTION');
     expect(wrapper.get('.export-panel').element.tagName).toBe('SECTION');
-    expect(
-      wrapper.findAllComponents(QCard).some((card) => card.classes().includes('filter-panel')),
-    ).toBe(true);
+    expect(wrapper.find('.filter-panel').exists()).toBe(true);
     expect(wrapper.get('.shared-leg-card').element.tagName).toBe('ARTICLE');
 
     expect(wrapper.text()).toContain('DEMO ONLY · non-actionable');
@@ -702,18 +789,22 @@ describe('RecommendationsPage', () => {
       wrapper.findAll('.leg-card').filter((card) => card.attributes('id') === 'leg-buy-shared'),
     ).toHaveLength(1);
     expect(wrapper.find('[aria-label="Recommendation filters"]').exists()).toBe(true);
-    const legLinks = wrapper.findAll('.group-card a[href^="#leg-"]');
+    const legLinks = wrapper.findAll('.group-card a[href^="#/recommendations#"]');
     const legDetailIds = wrapper.findAll('.leg-card').map((detail) => detail.attributes('id'));
     expect(legDetailIds).toContain('leg-sell-a');
     expect(legDetailIds).toContain('leg-buy-local');
     expect(legDetailIds.filter((id) => id === 'leg-buy-shared')).toHaveLength(1);
-    expect(legLinks.filter((link) => link.attributes('href') === '#leg-buy-shared')).toHaveLength(
-      2,
-    );
+    expect(
+      legLinks.filter((link) => link.attributes('href') === '#/recommendations#leg-buy-shared'),
+    ).toHaveLength(2);
     for (const link of legLinks) {
       const href = link.attributes('href') ?? '';
-      expect(href).toMatch(/^#leg-/);
-      expect(legDetailIds.filter((id) => id === href.slice(1))).toHaveLength(1);
+      expect(href).toMatch(/^#\/recommendations#leg-/);
+      expect(
+        legDetailIds.filter(
+          (id) => id === decodeURIComponent(href.slice(href.lastIndexOf('#') + 1)),
+        ),
+      ).toHaveLength(1);
     }
     expect(
       wrapper
@@ -751,8 +842,9 @@ describe('RecommendationsPage', () => {
         }),
     );
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const wrapper = mountRecommendationsPage(pinia);
     await flushPromises();
+    await openRecommendationGroup(wrapper, 'group-a');
 
     const groupCheckbox = wrapper.get(
       '[role="checkbox"][aria-label="Select recommendation group group-a"]',
@@ -764,6 +856,7 @@ describe('RecommendationsPage', () => {
 
     resolveSelection?.(jsonResponse(updatedRun));
     await flushPromises();
+    await openRecommendationGroup(wrapper, 'group-a');
     expect(
       wrapper
         .get('[role="checkbox"][aria-label="Select recommendation group group-a"]')
@@ -792,19 +885,21 @@ describe('RecommendationsPage', () => {
       return Promise.reject(new Error(`Unexpected request: ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const wrapper = mountRecommendationsPage(pinia);
     await flushPromises();
+    await openRecommendationGroup(wrapper, 'group-a');
     await wrapper
       .get('[role="checkbox"][aria-label="Select SELL lot BROKER-A1 in group group-a"]')
       .trigger('click');
     await flushPromises();
+    await openRecommendationGroup(wrapper, 'group-a');
 
     const payload = JSON.parse(fetcher.mock.calls[0]?.[1]?.body as string) as {
       selected_group_ids: string[];
       selected_sell_lots: Record<string, string[]>;
     };
     expect(payload).toEqual({ selected_group_ids: [], selected_sell_lots: {} });
-    expect(store.currentRun).toBe(selectedRun);
+    expect(currentRunForTest(store)).toBe(selectedRun);
     expect(
       wrapper
         .get('[role="checkbox"][aria-label="Select SELL lot BROKER-A1 in group group-a"]')
@@ -835,8 +930,9 @@ describe('RecommendationsPage', () => {
       return Promise.reject(new Error(`Unexpected request: ${init?.method} ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const wrapper = mountRecommendationsPage(pinia);
     await flushPromises();
+    await openRecommendationGroup(wrapper, 'group-a');
 
     const annotation = wrapper.get('[aria-label="Notes and rejection for group-a"]');
     await annotation.get('input').setValue('Not appropriate for this batch');
@@ -884,9 +980,10 @@ describe('RecommendationsPage', () => {
       ),
     );
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const wrapper = mountRecommendationsPage(pinia);
     await flushPromises();
-    const previousRun = store.currentRun;
+    const previousRun = currentRunForTest(store);
+    await openRecommendationGroup(wrapper, 'group-a');
     const annotation = wrapper.get('[aria-label="Notes and rejection for group-a"]');
     const reasonInput = annotation.get('input');
     expect(reasonInput.attributes('maxlength')).toBe('500');
@@ -898,7 +995,7 @@ describe('RecommendationsPage', () => {
     await rejectButton.trigger('click');
     await flushPromises();
     expect(fetcher).not.toHaveBeenCalled();
-    expect(store.currentRun).toBe(previousRun);
+    expect(currentRunForTest(store)).toBe(previousRun);
 
     await reasonInput.setValue('Valid reason');
     await rejectButton.trigger('click');
@@ -906,7 +1003,7 @@ describe('RecommendationsPage', () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(fetcher.mock.calls[0]?.[1]?.method).toBe('PATCH');
     expect(fetcher.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
-    expect(store.currentRun).toBe(previousRun);
+    expect(currentRunForTest(store)).toBe(previousRun);
     expect(
       store.currentRun?.groups.filter((group) => group.selected).map((group) => group.group_id),
     ).toEqual(['group-a', 'group-b']);
@@ -930,8 +1027,9 @@ describe('RecommendationsPage', () => {
       );
     });
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const wrapper = mountRecommendationsPage(pinia);
     await flushPromises();
+    await openRecommendationGroup(wrapper, 'group-a');
     const annotation = wrapper.get('[aria-label="Notes and rejection for group-a"]');
     const noteInput = annotation.get('textarea');
     expect(noteInput.attributes('maxlength')).toBe('2000');
@@ -971,8 +1069,9 @@ describe('RecommendationsPage', () => {
       );
     });
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const wrapper = mountRecommendationsPage(pinia);
     await flushPromises();
+    await openRecommendationGroup(wrapper, 'group-a');
 
     const annotation = wrapper.get('[aria-label="Notes and rejection for group-a"]');
     await annotation
@@ -1011,12 +1110,13 @@ describe('RecommendationsPage', () => {
       return Promise.reject(new Error(`Unexpected request: ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const wrapper = mountRecommendationsPage(pinia);
     await flushPromises();
     expect(fetcher).not.toHaveBeenCalled();
     await wrapper.get('input[placeholder="Run ID from Activity"]').setValue('saved-run-1');
     await wrapper.get('form.saved-run-form').trigger('submit');
     await flushPromises();
+    await openRecommendationGroup(wrapper, 'group-a');
 
     expect(store.currentRunView).toBe('saved');
     expect(wrapper.text()).toContain('Saved run · frozen API context · read-only');
@@ -1035,7 +1135,9 @@ describe('RecommendationsPage', () => {
   it('keeps stale-run group labels frozen while current portfolio effects use active-policy labels', async () => {
     const { pinia, store } = setup(makeRun());
     store.currentRunView = 'stale';
-    store.policy = {
+    const wrapper = mountRecommendationsPage(pinia);
+    const queryClient = getTestQueryClient(wrapper);
+    queryClient.setQueryData(workspaceQueryKeys.policy, {
       active: {
         id: 'policy-current',
         activation_errors: [],
@@ -1046,8 +1148,8 @@ describe('RecommendationsPage', () => {
       },
       drafts: [],
       superseded: [],
-    } as never;
-    store.portfolio = {
+    });
+    queryClient.setQueryData(workspaceQueryKeys.portfolio, {
       ...readyPortfolio(),
       active_policy_revision_id: 'policy-current',
       allocation: {
@@ -1056,21 +1158,15 @@ describe('RecommendationsPage', () => {
         target: null,
       },
       us_transition: transitionResponse(['current-child'], 'Current portfolio transition'),
-    } as never;
-    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    });
     await flushPromises();
 
     const effects = wrapper.get('.effects-panel');
     const allocation = effects.get('.allocation-panel');
-    const allocationMarkup = allocation.findComponent(QMarkupTable);
-    expect(allocationMarkup.exists()).toBe(true);
-    expect(allocationMarkup.element.querySelectorAll('table')).toHaveLength(1);
-    const allocationTable = allocationMarkup.element.querySelector('table');
-    expect(
-      allocationTable?.querySelector('caption')?.textContent?.replace(/\s+/g, ' ').trim(),
-    ).toBe('Current, proposed basket, and policy target allocation weights');
-    expect(allocationTable?.querySelectorAll('thead th[scope="col"]')).toHaveLength(
-      allocationTable?.querySelectorAll('thead th').length,
+    const allocationTable = allocation.get('table').element as HTMLTableElement;
+    expect(allocationTable.querySelectorAll('thead th[scope="col"]')).toHaveLength(4);
+    expect(allocationTable.querySelector('caption')?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      'Current, proposed basket, and policy target allocation weights',
     );
     const allocationRegion = allocation.get(
       '[role="region"][aria-label="Portfolio allocation weights"]',
@@ -1115,7 +1211,7 @@ describe('RecommendationsPage', () => {
       return Promise.reject(new Error(`Unexpected request: ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const wrapper = mountRecommendationsPage(pinia);
     await flushPromises();
     await wrapper.get('input[placeholder="Run ID from Activity"]').setValue('saved-transition-run');
     await wrapper.get('form.saved-run-form').trigger('submit');
@@ -1146,7 +1242,7 @@ describe('RecommendationsPage', () => {
       },
     } as unknown as OptimizerRecommendationsResponse;
     const { pinia } = setup(run);
-    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const wrapper = mountRecommendationsPage(pinia);
     await flushPromises();
 
     const panel = wrapper.get('[aria-label="Frozen run display context"]');
@@ -1176,7 +1272,7 @@ describe('RecommendationsPage', () => {
     const click = vi
       .spyOn(HTMLAnchorElement.prototype, 'click')
       .mockImplementation(() => undefined);
-    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const wrapper = mountRecommendationsPage(pinia);
     await flushPromises();
     await wrapper
       .findAll('button')
@@ -1196,16 +1292,18 @@ describe('RecommendationsPage', () => {
       'group-b': { note: 'saved note B', rejectionReason: 'saved rejection B' },
     });
     const { pinia } = setup(run);
-    const firstMount = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const firstMount = mountRecommendationsPage(pinia);
     await flushPromises();
+    await openRecommendationGroup(firstMount, 'group-a');
 
     const firstGroup = firstMount.get('[aria-label="Notes and rejection for group-a"]');
     expect((firstGroup.get('textarea').element as HTMLTextAreaElement).value).toBe('saved note A');
     expect((firstGroup.get('input').element as HTMLInputElement).value).toBe('saved rejection A');
     firstMount.unmount();
 
-    const remount = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const remount = mountRecommendationsPage(pinia);
     await flushPromises();
+    await openRecommendationGroup(remount, 'group-a');
     const remountedGroup = remount.get('[aria-label="Notes and rejection for group-a"]');
     expect((remountedGroup.get('textarea').element as HTMLTextAreaElement).value).toBe(
       'saved note A',
@@ -1238,8 +1336,9 @@ describe('RecommendationsPage', () => {
       return Promise.reject(new Error(`Unexpected request: ${init?.method} ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const wrapper = mountRecommendationsPage(pinia);
     await flushPromises();
+    await openRecommendationGroup(wrapper, 'group-a');
 
     await wrapper
       .get('[role="checkbox"][aria-label="Select SELL lot BROKER-A2 in group group-a"]')
@@ -1277,8 +1376,9 @@ describe('RecommendationsPage', () => {
       return Promise.reject(new Error(`Unexpected request: ${init?.method} ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const wrapper = mountRecommendationsPage(pinia);
     await flushPromises();
+    await openRecommendationGroup(wrapper, 'group-a');
 
     await wrapper
       .get('[role="checkbox"][aria-label="Select SELL lot BROKER-A2 in group group-a"]')
@@ -1319,8 +1419,10 @@ describe('RecommendationsPage', () => {
       return Promise.reject(new Error(`Unexpected request: ${init?.method} ${url.pathname}`));
     });
     vi.stubGlobal('fetch', fetcher);
-    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const wrapper = mountRecommendationsPage(pinia);
     await flushPromises();
+    await openRecommendationGroup(wrapper, 'group-a');
+    await openRecommendationGroup(wrapper, 'group-b');
 
     const groupA = wrapper.get('[aria-label="Notes and rejection for group-a"]');
     await groupA.get('textarea').setValue('unsaved note A');
@@ -1329,6 +1431,8 @@ describe('RecommendationsPage', () => {
       .get('[role="checkbox"][aria-label="Select recommendation group group-b"]')
       .trigger('click');
     await flushPromises();
+    await openRecommendationGroup(wrapper, 'group-a');
+    await openRecommendationGroup(wrapper, 'group-b');
 
     const subsetGroupA = wrapper.get('[aria-label="Notes and rejection for group-a"]');
     const subsetNote = subsetGroupA.get('textarea').element as HTMLTextAreaElement;
@@ -1340,6 +1444,8 @@ describe('RecommendationsPage', () => {
     await groupB.get('textarea').setValue('  confirmed note B  ');
     await groupB.get('button').trigger('click');
     await flushPromises();
+    await openRecommendationGroup(wrapper, 'group-a');
+    await openRecommendationGroup(wrapper, 'group-b');
 
     expect(store.currentRun).toEqual(annotatedRun);
     expect(store.currentRun?.groups.find((group) => group.group_id === 'group-b')?.note).toBe(
@@ -1366,17 +1472,19 @@ describe('RecommendationsPage', () => {
       'group-a': { note: 'new saved note', rejectionReason: 'new saved rejection' },
     });
     const { pinia, store } = setup(initialRun);
-    const wrapper = mount(RecommendationsPage, { global: { plugins: [pinia] } });
+    const wrapper = mountRecommendationsPage(pinia);
     await flushPromises();
+    await openRecommendationGroup(wrapper, 'group-a');
 
     const groupA = wrapper.get('[aria-label="Notes and rejection for group-a"]');
     await groupA.get('textarea').setValue('stale unsaved note');
     await groupA.get('input').setValue('stale unsaved rejection');
-    store.currentRun = null;
+    seedCurrentRunForTest(store, null);
     await flushPromises();
-    store.currentRun = nextRun;
+    seedCurrentRunForTest(store, nextRun);
     store.currentRunView = 'current';
     await flushPromises();
+    await openRecommendationGroup(wrapper, 'group-a');
 
     const nextGroup = wrapper.get('[aria-label="Notes and rejection for group-a"]');
     const nextNote = nextGroup.get('textarea').element as HTMLTextAreaElement;

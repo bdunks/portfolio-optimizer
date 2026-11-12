@@ -8,7 +8,7 @@
 | Concern      | Decision                                                                     | Reason                                                    |
 | ------------ | ---------------------------------------------------------------------------- | --------------------------------------------------------- |
 | Deployment   | Local-only, single-user, **single-account** Linux workstation (`127.0.0.1`)  | No online distribution, multi-account routing or admin    |
-| Frontend     | Vue 3, TypeScript, Quasar CLI with Vite, Pinia, Vue Router                   | Responsive, data-dense trade review without React         |
+| Frontend     | Vue 3, TypeScript, standalone Vite, shadcn-vue, Tailwind CSS 4, Pinia, Vue Router, TanStack Query/Table/Form/Charts                   | Responsive, data-dense trade review without React         |
 | Backend      | Standard CPython **3.14** (fallback 3.13), FastAPI, Pydantic v2              | Typed, testable financial services and API                |
 | Environment  | Existing mise; uv installed via mise; backend `.venv` managed by uv          | Reproducible setup                                        |
 | Database     | **SQLite**, SQLAlchemy 2, Alembic                                            | Durable relational storage with minimal administration    |
@@ -23,7 +23,7 @@ Use a **modular monolith** managing **one configured E*TRADE brokerage account**
 
 ## 2. Repository layout and module ownership
 
-Illustrative responsibilities; Codex may split or combine files when useful, but should preserve these boundaries. Existing Quasar/uv scaffolding must not be regenerated.
+Illustrative responsibilities; Codex may split or combine files when useful, but should preserve these boundaries. Existing Vite/uv scaffolding must not be regenerated.
 
 ```text
 portfolio-optimizer/
@@ -95,7 +95,7 @@ API, SQLAlchemy, broker and optimizer concerns should not leak into Vue componen
                                                     ▼
                     immutable run inputs + ranked trade groups (SQLite)
                                                     │
-                                      FastAPI DTOs ──> Quasar/Pinia UI
+                                      FastAPI DTOs ──> Vue/shadcn-vue/Pinia UI
                                                     │
                          user selects group/lot subset; batch re-solve
                                                     │
@@ -365,7 +365,7 @@ Illustrative run summary (tax benefit is nullable when inputs are incomplete):
 
 ## 9. Frontend design contract
 
-- Recreate the HTML reference in real Quasar components (`QLayout`, `QDrawer`, `QHeader`, `QPage`, `QCard`, `QTable`, `QDialog`, `QBadge`, `QInput`, `QSelect`, `QToggle`, `QBtn`, `QBanner`, `QTooltip`); desktop-first, tablet-aware, keyboard-accessible.
+- Recreate the HTML reference in Vue 3 using shadcn-vue components and Tailwind CSS; desktop-first, tablet-aware, keyboard-accessible.
 - `components/` owns reusable transition hierarchy, allocation/tax/batch editors, trade-group panels, lots and order dialogs. `stores/` owns API-loaded state, drafts, run selection, loading/error modes. `services/api.ts` is the typed transport; do not reimplement financial math in Vue.
 - All six screens: Overview, Recommendations, Tax Lots, Allocation Policy (including **Tax & Batch Settings**), Wash Sales, Activity.
 - **3-State US Transition Widget (`USAllocationTransition.vue`):** Must display all **three** states—**Current**, **Proposed Basket (Post-Selected-Trades)**, and **Configured Policy Target**—clearly labeling whether each percentage is total-portfolio or within-US-sleeve.
@@ -398,7 +398,7 @@ Illustrative run summary (tax benefit is nullable when inputs are incomplete):
 
 1. **Phase 1 — Foundation & offline demo vertical slice (split for subagents):**
    - **Phase 1A (Backend & API Contract):** Existing mise/uv scaffold; typed SQLite/SQLAlchemy schema & Alembic migrations, single-account `FakeBroker`, `Decimal` policy/sleeve validation, Phase 1 `/api/v1/*` contracts with deterministic, explicitly labeled demo fixtures (including demo runs/selection/exports); later-phase capabilities return explicit unavailable/disabled responses, never fabricated success; no live OAuth, real optimizer or broker-write completion is implied, `pytest` suite, and generated TypeScript API contract (`frontend/src/types/api.ts`).
-   - **Phase 1B (Frontend Quasar App):** Existing Quasar/Vite scaffold; Pinia stores, typed `services/api.ts`, all six pages (including 3-state US transition, full sleeve CRUD, and Tax & Batch Settings) and `vitest` tests wired to the Phase 1A backend.
+   - **Phase 1B (Frontend Vite App):** Existing standalone Vite scaffold with shadcn-vue; Pinia stores, typed `services/api.ts`, all six pages (including 3-state US transition, full sleeve CRUD, and Tax & Batch Settings) and `vitest` tests wired to the Phase 1A backend.
 2. **Phase 2 — Real 2-pass small-batch optimizer:** E*TRADE-independent exact IRS tax netting ($T(S, L)$), single-account 30-day wash-sale logic, cached Vanguard/iShares look-through exposure engine, 2-pass small-batch CVXPY/OSQP solve with non-worsening drift slack, multi-lot order consolidation, whole-share repair, independent `Decimal` validation, subset re-solve, and ~460-security/2,500-lot `< 10s` benchmark.
 3. **Phase 3 — E\*TRADE read integration & live look-through sync:** OAuth 1.0a `oob` flow (`/api/v1/auth/etrade/*`), single-account paginated holdings/lot/transaction sync, Vanguard JSON and iShares CSV look-through sync, cash reconciliation, market-data freshness and incomplete-data safeguards. Overnight acceptance uses deterministic broker/HTTP fixtures; interactive OAuth and real-account acceptance are deferred and do not block later offline phases. Do not connect to E*TRADE overnight.
 4. **Phase 4 — Security and reliability hardening:** Migration/restart/backup tests, exceptional-state UI, reconciliation diagnostics, stable API contracts and automated end-to-end QA (including browser flows, keyboard behavior, error states and desktop/tablet layouts). No manual QA is a mandatory overnight gate. Human visual/usability review is a deferred follow-up, not a substitute for automated functional coverage; real OAuth/account validation and live-write release approval remain separate deferred gates.
@@ -409,7 +409,7 @@ No separate multi-year projection subsystem, multi-account routing, external-tax
 ## 13. References
 
 - SQLite: https://www.sqlite.org/whentouse.html ; WAL: https://www.sqlite.org/wal.html
-- Quasar: https://quasar.dev/start/quick-start/
+- Vite: https://vite.dev/guide/ ; shadcn-vue: https://www.shadcn-vue.com/docs/introduction.html
 - uv: https://docs.astral.sh/uv/guides/projects/
 - CVXPY: https://www.cvxpy.org/ ; OSQP: https://osqp.org/
 - Vanguard Holdings API pattern: `https://advisors.vanguard.com/investments/products/api/funds/{FUND_ID}/holdings/latest`

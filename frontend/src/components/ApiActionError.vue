@@ -1,16 +1,25 @@
 <template>
-  <QBanner v-if="error" class="api-error" rounded role="alert" aria-live="assertive">
-    <strong>{{ title }}</strong>
-    <span>
-      <code>{{ error.code }}</code
+  <Alert
+    v-if="error"
+    class="api-error workspace-foundation"
+    data-workspace-foundation
+    variant="destructive"
+    role="alert"
+    aria-live="assertive"
+  >
+    <AlertTitle>{{ title }}</AlertTitle>
+    <AlertDescription>
+      <code class="tw:font-bold">{{ error.code }}</code
       >: {{ error.message }}
-    </span>
-    <small v-if="error.correlationId">Correlation ID: {{ error.correlationId }}</small>
-  </QBanner>
+      <small v-if="error.correlationId" class="tw:block">
+        Correlation ID: {{ error.correlationId }}
+      </small>
+    </AlertDescription>
+  </Alert>
 </template>
 
 <script setup lang="ts">
-import { QBanner } from 'quasar';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import type { ApiError } from '@/services/api';
 
 withDefaults(
@@ -24,18 +33,6 @@ withDefaults(
 
 <style scoped>
 .api-error {
-  border: 1px solid #efc2c2;
-  border-radius: 0.65rem;
-  background: #fff0f0;
-  color: #812f36;
   overflow-wrap: anywhere;
-}
-
-.api-error code {
-  font-weight: 700;
-}
-
-.api-error small {
-  color: #68464a;
 }
 </style>

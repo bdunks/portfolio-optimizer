@@ -1,6 +1,6 @@
-import { installQuasarForTests } from '@/test-utils/quasar-mount';
+import { installWorkspaceTestPlugin } from '@/test-utils/workspace-mount';
 
-installQuasarForTests();
+installWorkspaceTestPlugin();
 
 if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = class implements ResizeObserver {

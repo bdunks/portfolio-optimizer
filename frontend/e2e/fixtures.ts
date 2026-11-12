@@ -35,23 +35,19 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 function startFrontend(port: number, apiBaseUrl: string): ManagedProcess {
-  const child = spawn(
-    'npm',
-    ['run', 'dev', '--', '--port', String(port), '--hostname', '127.0.0.1'],
-    {
-      cwd: frontendDirectory,
-      detached: process.platform !== 'win32',
-      env: {
-        PATH: process.env.PATH ?? '',
-        HOME: process.env.HOME ?? tmpdir(),
-        PORTFOLIO_API_TARGET: apiBaseUrl,
-        PORTFOLIO_E2E: '1',
-        NO_COLOR: '1',
-        npm_config_update_notifier: 'false',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
+  const child = spawn('npm', ['run', 'dev', '--', '--port', String(port), '--host', '127.0.0.1'], {
+    cwd: frontendDirectory,
+    detached: process.platform !== 'win32',
+    env: {
+      PATH: process.env.PATH ?? '',
+      HOME: process.env.HOME ?? tmpdir(),
+      PORTFOLIO_API_TARGET: apiBaseUrl,
+      PORTFOLIO_E2E: '1',
+      NO_COLOR: '1',
+      npm_config_update_notifier: 'false',
     },
-  );
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
   let output = '';
   let startError: Error | null = null;
   const capture = (chunk: Buffer): void => {
@@ -106,7 +102,7 @@ async function stopFrontend(processHandle: ManagedProcess): Promise<void> {
     }
   }
   if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
-    throw new Error(`Quasar dev process ${child.pid} was not reaped`);
+    throw new Error(`Vite dev process ${child.pid} was not reaped`);
   }
 }
 
@@ -118,7 +114,7 @@ async function waitForFrontend(baseUrl: string, processHandle: ManagedProcess): 
       const response = await fetch(baseUrl, { signal: AbortSignal.timeout(1500) });
       if (response.ok && (await response.text()).includes('<html')) return;
     } catch {
-      // Retry only the isolated loopback request while Quasar starts.
+      // Retry only the isolated loopback request while Vite starts.
     }
     await delay(200);
   }
@@ -126,7 +122,7 @@ async function waitForFrontend(baseUrl: string, processHandle: ManagedProcess): 
   const startupError = processHandle.spawnError();
   const errorDetail = startupError ? `: ${startupError.message}` : '';
   throw new Error(
-    `Isolated Quasar dev server did not become ready${errorDetail}.\n${processHandle.logs()}`,
+    `Isolated Vite dev server did not become ready${errorDetail}.\n${processHandle.logs()}`,
   );
 }
 

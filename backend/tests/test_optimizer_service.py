@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import multiprocessing
+import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from multiprocessing.synchronize import Event
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -29,7 +32,7 @@ from app.db.models import (
 from app.db.session import create_database_engine
 from app.domain.financial_inputs import PolicySettings
 from app.domain.portfolio_accounting import ConsolidatedLeg, LotAllocation
-from app.optimizer.runtime import WorkerResult, WorkerTimeoutError
+from app.optimizer.runtime import WorkerCapacityError, WorkerResult, WorkerTimeoutError
 from app.schemas import (
     OptimizerLotReviewIntentInput,
     OptimizerSelectionInput,
@@ -206,6 +209,157 @@ async def test_run_validated_candidate_rejects_late_owner_validation(monkeypatch
 
     with pytest.raises(WorkerTimeoutError):
         await optimizer_service.run_validated_candidate(inputs, supervisor)  # type: ignore[arg-type]
+
+def _owner_validation_hang(started: Event, *, deadline: float) -> str:
+    started.set()
+    while True:
+        time.sleep(0.01)
+
+
+def _owner_validation_sleep(started: Event, seconds: float, value: str, *, deadline: float) -> str:
+    started.set()
+    time.sleep(seconds)
+    return value
+
+
+def _owner_validation_echo(value: str, *, deadline: float) -> str:
+    return value
+
+
+async def _wait_for_owner_validation(executor: optimizer_service.BoundedValidationExecutor, started: Event) -> int:
+    loop = asyncio.get_running_loop()
+    wait_until = loop.time() + 8
+    while not started.is_set():
+        if loop.time() >= wait_until:
+            raise AssertionError("owner validation child did not start")
+        await asyncio.sleep(0.01)
+    for handle in executor._supervisor._active.values():
+        if handle.process.pid is not None:
+            return handle.process.pid
+    raise AssertionError("owner validation child exited before its pid was captured")
+
+
+def _assert_process_reaped(pid: int) -> None:
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+@pytest.mark.asyncio
+async def test_bounded_validation_executor_kills_timeout_reaps_and_releases_capacity() -> None:
+    context = multiprocessing.get_context("spawn")
+    started = context.Event()
+    executor = optimizer_service.BoundedValidationExecutor(max_workers=1)
+    pulse_stop = asyncio.Event()
+    pulse_count = 0
+
+    async def event_loop_pulse() -> None:
+        nonlocal pulse_count
+        while not pulse_stop.is_set():
+            pulse_count += 1
+            await asyncio.sleep(0.01)
+
+    pulse_task = asyncio.create_task(event_loop_pulse())
+    deadline = time.monotonic() + 1.5
+    run_started = time.monotonic()
+    validation_task = asyncio.create_task(
+        executor.run(_owner_validation_hang, started, deadline=deadline)
+    )
+    try:
+        child_pid = await _wait_for_owner_validation(executor, started)
+        with pytest.raises(WorkerTimeoutError):
+            await validation_task
+        assert time.monotonic() - run_started < 2.5
+        assert pulse_count > 20
+        assert executor._supervisor.active_workers == 0
+        _assert_process_reaped(child_pid)
+        assert await executor.run(
+            _owner_validation_echo, "capacity-reclaimed", deadline=time.monotonic() + 3
+        ) == "capacity-reclaimed"
+    finally:
+        pulse_stop.set()
+        await asyncio.gather(pulse_task, return_exceptions=True)
+        if not validation_task.done():
+            validation_task.cancel()
+        await asyncio.gather(validation_task, return_exceptions=True)
+        await executor.aclose()
+
+
+@pytest.mark.asyncio
+async def test_bounded_validation_executor_rejects_saturation_and_cleans_cancelled_and_closed_jobs() -> None:
+    context = multiprocessing.get_context("spawn")
+    executor = optimizer_service.BoundedValidationExecutor(max_workers=1)
+    started = context.Event()
+    running = asyncio.create_task(
+        executor.run(_owner_validation_hang, started, deadline=time.monotonic() + 10)
+    )
+    child_pid = await _wait_for_owner_validation(executor, started)
+    try:
+        rejection_started = time.monotonic()
+        with pytest.raises(WorkerCapacityError):
+            await executor.run(
+                _owner_validation_echo, "must-not-queue", deadline=time.monotonic() + 3
+            )
+        assert time.monotonic() - rejection_started < 0.2
+
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        assert executor._supervisor.active_workers == 0
+        _assert_process_reaped(child_pid)
+        assert await executor.run(
+            _owner_validation_echo, "cancel-released", deadline=time.monotonic() + 3
+        ) == "cancel-released"
+
+        closing_started = context.Event()
+        closing = asyncio.create_task(
+            executor.run(
+                _owner_validation_hang,
+                closing_started,
+                deadline=time.monotonic() + 10,
+            )
+        )
+        closing_pid = await _wait_for_owner_validation(executor, closing_started)
+        await executor.aclose()
+        closing_result = await asyncio.gather(closing, return_exceptions=True)
+        assert isinstance(closing_result[0], BaseException)
+        assert executor._supervisor.active_workers == 0
+        _assert_process_reaped(closing_pid)
+    finally:
+        if not running.done():
+            running.cancel()
+        await asyncio.gather(running, return_exceptions=True)
+        await executor.aclose()
+
+
+@pytest.mark.asyncio
+async def test_bounded_validation_executor_keeps_original_absolute_deadline() -> None:
+    context = multiprocessing.get_context("spawn")
+    started = context.Event()
+    executor = optimizer_service.BoundedValidationExecutor(max_workers=1)
+    deadline = time.monotonic() + 2.5
+    await asyncio.sleep(1)
+    run_started = time.monotonic()
+    validation_task = asyncio.create_task(
+        executor.run(
+            _owner_validation_sleep,
+            started,
+            4,
+            "too-late",
+            deadline=deadline,
+        )
+    )
+    try:
+        child_pid = await _wait_for_owner_validation(executor, started)
+        with pytest.raises(WorkerTimeoutError):
+            await validation_task
+        assert time.monotonic() - run_started < 2.2
+        _assert_process_reaped(child_pid)
+    finally:
+        if not validation_task.done():
+            validation_task.cancel()
+        await asyncio.gather(validation_task, return_exceptions=True)
+        await executor.aclose()
+
 
 
 _RUN_ID = "service-run"

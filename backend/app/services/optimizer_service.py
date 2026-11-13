@@ -6,18 +6,14 @@ both pass within the ProcessSupervisor's shared deadline.
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import importlib
 import json
-import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal
-from functools import partial
 from typing import Any
 from uuid import UUID, uuid4, uuid5
 
@@ -41,6 +37,7 @@ from app.domain.financial_inputs import FinancialInputs, PolicySettings
 from app.domain.portfolio_accounting import ConsolidatedLeg
 from app.domain.trade_dates import classify_holding_period, resolve_proposed_trade_date
 from app.optimizer.runtime import (
+    DEFAULT_TIMEOUT_SECONDS,
     ProcessSupervisor,
     WorkerCapacityError,
     WorkerResult,
@@ -93,44 +90,42 @@ class _RunState:
     selection_universe: dict[str, list[str]]
 
 
+@dataclass(frozen=True, slots=True)
+class _OwnerValidationInput:
+    validator: Callable[..., object]
+    args: tuple[object, ...]
+    original_deadline: float
+
+
+def _owner_validation_worker(worker_input: _OwnerValidationInput, deadline: float) -> object:
+    """Run pure owner validation in a child that the supervisor can terminate."""
+    validation_deadline = min(worker_input.original_deadline, deadline)
+    return worker_input.validator(*worker_input.args, deadline=validation_deadline)
+
+
 class BoundedValidationExecutor:
-    """Run the pure owner validator off-loop with bounded, non-queued capacity."""
+    """Run pure owner validation with bounded, killable, non-queued capacity."""
 
     def __init__(self, max_workers: int = 2) -> None:
-        self._max_workers = max_workers
-        self._active = 0
-        self._lock = threading.Lock()
-        self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="optimizer-owner-validation")
-        self._closed = False
+        self._supervisor = ProcessSupervisor(max_workers=max_workers)
 
     async def run(self, validator: Callable[..., object], *args: object, deadline: float) -> object:
-        with self._lock:
-            if self._closed or self._active >= self._max_workers:
-                raise WorkerCapacityError("all optimizer owner-validation slots are occupied")
-            self._active += 1
-        loop = asyncio.get_running_loop()
-        try:
-            future = loop.run_in_executor(self._executor, partial(validator, *args, deadline=deadline))
-        except BaseException:
-            self._release()
-            raise
-        future.add_done_callback(lambda _future: self._release())
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise WorkerTimeoutError("optimizer owner validation missed the shared deadline")
-        try:
-            return await asyncio.wait_for(asyncio.shield(future), timeout=remaining)
-        except TimeoutError as exc:
-            raise WorkerTimeoutError("optimizer owner validation missed the shared deadline") from exc
-
-    def _release(self) -> None:
-        with self._lock:
-            self._active = max(0, self._active - 1)
+        worker_input = _OwnerValidationInput(validator, args, deadline)
+        result: WorkerResult[object] = await self._supervisor.run(
+            worker_input,
+            _owner_validation_worker,
+            timeout_seconds=min(remaining, DEFAULT_TIMEOUT_SECONDS),
+            validation_reserve_seconds=0,
+        )
+        if time.monotonic() >= deadline:
+            raise WorkerTimeoutError("optimizer owner validation missed the shared deadline")
+        return result.value
 
     async def aclose(self) -> None:
-        with self._lock:
-            self._closed = True
-        self._executor.shutdown(wait=False, cancel_futures=True)
+        await self._supervisor.aclose()
 
 
 def _fingerprint_bundle(value: object) -> str:

@@ -360,7 +360,10 @@
           <USAllocationTransition
             :transition="usTransition"
             :labels="effectLabels"
-            :show-no-current-basket="!currentRunTransitionAvailable"
+            :snapshot-status="transitionSnapshotStatus"
+            :basket-status="transitionBasketStatus"
+            :role-identity="transitionRoleIdentity"
+            :provenance="transitionProvenance"
           />
         </CardContent>
       </Card>
@@ -482,6 +485,7 @@ import { formatPercent, formatUsd } from '@/utils/display-values';
 import USAllocationTransition from '@/components/USAllocationTransition.vue';
 import { useWorkspace } from '@/composables/use-workspace';
 import { displayCount } from './overview-state';
+import { selectionFromRun } from './recommendations-state';
 
 import { completeFrozenRunSleeveLabels } from './run-context';
 import {
@@ -586,6 +590,79 @@ const usTransition = computed(() => {
     return store.currentRun?.portfolio_effects?.us_transition ?? null;
   }
   return portfolio.value?.us_transition ?? null;
+});
+function hasSelectedTradeBasket(run: NonNullable<typeof store.currentRun>): boolean | null {
+  if (!Array.isArray(run.groups) || !Array.isArray(run.consolidated_legs)) return null;
+  try {
+    return (selectionFromRun(run).selected_group_ids?.length ?? 0) > 0;
+  } catch {
+    return null;
+  }
+}
+const currentPortfolioTransitionStatus = computed(() => {
+  if (store.workspaceResourceLoadPending) return 'pending';
+  const freshness = store.resourceFreshness;
+  if (
+    freshness.health.status === 'stale' ||
+    freshness.portfolio.status === 'stale' ||
+    freshness.policy.status === 'stale'
+  ) {
+    return 'stale';
+  }
+  if (!portfolio.value || portfolio.value.status !== 'ready') return 'unavailable';
+  if (
+    !portfolio.value.sync.complete ||
+    store.health?.status !== 'ok' ||
+    !store.health.schema_ready ||
+    freshness.health.status !== 'fresh' ||
+    freshness.portfolio.status !== 'fresh' ||
+    freshness.policy.status !== 'fresh' ||
+    !activePolicy.value ||
+    !portfolioLabelContext.value.revisionsMatch
+  ) {
+    return 'unverified';
+  }
+  return 'confirmed';
+});
+const transitionSnapshotStatus = computed(() =>
+  currentRunTransitionAvailable.value ? 'confirmed' : currentPortfolioTransitionStatus.value,
+);
+const transitionBasketStatus = computed(() => {
+  if (currentRunMatches.value) {
+    const run = store.currentRun;
+    if (!run) return 'unavailable';
+    const hasSelectedTrades = hasSelectedTradeBasket(run);
+    if (hasSelectedTrades === null) return 'unverified';
+    if (!hasSelectedTrades) return 'no-selection';
+    return currentRunTransitionAvailable.value ? 'confirmed' : 'unavailable';
+  }
+  if (runPresentation.value.state === 'pending') return 'pending';
+  if (runPresentation.value.state === 'stale') return 'stale';
+  if (runPresentation.value.state === 'unverified') return 'unverified';
+  return 'no-selection';
+});
+const transitionProvenance = computed(() =>
+  currentRunTransitionAvailable.value ? 'current_run' : 'current_portfolio',
+);
+const transitionRoleIdentity = computed(() => {
+  const sleeves = currentRunTransitionAvailable.value
+    ? (runDisplayContext.value?.sleeves ?? null)
+    : currentPortfolioTransitionStatus.value === 'confirmed'
+      ? (activePolicy.value?.sleeves ?? null)
+      : null;
+  if (!sleeves) return null;
+  const containers = sleeves.filter((sleeve) => sleeve.is_direct_index_container);
+  if (containers.length !== 1) return null;
+  const containerKey = containers[0]?.sleeve_key ?? null;
+  if (!containerKey) return null;
+  const children = sleeves.filter((sleeve) => sleeve.parent_sleeve_key === containerKey);
+  const legacy = children.filter((sleeve) => sleeve.is_direct_index_sleeve);
+  const destinations = children.filter((sleeve) => sleeve.is_transition_destination);
+  return {
+    containerKey,
+    legacyKey: legacy.length === 1 ? (legacy[0]?.sleeve_key ?? null) : null,
+    destinationKey: destinations.length === 1 ? (destinations[0]?.sleeve_key ?? null) : null,
+  };
 });
 const coverageEntries = computed(() => Object.entries(portfolio.value?.coverage ?? {}));
 const positionCount = computed(() => {

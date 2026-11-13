@@ -245,7 +245,10 @@
             <USAllocationTransition
               :transition="effectDisplay.transition"
               :labels="effectDisplay.labels"
-              :show-no-current-basket="showNoCurrentBasket"
+              :snapshot-status="transitionSnapshotStatus"
+              :basket-status="transitionBasketStatus"
+              :role-identity="transitionRoleIdentity"
+              :provenance="effectDisplay.source"
             />
           </CardContent>
         </Card>
@@ -733,6 +736,7 @@ import {
   groupSellLotIds,
   requestGroupSelection,
   requestLotSelection,
+  selectionFromRun,
   sharedLegs,
   unlinkedLegs,
 } from './recommendations-state';
@@ -910,6 +914,80 @@ const effectDisplay = computed(() => {
     transition: portfolio.value?.us_transition ?? null,
     labels: portfolioLabelContext.value.labels,
     source: 'current_portfolio' as const,
+  };
+});
+function hasSelectedTradeBasket(run: NonNullable<typeof store.currentRun>): boolean | null {
+  if (!Array.isArray(run.groups) || !Array.isArray(run.consolidated_legs)) return null;
+  try {
+    return (selectionFromRun(run).selected_group_ids?.length ?? 0) > 0;
+  } catch {
+    return null;
+  }
+}
+const currentPortfolioTransitionStatus = computed(() => {
+  if (store.workspaceResourceLoadPending) return 'pending';
+  const freshness = store.resourceFreshness;
+  if (
+    freshness.health.status === 'stale' ||
+    freshness.portfolio.status === 'stale' ||
+    freshness.policy.status === 'stale'
+  ) {
+    return 'stale';
+  }
+  if (!portfolio.value || portfolio.value.status !== 'ready') return 'unavailable';
+  if (
+    !portfolio.value.sync.complete ||
+    store.health?.status !== 'ok' ||
+    !store.health.schema_ready ||
+    freshness.health.status !== 'fresh' ||
+    freshness.portfolio.status !== 'fresh' ||
+    freshness.policy.status !== 'fresh' ||
+    !activePolicy.value ||
+    !portfolioLabelContext.value.revisionsMatch
+  ) {
+    return 'unverified';
+  }
+  return 'confirmed';
+});
+const transitionSnapshotStatus = computed(() => {
+  if (effectDisplay.value.source === 'saved_run') return 'saved';
+  if (effectDisplay.value.source === 'current_run') return 'confirmed';
+  return currentPortfolioTransitionStatus.value;
+});
+const transitionBasketStatus = computed(() => {
+  if (effectDisplay.value.source === 'current_run' || effectDisplay.value.source === 'saved_run') {
+    const run = currentRun.value;
+    if (!run) return 'unavailable';
+    const hasSelectedTrades = hasSelectedTradeBasket(run);
+    if (hasSelectedTrades === null) return 'unverified';
+    if (!hasSelectedTrades) return 'no-selection';
+    if (!effectDisplay.value.transition) return 'unavailable';
+    return effectDisplay.value.source === 'saved_run' ? 'saved' : 'confirmed';
+  }
+  if (runPresentation.value.state === 'pending') return 'pending';
+  if (runPresentation.value.state === 'stale') return 'stale';
+  if (runPresentation.value.state === 'unverified') return 'unverified';
+  return 'no-selection';
+});
+const transitionRoleIdentity = computed(() => {
+  const sleeves =
+    effectDisplay.value.source === 'current_run' || effectDisplay.value.source === 'saved_run'
+      ? (runDisplayContext.value?.sleeves ?? null)
+      : currentPortfolioTransitionStatus.value === 'confirmed'
+        ? (activePolicy.value?.sleeves ?? null)
+        : null;
+  if (!sleeves) return null;
+  const containers = sleeves.filter((sleeve) => sleeve.is_direct_index_container);
+  if (containers.length !== 1) return null;
+  const containerKey = containers[0]?.sleeve_key ?? null;
+  if (!containerKey) return null;
+  const children = sleeves.filter((sleeve) => sleeve.parent_sleeve_key === containerKey);
+  const legacy = children.filter((sleeve) => sleeve.is_direct_index_sleeve);
+  const destinations = children.filter((sleeve) => sleeve.is_transition_destination);
+  return {
+    containerKey,
+    legacyKey: legacy.length === 1 ? (legacy[0]?.sleeve_key ?? null) : null,
+    destinationKey: destinations.length === 1 ? (destinations[0]?.sleeve_key ?? null) : null,
   };
 });
 const effectsDescription = computed(() => runPresentation.value.effectsDescription);

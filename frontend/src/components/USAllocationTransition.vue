@@ -1,110 +1,153 @@
 <template>
-  <section class="transition-panel tw:min-w-0 tw:space-y-4" aria-labelledby="transition-title">
-    <header
-      class="panel-heading tw:flex tw:min-w-0 tw:flex-col tw:items-start tw:justify-between tw:gap-3"
-    >
+  <section class="transition-panel tw:min-w-0 tw:space-y-3" aria-labelledby="transition-title">
+    <header class="transition-heading">
       <div class="tw:min-w-0">
-        <h2 id="transition-title" class="transition-title tw:m-0">US Equities Transition</h2>
-        <p class="panel-description tw:m-0">
-          {{ transition?.label ?? 'US sleeve' }} · API-reported values; percentages identify both
-          within-sleeve and whole-portfolio units.
+        <h2 id="transition-title" class="transition-title tw:m-0">US Equities Transition Policy</h2>
+        <p class="panel-description tw:mt-1">
+          Configured targets guide a gradual, tax-constrained transition; they are not instructions
+          to liquidate immediately.
         </p>
       </div>
       <Badge variant="secondary" class="tw:h-auto tw:whitespace-normal tw:text-center">
-        Within US sleeve + whole portfolio
+        {{ provenanceLabel }}
       </Badge>
     </header>
 
-    <Alert v-if="showNoCurrentBasket" role="status" aria-live="polite" class="transition-notice">
-      <AlertDescription>
-        No current proposed basket from a matching current optimizer run. Values shown below come
-        only from the portfolio API; historical or stale runs are not overlaid.
-      </AlertDescription>
-    </Alert>
-
     <Alert
-      v-if="transition && transition.transition_destination_sleeve_key === null"
+      v-if="snapshotStatus !== 'confirmed' && snapshotStatus !== 'saved'"
+      role="status"
+      aria-live="polite"
+      class="transition-notice"
+    >
+      <AlertDescription>{{ snapshotStatusMessage }}</AlertDescription>
+    </Alert>
+    <Alert
+      v-if="basketStatus !== 'confirmed' && basketStatus !== 'saved'"
+      role="status"
+      aria-live="polite"
+      class="transition-notice"
+    >
+      <AlertDescription>{{ basketStatusMessage }}</AlertDescription>
+    </Alert>
+    <Alert
+      v-if="
+        transition && transition.transition_destination_sleeve_key === null && hasConfirmedSnapshot
+      "
       role="status"
       aria-live="polite"
       class="transition-notice"
     >
       <AlertDescription>
-        No transition destination is designated in this policy; progress is unavailable and no ETF
-        or ticker is inferred.
+        No transition destination is designated; progress is unavailable and no ETF, ticker, or
+        sleeve name is inferred.
       </AlertDescription>
     </Alert>
 
-    <Empty v-if="!transition" role="status" aria-live="polite" class="transition-empty">
-      <EmptyHeader class="transition-empty-header">
-        <EmptyTitle class="transition-empty-title" role="heading" aria-level="2">
-          US transition data unavailable
-        </EmptyTitle>
-        <EmptyDescription class="transition-empty-description">
-          US transition data is unavailable from the portfolio API.
-        </EmptyDescription>
-      </EmptyHeader>
-    </Empty>
+    <div class="transition-headline tw:gap-x-4 tw:gap-y-2 tw:p-3" aria-live="polite">
+      <strong
+        v-if="
+          transition &&
+          transition.transition_destination_sleeve_key === null &&
+          hasConfirmedSnapshot
+        "
+      >
+        Set up US transition
+      </strong>
+      <strong v-else-if="transition && transition.transition_destination_sleeve_key === null"
+        >Destination status unverified</strong
+      >
+      <strong v-else-if="transition && hasConfirmedSnapshot">Currently in new holdings</strong>
+      <strong v-else-if="transition">Destination configured · progress unconfirmed</strong>
+      <strong v-else>US transition data unavailable</strong>
+      <span v-if="transition && transition.transition_destination_sleeve_key !== null">
+        {{ displaySnapshotPercent(transition.current.etf_progress_pct) }} within US sleeve
+      </span>
+      <span
+        v-else-if="
+          transition &&
+          transition.transition_destination_sleeve_key === null &&
+          hasConfirmedSnapshot
+        "
+        >Designate a transition destination to make progress available.</span
+      >
+      <span v-else-if="transition"
+        >Destination status is unavailable until current data is confirmed.</span
+      >
+      <span v-else>Current transition progress is unavailable.</span>
+    </div>
 
-    <div v-else class="state-grid">
-      <article v-for="state in states" :key="state.key" class="state-card" :data-state="state.key">
-        <Card class="transition-state-card tw:h-full">
-          <CardHeader class="transition-state-header">
-            <CardTitle class="transition-state-title" role="heading" aria-level="3">
-              {{ state.title }}
-            </CardTitle>
-            <CardDescription>
+    <div class="whole-portfolio-summary" aria-label="US sleeve share of whole portfolio">
+      <div
+        v-for="summary in wholePortfolioSummaries"
+        :key="summary.key"
+        class="tw:gap-1 tw:p-2.5 tw:px-3"
+      >
+        <span class="summary-label">{{ summary.label }}</span>
+        <strong>{{ summary.value }}</strong>
+      </div>
+    </div>
+
+    <div
+      class="transition-table-region"
+      role="region"
+      aria-label="US allocation transition comparison"
+      tabindex="0"
+    >
+      <table class="transition-table">
+        <caption class="tw:px-3 tw:py-2">
+          Current, after selected trades, and configured target percentages within the US sleeve
+        </caption>
+        <thead>
+          <tr>
+            <th class="tw:px-3 tw:py-2.5" scope="col">Allocation sleeve</th>
+            <th class="tw:px-3 tw:py-2.5" scope="col">Current</th>
+            <th class="tw:px-3 tw:py-2.5" scope="col">After selected trades</th>
+            <th class="tw:px-3 tw:py-2.5" scope="col">Target</th>
+          </tr>
+        </thead>
+        <tbody v-if="childKeys.length">
+          <tr v-for="childKey in childKeys" :key="childKey">
+            <th class="tw:px-3 tw:py-2.5" scope="row">
+              <span>{{ labels[childKey] ?? childKey }}</span>
+              <Badge
+                v-if="roleLabel(childKey)"
+                variant="outline"
+                class="role-badge tw:mt-1 tw:ml-1"
+              >
+                {{ roleLabel(childKey) }}
+              </Badge>
+            </th>
+            <td class="tw:px-3 tw:py-2.5">
+              <strong>{{
+                displaySnapshotPercent(transition?.current.children[childKey]?.within_us_sleeve_pct)
+              }}</strong>
+              <span class="unit-label tw:mt-1">within US sleeve</span>
+            </td>
+            <td class="tw:px-3 tw:py-2.5" :aria-label="basketCellAriaLabel(childKey)">
+              <strong>{{ displayBasketPercent(childKey) }}</strong>
+              <span v-if="hasBasketValues" class="unit-label tw:mt-1">within US sleeve</span>
+            </td>
+            <td class="tw:px-3 tw:py-2.5">
+              <strong>{{
+                displaySnapshotPercent(transition?.target.children[childKey]?.within_us_sleeve_pct)
+              }}</strong>
+              <span class="unit-label tw:mt-1">within US sleeve</span>
+            </td>
+          </tr>
+        </tbody>
+        <tbody v-else>
+          <tr>
+            <th class="tw:px-3 tw:py-2.5" scope="row">US allocation components</th>
+            <td class="tw:px-3 tw:py-2.5" colspan="3">
               {{
-                state.key === 'target'
-                  ? 'Policy target percentages; dollar values and progress are unavailable.'
-                  : 'Portfolio API values.'
+                transition
+                  ? 'No US allocation component values were returned.'
+                  : 'US transition data unavailable.'
               }}
-            </CardDescription>
-          </CardHeader>
-          <CardContent class="transition-state-content">
-            <dl class="state-summary tw:m-0">
-              <div class="state-summary-row tw:pb-2">
-                <dt>US sleeve value</dt>
-                <dd class="tw:m-0">{{ formatUsd(state.snapshot?.us_sleeve_value_usd) }}</dd>
-              </div>
-              <div class="state-summary-row tw:pb-2">
-                <dt>US sleeve share of portfolio</dt>
-                <dd class="tw:m-0">
-                  {{
-                    formatPercent(
-                      state.snapshot?.us_sleeve_whole_portfolio_pct ??
-                        state.target?.us_sleeve_whole_portfolio_pct,
-                    )
-                  }}
-                </dd>
-              </div>
-              <div class="state-summary-row tw:pb-2">
-                <dt>Transition destination progress within US sleeve</dt>
-                <dd class="tw:m-0">{{ formatPercent(state.snapshot?.etf_progress_pct) }}</dd>
-              </div>
-            </dl>
-
-            <h4 class="component-heading tw:mt-4 tw:mb-2">US sleeve components</h4>
-            <ul v-if="childKeys.length" class="component-list tw:m-0 tw:p-0">
-              <li v-for="childKey in childKeys" :key="childKey" class="tw:py-2">
-                <strong>{{ labels[childKey] ?? childKey }}</strong>
-                <span>
-                  {{ formatPercent(childWithinSleeve(state, childKey)) }} within US sleeve
-                </span>
-                <span>
-                  {{ formatPercent(childWholePortfolio(state, childKey)) }} of whole portfolio
-                </span>
-                <span>{{ formatUsd(childValue(state, childKey)) }}</span>
-              </li>
-            </ul>
-            <Empty v-else role="status" aria-live="polite" class="component-empty tw:p-0">
-              <EmptyHeader class="component-empty-header">
-                <EmptyTitle role="heading" aria-level="5">No US sleeve component values</EmptyTitle>
-                <EmptyDescription>No US sleeve component values were returned.</EmptyDescription>
-              </EmptyHeader>
-            </Empty>
-          </CardContent>
-        </Card>
-      </article>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   </section>
 </template>
@@ -113,45 +156,37 @@
 import { computed } from 'vue';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
 import { formatPercent, formatUsd } from '@/utils/display-values';
-import type {
-  TransitionSnapshotResponse,
-  TransitionTargetResponse,
-  USTransitionResponse,
-} from '@/types/api';
+import type { USTransitionResponse } from '@/types/api';
 
-type TransitionState = {
-  key: 'current' | 'proposed' | 'target';
-  title: string;
-  snapshot: TransitionSnapshotResponse | null;
-  target: TransitionTargetResponse | null;
+type SnapshotStatus = 'confirmed' | 'saved' | 'pending' | 'stale' | 'unverified' | 'unavailable';
+type BasketStatus =
+  'confirmed' | 'saved' | 'no-selection' | 'pending' | 'stale' | 'unverified' | 'unavailable';
+type TransitionRoleIdentity = {
+  containerKey: string | null;
+  legacyKey: string | null;
+  destinationKey: string | null;
 };
 
 const props = withDefaults(
   defineProps<{
     transition: USTransitionResponse | null;
     labels?: Record<string, string>;
-    showNoCurrentBasket?: boolean;
+    snapshotStatus?: SnapshotStatus;
+    basketStatus?: BasketStatus;
+    roleIdentity?: TransitionRoleIdentity | null;
+    provenance?: 'current_portfolio' | 'current_run' | 'saved_run';
   }>(),
-  { labels: () => ({}), showNoCurrentBasket: false },
+  {
+    labels: () => ({}),
+    snapshotStatus: 'confirmed',
+    basketStatus: 'no-selection',
+    roleIdentity: null,
+    provenance: 'current_portfolio',
+  },
 );
 
 const labels = computed(() => props.labels);
-const states = computed<TransitionState[]>(() => {
-  if (!props.transition) return [];
-  return [
-    { key: 'current', title: 'Current', snapshot: props.transition.current, target: null },
-    {
-      key: 'proposed',
-      title: 'Proposed basket',
-      snapshot: props.transition.proposed_basket,
-      target: null,
-    },
-    { key: 'target', title: 'Policy target', snapshot: null, target: props.transition.target },
-  ];
-});
 const childKeys = computed(() => {
   if (!props.transition) return [];
   return [
@@ -162,29 +197,150 @@ const childKeys = computed(() => {
     ]),
   ];
 });
+const hasConfirmedSnapshot = computed(
+  () => props.snapshotStatus === 'confirmed' || props.snapshotStatus === 'saved',
+);
+const hasBasketValues = computed(
+  () =>
+    hasConfirmedSnapshot.value &&
+    (props.basketStatus === 'confirmed' || props.basketStatus === 'saved'),
+);
+const provenanceLabel = computed(() => {
+  if (props.provenance === 'saved_run') return 'Saved run · frozen context · read-only';
+  if (props.provenance === 'current_run') return 'Current selected-basket API context';
+  return 'Current portfolio API context';
+});
+const snapshotStatusMessage = computed(() => {
+  switch (props.snapshotStatus) {
+    case 'pending':
+      return 'Current US transition data is pending confirmation; values are withheld.';
+    case 'stale':
+      return 'Current US transition data is stale; values are withheld. Review the freshness notice.';
+    case 'unverified':
+      return 'Current US transition provenance is unverified; values are withheld.';
+    case 'unavailable':
+      return 'Current US transition data is unavailable from the API.';
+    default:
+      return '';
+  }
+});
+const basketStatusMessage = computed(() => {
+  switch (props.basketStatus) {
+    case 'no-selection':
+      return 'No trades selected. Proposed values are not shown.';
+    case 'pending':
+      return 'Selected-trade effects are pending API confirmation; prior proposed values are withheld.';
+    case 'stale':
+      return 'Selected-trade effects are stale; no proposed values are shown.';
+    case 'unverified':
+      return 'Selected-trade context is unverified; no proposed values are shown.';
+    case 'unavailable':
+      return 'Selected-trade effects are unavailable; no proposed values are shown.';
+    default:
+      return '';
+  }
+});
+const wholePortfolioSummaries = computed(() => {
+  const transition = props.transition;
+  return [
+    {
+      key: 'current',
+      label: 'Current US sleeve · of whole portfolio',
+      value: transition
+        ? `${displaySnapshotUsd(transition.current.us_sleeve_value_usd)} · ${displaySnapshotPercent(transition.current.us_sleeve_whole_portfolio_pct)}`
+        : 'Unavailable',
+    },
+    {
+      key: 'proposed',
+      label: 'After selected trades · of whole portfolio',
+      value: transition
+        ? hasBasketValues.value
+          ? `${displayBasketUsd()} · ${displayBasketWholePortfolioPercent()}`
+          : basketStatusMessage.value || 'Unavailable'
+        : 'Unavailable',
+    },
+    {
+      key: 'target',
+      label: 'Target US sleeve · of whole portfolio',
+      value: transition
+        ? `${displaySnapshotPercent(transition.target.us_sleeve_whole_portfolio_pct)} · dollar value unavailable`
+        : 'Unavailable',
+    },
+  ];
+});
 
-function childWithinSleeve(state: TransitionState, childKey: string): string | null {
-  return (
-    state.snapshot?.children[childKey]?.within_us_sleeve_pct ??
-    state.target?.children[childKey]?.within_us_sleeve_pct ??
-    null
-  );
+function roleLabel(childKey: string): string | null {
+  const identity = props.roleIdentity;
+  const transition = props.transition;
+  if (!identity || !transition || identity.containerKey !== transition.sleeve_key) return null;
+  if (
+    identity.destinationKey !== null &&
+    identity.destinationKey === transition.transition_destination_sleeve_key &&
+    childKey === identity.destinationKey
+  ) {
+    return 'New holdings';
+  }
+  if (identity.legacyKey !== null && childKey === identity.legacyKey) return 'Legacy holdings';
+  return null;
 }
 
-function childWholePortfolio(state: TransitionState, childKey: string): string | null {
-  return (
-    state.snapshot?.children[childKey]?.whole_portfolio_pct ??
-    state.target?.children[childKey]?.whole_portfolio_pct ??
-    null
-  );
+function snapshotStatusValue(): string {
+  if (props.snapshotStatus === 'confirmed' || props.snapshotStatus === 'saved') return '';
+  if (props.snapshotStatus === 'pending') return 'Pending';
+  if (props.snapshotStatus === 'stale') return 'Unavailable (stale data)';
+  if (props.snapshotStatus === 'unverified') return 'Unavailable (unverified data)';
+  return 'Unavailable';
 }
 
-function childValue(state: TransitionState, childKey: string): string | null {
-  return state.snapshot?.children[childKey]?.value_usd ?? null;
+function displaySnapshotPercent(value: string | null | undefined): string {
+  if (snapshotStatusValue()) return snapshotStatusValue();
+  return formatPercent(value);
+}
+
+function displaySnapshotUsd(value: string | null | undefined): string {
+  if (snapshotStatusValue()) return snapshotStatusValue();
+  return formatUsd(value);
+}
+
+function displayBasketPercent(childKey: string): string {
+  if (hasBasketValues.value && props.transition) {
+    return formatPercent(props.transition.proposed_basket.children[childKey]?.within_us_sleeve_pct);
+  }
+  if (props.basketStatus === 'no-selection') return '—';
+  if (props.basketStatus === 'pending') return 'Pending';
+  if (props.basketStatus === 'stale') return 'Unavailable (stale effects)';
+  if (props.basketStatus === 'unverified') return 'Unavailable (unverified effects)';
+  return 'Unavailable';
+}
+
+function basketCellAriaLabel(childKey: string): string {
+  if (hasBasketValues.value && props.transition) {
+    return `${formatPercent(props.transition.proposed_basket.children[childKey]?.within_us_sleeve_pct)} within US sleeve`;
+  }
+  return basketStatusMessage.value || 'Selected-trade value unavailable';
+}
+
+function displayBasketUsd(): string {
+  if (!props.transition || snapshotStatusValue()) return snapshotStatusValue() || 'Unavailable';
+  return formatUsd(props.transition.proposed_basket.us_sleeve_value_usd);
+}
+
+function displayBasketWholePortfolioPercent(): string {
+  if (!props.transition || snapshotStatusValue()) return snapshotStatusValue() || 'Unavailable';
+  return formatPercent(props.transition.proposed_basket.us_sleeve_whole_portfolio_pct);
 }
 </script>
 
 <style scoped>
+/* Grid gaps use the shared 4px spacing scale; negative-margin gutters distort grid tracks. */
+.transition-heading {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
 .transition-title {
   color: var(--foreground);
   font-size: var(--tw-text-lg);
@@ -195,7 +351,6 @@ function childValue(state: TransitionState, childKey: string): string | null {
 
 .panel-description {
   max-width: 52rem;
-
   color: var(--muted-foreground);
   font-size: var(--tw-text-sm);
   line-height: var(--tw-text-sm--line-height);
@@ -205,139 +360,119 @@ function childValue(state: TransitionState, childKey: string): string | null {
   min-width: 0;
 }
 
-.transition-empty {
+.transition-headline {
+  display: flex;
   min-width: 0;
-  border: 1px dashed var(--border);
-}
-
-.transition-empty-header,
-.component-empty-header {
-  max-width: none;
-  align-items: flex-start;
-}
-
-.transition-empty-title {
-  color: var(--foreground);
-  font-size: var(--tw-text-base);
-  font-weight: var(--tw-font-weight-semibold);
-  line-height: var(--tw-text-base--line-height);
-}
-
-.transition-empty-description {
-  text-align: left;
-}
-
-/* negative-margin gutters distort grid tracks; native grid gap preserves widths. */
-.state-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 16px;
-}
-
-.state-card {
-  min-width: 0;
-}
-
-.transition-state-card {
-  min-width: 0;
-}
-
-.transition-state-title {
-  color: var(--foreground);
-  font-size: var(--tw-text-base);
-  font-weight: var(--tw-font-weight-semibold);
-  line-height: var(--tw-text-base--line-height);
-  letter-spacing: var(--tw-tracking-tight);
-}
-
-.state-summary {
-  display: grid;
-  gap: 8px;
-}
-
-.state-summary-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
-  border-bottom: 1px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--muted);
 }
 
-.state-summary dt {
+.transition-headline strong {
+  color: var(--foreground);
+  font-size: var(--tw-text-base);
+}
+
+.transition-headline span {
+  color: var(--muted-foreground);
+  font-size: var(--tw-text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.whole-portfolio-summary {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+  gap: 8px;
+}
+
+.whole-portfolio-summary > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.summary-label,
+.unit-label {
   color: var(--muted-foreground);
   font-size: var(--tw-text-xs);
-  line-height: var(--tw-text-xs--line-height);
+  line-height: 1.4;
 }
 
-.state-summary dd {
-  text-align: right;
-  font-size: var(--tw-text-sm);
-  font-weight: var(--tw-font-weight-semibold);
-  font-variant-numeric: tabular-nums;
+.whole-portfolio-summary strong {
   overflow-wrap: anywhere;
-}
-
-.component-heading {
   color: var(--foreground);
   font-size: var(--tw-text-sm);
-  font-weight: var(--tw-font-weight-semibold);
-  line-height: var(--tw-text-sm--line-height);
-
-  text-transform: uppercase;
-}
-
-.component-list {
-  list-style: none;
-}
-
-.component-list li {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  border-top: 1px solid var(--border);
-
-  overflow-wrap: anywhere;
-  font-size: var(--tw-text-sm);
-}
-
-.component-list strong {
-  color: var(--foreground);
-  font-size: var(--tw-text-sm);
-  font-weight: var(--tw-font-weight-semibold);
-}
-
-.component-list span {
-  color: var(--muted-foreground);
   font-variant-numeric: tabular-nums;
 }
 
-.component-empty {
+.transition-table-region {
   min-width: 0;
-  gap: 8px;
-  border: 0;
-
-  text-align: left;
-  align-items: flex-start;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
 }
 
-.component-empty [data-slot='empty-title'] {
-  color: var(--foreground);
+.transition-table-region:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.transition-table {
+  width: 100%;
+  min-width: 42rem;
+  border-collapse: collapse;
+  text-align: left;
   font-size: var(--tw-text-sm);
-  font-weight: var(--tw-font-weight-medium);
-  line-height: var(--tw-text-sm--line-height);
 }
 
-.component-empty [data-slot='empty-description'] {
+.transition-table caption {
+  color: var(--muted-foreground);
   text-align: left;
+  font-size: var(--tw-text-xs);
 }
 
-@media (min-width: 901px) {
-  .panel-heading {
-    flex-direction: row;
-  }
+.transition-table th,
+.transition-table td {
+  border-top: 1px solid var(--border);
+  vertical-align: top;
+}
 
-  .state-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+.transition-table thead th {
+  color: var(--muted-foreground);
+  font-weight: var(--tw-font-weight-medium);
+}
+
+.transition-table tbody th {
+  min-width: 10rem;
+  color: var(--foreground);
+  font-weight: var(--tw-font-weight-medium);
+}
+
+.transition-table td strong {
+  display: block;
+  color: var(--foreground);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.unit-label {
+  display: block;
+}
+
+.role-badge {
+  display: inline-flex;
+  min-height: 1.25rem;
+  vertical-align: middle;
+}
+
+@media (max-width: 640px) {
+  .transition-heading {
+    flex-direction: column;
   }
 }
 </style>

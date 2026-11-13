@@ -79,6 +79,58 @@ function transitionResponse(childKeys: string[], label: string): USTransitionRes
     },
   };
 }
+function distinctTransitionResponse(): USTransitionResponse {
+  return {
+    sleeve_key: 'us',
+    transition_destination_sleeve_key: 'nested',
+    label: 'Synthetic US transition',
+    current: {
+      us_sleeve_value_usd: '100.00',
+      us_sleeve_whole_portfolio_pct: '40.0000',
+      etf_progress_pct: '10.0000',
+      children: {
+        nested: {
+          value_usd: '10.00',
+          within_us_sleeve_pct: '10.0000',
+          whole_portfolio_pct: '4.0000',
+        },
+      },
+    },
+    proposed_basket: {
+      us_sleeve_value_usd: '101.00',
+      us_sleeve_whole_portfolio_pct: '41.0000',
+      etf_progress_pct: '20.0000',
+      children: {
+        nested: {
+          value_usd: '20.00',
+          within_us_sleeve_pct: '20.0000',
+          whole_portfolio_pct: '8.0000',
+        },
+      },
+    },
+    target: {
+      us_sleeve_whole_portfolio_pct: '50.0000',
+      children: { nested: { within_us_sleeve_pct: '50.0000', whole_portfolio_pct: '25.0000' } },
+    },
+  };
+}
+
+function withRunTransition(
+  run: OptimizerRecommendationsResponse,
+  transition: USTransitionResponse,
+): OptimizerRecommendationsResponse {
+  return {
+    ...run,
+    portfolio_effects: {
+      allocation: run.portfolio_effects?.allocation ?? {
+        current: null,
+        proposed: null,
+        target: null,
+      },
+      us_transition: transition,
+    },
+  };
+}
 
 function frozenContextWithTransitionLabels() {
   const context = frozenContext();
@@ -550,6 +602,11 @@ describe('RecommendationsPage', () => {
     expect(effects).toContain('transition_nested');
     expect(effects).not.toContain('Active policy US label');
     expect(effects).not.toContain('Active policy nested label');
+    const transition = wrapper.get('.transition-panel');
+    expect(transition.text()).toContain(
+      'Current US transition provenance is unverified; values are withheld.',
+    );
+    expect(transition.text()).not.toContain('100.00 USD');
     wrapper.unmount();
   });
 
@@ -1178,14 +1235,54 @@ describe('RecommendationsPage', () => {
     const transition = effects.get('.transition-panel');
     expect(transition.text()).toContain('Current transition child');
     expect(transition.text()).not.toContain('current-child');
+    expect(transition.text()).toContain(
+      'Selected-trade effects are stale; no proposed values are shown.',
+    );
+    expect(transition.text()).toContain('Unavailable (stale effects)');
+    expect(transition.text()).not.toContain('Saved run · frozen context · read-only');
     const group = wrapper.get('.group-card');
     expect(group.text()).toContain('Frozen US equity');
     expect(group.text()).not.toContain('Current US policy label');
     wrapper.unmount();
   });
+  it('withholds a current matching run basket when no selected sell trades exist', async () => {
+    const run = withRunTransition(makeRun(), distinctTransitionResponse());
+    const { pinia } = setup(run);
+    const wrapper = mountRecommendationsPage(pinia);
+    await flushPromises();
+
+    const transition = wrapper.get('.transition-panel');
+    const values = transition.get('tbody tr').findAll('td');
+    expect(transition.text()).toContain('Current selected-basket API context');
+    expect(transition.text()).toContain('No trades selected. Proposed values are not shown.');
+    expect(transition.get('.whole-portfolio-summary').text()).not.toContain('101.00 USD');
+    expect(values[0]?.text()).toContain('10.0000%');
+    expect(values[1]?.text()).toBe('—');
+    expect(values[1]?.text()).not.toContain('20.0000%');
+    expect(values[2]?.text()).toContain('50.0000%');
+    wrapper.unmount();
+  });
+
+  it('shows selected current-run API values only for the exact selected trade basket', async () => {
+    const run = withRunTransition(
+      makeRun('run-selected', ['group-a']),
+      distinctTransitionResponse(),
+    );
+    const { pinia } = setup(run);
+    const wrapper = mountRecommendationsPage(pinia);
+    await flushPromises();
+
+    const transition = wrapper.get('.transition-panel');
+    const values = transition.get('tbody tr').findAll('td');
+    expect(transition.text()).toContain('Current selected-basket API context');
+    expect(transition.get('.whole-portfolio-summary').text()).toContain('101.00 USD · 41.0000%');
+    expect(values[1]?.text()).toContain('20.0000%');
+    expect(values[1]?.text()).toContain('within US sleeve');
+    wrapper.unmount();
+  });
 
   it('uses frozen labels for nested transition children in a saved run', async () => {
-    const baseRun = makeRun('saved-transition-run');
+    const baseRun = makeRun('saved-transition-run', ['group-a']);
     const savedRun = {
       ...baseRun,
       portfolio_effects: {
@@ -1222,6 +1319,9 @@ describe('RecommendationsPage', () => {
     expect(transition.text()).toContain('Historical replacement ETF sleeve');
     expect(transition.text()).not.toContain('historical-us-direct');
     expect(transition.text()).not.toContain('historical-us-etf');
+    expect(transition.text()).toContain('Saved run · frozen context · read-only');
+    expect(transition.text()).toContain('After selected trades');
+    expect(transition.text()).not.toContain('No trades selected. Proposed values are not shown.');
     expect(transition.text()).not.toContain('Active US (renamed)');
     expect(wrapper.get('.effects-panel').text()).toContain('Frozen run effects and labels');
     wrapper.unmount();

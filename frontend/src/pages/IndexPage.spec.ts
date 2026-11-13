@@ -345,6 +345,11 @@ describe('IndexPage', () => {
     expect(wrapper.get('.allocation-card').text()).not.toContain('Active policy US label');
     expect(wrapper.get('.transition-card').text()).toContain('transition_nested');
     expect(wrapper.get('.transition-card').text()).not.toContain('Active policy nested label');
+    expect(wrapper.get('.transition-card').text()).toContain(
+      'Current US transition data is stale; values are withheld. Review the freshness notice.',
+    );
+    expect(wrapper.get('.transition-card').text()).not.toContain('Currently in new holdings');
+    expect(wrapper.get('.transition-card').text()).not.toContain('100.00 USD');
     wrapper.unmount();
   });
 

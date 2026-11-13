@@ -20,6 +20,7 @@ from query_test_support import count_selects
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
 
+from app import main as main_module
 from app.broker.fake import FakeBroker
 from app.db.models import (
     CurrentPosition,
@@ -37,6 +38,7 @@ from app.main import create_app
 from app.schemas import BrokerSnapshot
 from app.services import demo_optimizer
 from app.services.demo_optimizer import _fingerprint
+from app.services.errors import AppError
 
 
 @pytest.fixture
@@ -1423,3 +1425,29 @@ def test_missing_frozen_policy_context_uses_only_exact_revision_or_reports_unava
     old_sleeve = next(row for row in exact_revision_context["sleeves"] if row["sleeve_key"] == "us_equities")
     assert old_sleeve["display_name"] == original_name
     assert old_sleeve["display_name"] != "New active label"
+
+
+
+def test_real_optimizer_timeout_app_error_is_not_a_generic_http_500(
+    demo_app: tuple[FastAPI, TestClient, FakeBroker, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _app, client, _, _ = demo_app
+
+    async def timeout_run(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AppError(
+            "optimizer_timeout",
+            "The production optimizer did not finish and validate within its shared deadline",
+            status_code=504,
+            details={"basket_unchanged": True, "run_id": "persisted-timeout-run"},
+        )
+
+    monkeypatch.setattr(main_module, "create_production_run", timeout_run)
+    response = client.post("/api/v1/optimizer/runs", json={"mode": "real_optimizer"})
+
+    assert response.status_code == 504
+    assert response.json()["code"] == "optimizer_timeout"
+    assert response.json()["details"] == {
+        "basket_unchanged": True,
+        "run_id": "persisted-timeout-run",
+    }

@@ -296,6 +296,7 @@ async def run_validated_candidate(
         "infeasible",
         "configuration_required",
         "deadline_exceeded",
+        "search_incomplete",
     }:
         raise AppError(
             "optimizer_core_contract_error",
@@ -345,7 +346,12 @@ async def run_validated_candidate(
     return ValidatedOptimizerCandidate(candidate, validation, worker_result.overall_deadline, status)
 
 
-def _app_error_for_worker_error(exc: Exception, *, basket_unchanged: bool) -> AppError:
+def _app_error_for_worker_error(
+    exc: Exception, *, basket_unchanged: bool, run_id: str | None = None
+) -> AppError:
+    details: dict[str, object] = {"basket_unchanged": basket_unchanged}
+    if run_id is not None:
+        details["run_id"] = run_id
     if isinstance(exc, WorkerCapacityError):
         return AppError(
             "optimizer_capacity_exceeded",
@@ -358,7 +364,7 @@ def _app_error_for_worker_error(exc: Exception, *, basket_unchanged: bool) -> Ap
             "optimizer_timeout",
             "The production optimizer did not finish and validate within its shared deadline",
             status_code=504,
-            details={"basket_unchanged": basket_unchanged},
+            details=details,
         )
     raise exc
 
@@ -509,6 +515,19 @@ def _exposure_coverage_payload(validation: object | None) -> dict[str, object] |
     }
 
 
+def _search_evidence(metadata: object) -> dict[str, object]:
+    """Expose incomplete-search diagnostics without presenting infeasibility as proven."""
+    return {
+        "search_state": "incomplete",
+        "feasibility_proven": False,
+        "tax_regions_considered": getattr(metadata, "tax_regions_considered", 0),
+        "tax_regions_solved": getattr(metadata, "tax_regions_solved", 0),
+        "tax_region_search_complete": getattr(metadata, "tax_region_search_complete", False),
+        "integer_search_complete": getattr(metadata, "integer_search_complete", False),
+        "solver_statuses": list(getattr(metadata, "solver_statuses", ())),
+    }
+
+
 def _optimizer_metrics(prepared: PreparedOptimizerRun, result: ValidatedOptimizerCandidate) -> dict[str, object]:
     candidate = result.candidate
     metadata = candidate.metadata
@@ -517,6 +536,9 @@ def _optimizer_metrics(prepared: PreparedOptimizerRun, result: ValidatedOptimize
     sale_wash, buy_wash = _wash_assessment_payload(validation)
     portfolio = _portfolio_effects_payload(evaluation, prepared.inputs)
     tax = _tax_assessment_payload(validation)
+    warnings = list(metadata.warnings)
+    if result.status == "search_incomplete":
+        warnings.append("search_incomplete_no_feasibility_claim")
     priorities = []
     for priority in getattr(metadata, "trade_group_priorities", ()):
         priorities.append(
@@ -557,7 +579,7 @@ def _optimizer_metrics(prepared: PreparedOptimizerRun, result: ValidatedOptimize
         },
         "exposure_coverage_complete": metadata.exposure_coverage_complete,
         "rounding_attempts": metadata.rounding_attempts,
-        "warnings": list(metadata.warnings),
+        "warnings": warnings,
         "trade_group_priorities": priorities,
         "tax_assessment": tax,
         "sale_wash_assessments": sale_wash,
@@ -584,6 +606,8 @@ def _optimizer_metrics(prepared: PreparedOptimizerRun, result: ValidatedOptimize
         "group_annotations": {},
         "basket_revision": 0,
     }
+    if result.status == "search_incomplete":
+        metrics["search_evidence"] = _search_evidence(metadata)
     return metrics
 
 
@@ -737,7 +761,11 @@ def _persist_candidate(
             )
 
     group_priorities = _priority_map(metadata)
-    group_ids = sorted(set(universe) | set(active_group_ids), key=lambda key: (getattr(group_priorities.get(key), "rank", 10**6), key))
+    group_ids = (
+        []
+        if outcome.status == "search_incomplete"
+        else sorted(set(universe) | set(active_group_ids), key=lambda key: (getattr(group_priorities.get(key), "rank", 10**6), key))
+    )
     next_rank = 1
     rank_for_group: dict[str, int] = {}
     for core_group_id in group_ids:
@@ -783,13 +811,17 @@ def _persist_candidate(
     run.frozen_input_bundle = prepared.frozen_input_bundle
     run.batch_settings = prepared.batch_settings
     run.metrics = metrics
-    run.warnings = list(dict.fromkeys(str(w) for w in getattr(metadata, "warnings", ())))
+    run_warnings = [str(w) for w in getattr(metadata, "warnings", ())]
+    if outcome.status == "search_incomplete":
+        run_warnings.append("search_incomplete_no_feasibility_claim")
+    run.warnings = list(dict.fromkeys(run_warnings))
     status_map = {
         "ready": "COMPLETE",
         "no_trade": "COMPLETE",
         "infeasible": "INFEASIBLE",
         "deadline_exceeded": "TIMEOUT",
         "configuration_required": "FAILED",
+        "search_incomplete": "FAILED",
     }
     run.status = status_map[outcome.status]
 
@@ -977,6 +1009,38 @@ def _new_run(prepared: PreparedOptimizerRun) -> OptimizerRun:
     )
 
 
+def _persist_initial_timeout(
+    session: Session, prepared: PreparedOptimizerRun, *, correlation_id: str
+) -> str:
+    """Save a truthful timeout run without publishing partial recommendations."""
+    with session.begin():
+        run = _new_run(prepared)
+        run.status = "TIMEOUT"
+        run.metrics = {
+            "engine": "production_optimizer",
+            "optimizer_status": "deadline_exceeded",
+            "timeout_message": "The production optimizer did not finish and validate within its shared deadline",
+            "basket_revision": 0,
+            "selection_universe": {},
+            "group_annotations": {},
+            "estimated_realized_st_usd": "0",
+            "estimated_realized_lt_usd": "0",
+            "lots_sold_count": 0,
+            "positions_exited_count": 0,
+            "orders_count": 0,
+            "warnings": ["optimizer_timeout"],
+        }
+        run.warnings = ["optimizer_timeout"]
+        session.add(run)
+        _add_activity(
+            session,
+            "production_optimizer_run",
+            correlation_id,
+            {"run_id": run.id, "status": "deadline_exceeded", "input_fingerprint": prepared.input_fingerprint},
+        )
+    return run.id
+
+
 async def create_production_run(
     session: Session,
     request: OptimizerRunInput,
@@ -993,22 +1057,26 @@ async def create_production_run(
             supervisor,
             validation_executor=validation_executor,
         )
-    except (WorkerCapacityError, WorkerTimeoutError) as exc:
+        with session.begin():
+            assert_optimizer_run_current(session, prepared, deadline=outcome.overall_deadline)
+            run = _new_run(prepared)
+            session.add(run)
+            session.flush()
+            _persist_candidate(session, run, prepared, outcome)
+            _add_activity(
+                session,
+                "production_optimizer_run",
+                correlation_id,
+                {"run_id": run.id, "status": outcome.status, "input_fingerprint": prepared.input_fingerprint},
+            )
+    except WorkerCapacityError as exc:
         raise _app_error_for_worker_error(exc, basket_unchanged=True) from exc
-    with session.begin():
-        assert_optimizer_run_current(session, prepared, deadline=outcome.overall_deadline)
-        run = _new_run(prepared)
-        session.add(run)
-        session.flush()
-        _persist_candidate(session, run, prepared, outcome)
-        _add_activity(
-            session,
-            "production_optimizer_run",
-            correlation_id,
-            {"run_id": run.id, "status": outcome.status, "input_fingerprint": prepared.input_fingerprint},
-        )
+    except WorkerTimeoutError as exc:
+        timeout_run_id = _persist_initial_timeout(session, prepared, correlation_id=correlation_id)
+        raise _app_error_for_worker_error(
+            exc, basket_unchanged=True, run_id=timeout_run_id
+        ) from exc
     return run
-
 
 def _run_state(
     session: Session, run_id: str
@@ -1321,13 +1389,21 @@ async def _recompute_real_basket(
     except (WorkerCapacityError, WorkerTimeoutError) as exc:
         raise _app_error_for_worker_error(exc, basket_unchanged=True) from exc
     if outcome.status not in {"ready", "no_trade"}:
+        warnings = list(getattr(outcome.candidate.metadata, "warnings", ()))
+        if outcome.status == "search_incomplete":
+            warnings.append("search_incomplete_no_feasibility_claim")
+        details: dict[str, object] = {
+            "optimizer_status": outcome.status,
+            "warnings": warnings,
+            "basket_unchanged": True,
+        }
+        if outcome.status == "search_incomplete":
+            details["search_evidence"] = _search_evidence(outcome.candidate.metadata)
         raise AppError(
             "optimizer_subset_rejected",
             "The requested subset could not produce an independently validated recommendation; the saved basket is unchanged",
             status_code=422 if outcome.status != "deadline_exceeded" else 504,
-            details={"optimizer_status": outcome.status,
-                     "warnings": list(getattr(outcome.candidate.metadata, "warnings", ())),
-                     "basket_unchanged": True},
+            details=details,
         )
     intent_errors = _sell_lot_intent_errors(state.prepared, outcome, selected_lot_ids)
     if intent_errors is not None:
@@ -1344,7 +1420,10 @@ async def _recompute_real_basket(
     with session.begin():
         run = _fresh_run(session, run_id)
         _assert_same_run_state(session, state)
-        assert_optimizer_run_current(session, state.prepared, deadline=outcome.overall_deadline)
+        try:
+            assert_optimizer_run_current(session, state.prepared, deadline=outcome.overall_deadline)
+        except WorkerTimeoutError as exc:
+            raise _app_error_for_worker_error(exc, basket_unchanged=True) from exc
         _persist_candidate(
             session,
             run,
@@ -1529,6 +1608,7 @@ def real_run_summary(run: OptimizerRun, session: Session) -> dict[str, object]:
         "infeasible": "infeasible",
         "deadline_exceeded": "timeout",
         "configuration_required": "failed",
+        "search_incomplete": "failed",
     }.get(optimizer_status, run.status.lower())
     return {
         "run_id": run.id,

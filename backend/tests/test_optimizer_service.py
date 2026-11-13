@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from sqlalchemy import Engine, delete, select
+from sqlalchemy import Engine, delete, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import (
@@ -91,6 +91,10 @@ class ServiceLot:
 @dataclass(frozen=True)
 class ServiceInputs:
     lots: tuple[ServiceLot, ...]
+
+    @property
+    def account(self) -> SimpleNamespace:
+        return SimpleNamespace(cash_usd=Decimal(0))
 
 class FakeSupervisor:
     def __init__(self, value: object, *, deadline: float | None = None) -> None:
@@ -1396,3 +1400,369 @@ def test_published_financial_metrics_use_owner_validation_and_survive_summary_re
         assert summary["optimizer_metrics"]["estimated_tax_benefit_usd"] is None
         assert summary["optimizer_metrics"]["estimated_trading_cost_usd"] == "1.23"
     engine.dispose()
+
+
+class RaisingSupervisor:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def run(self, request: object, worker: Callable[..., object]) -> WorkerResult[object]:
+        del request, worker
+        raise self.error
+
+
+class RaisingValidationExecutor:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def run(self, validator: Callable[..., object], *args: object, deadline: float) -> object:
+        del validator, args, deadline
+        raise self.error
+
+
+def _search_incomplete_candidate() -> SimpleNamespace:
+    metadata = SimpleNamespace(
+        input_generation=1,
+        source_checksum="checksum",
+        status="search_incomplete",
+        solver="OSQP",
+        implementation_version="test-core",
+        solver_versions=(),
+        solver_statuses=("OSQP:solver_error",),
+        elapsed_seconds=0.1,
+        screening_seconds=0.02,
+        solve_seconds=0.08,
+        tax_regions_considered=2,
+        tax_regions_solved=1,
+        tax_region_search_complete=False,
+        integer_search_complete=False,
+        screened_lot_count=1,
+        selected_lot_ids=(),
+        candidate_types=(),
+        exposure_coverage_complete=None,
+        rounding_attempts=0,
+        warnings=("tax_region_search_incomplete_deadline_or_solver",),
+        trade_group_priorities=(),
+    )
+    return SimpleNamespace(status="search_incomplete", legs=(), metadata=metadata)
+
+
+def _assert_initial_timeout_persisted(
+    session_factory: Callable[[], Session], error: AppError
+) -> OptimizerRun:
+    assert error.code == "optimizer_timeout"
+    assert error.status_code == 504
+    assert isinstance(error.details, dict)
+    run_id = error.details.get("run_id")
+    assert isinstance(run_id, str)
+    with session_factory() as session:
+        run = session.get(OptimizerRun, run_id)
+        assert run is not None
+        assert run.status == "TIMEOUT"
+        assert run.metrics["optimizer_status"] == "deadline_exceeded"
+        assert run.metrics["orders_count"] == 0
+        assert run.metrics["basket_revision"] == 0
+        assert run.frozen_input_bundle == {"mode": "real_optimizer"}
+        assert run.input_fingerprint == "service-fingerprint"
+        assert session.scalar(select(func.count()).select_from(RecommendationGroup).where(RecommendationGroup.run_id == run_id)) == 0
+        assert session.scalar(
+            select(func.count())
+            .select_from(RecommendationLeg)
+            .join(RecommendationGroup, RecommendationGroup.id == RecommendationLeg.group_id)
+            .where(RecommendationGroup.run_id == run_id)
+        ) == 0
+        summary = optimizer_service.real_run_summary(run, session)
+        assert summary["status"] == "timeout"
+        assert summary["orders_count"] == 0
+        return run
+
+
+async def _create_test_real_run(
+    session: Session, supervisor: object, validation_executor: object
+) -> OptimizerRun:
+    return await optimizer_service.create_production_run(
+        session,
+        optimizer_service.OptimizerRunInput(mode="real_optimizer"),
+        supervisor,  # type: ignore[arg-type]
+        validation_executor,  # type: ignore[arg-type]
+        correlation_id="terminal-status-test",
+    )
+
+
+@pytest.mark.asyncio
+async def test_initial_native_worker_timeout_persists_original_terminal_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, session_factory = _create_sqlite_optimizer_run(tmp_path, selected=True)
+    _patch_real_run_dependencies(monkeypatch, inputs=_batch_inputs())
+    candidate = Candidate((), status="no_trade")
+    monkeypatch.setattr(
+        optimizer_service,
+        "_core_contract",
+        lambda: (Request, lambda _request, _deadline: candidate, lambda *args, **kwargs: Validation(True)),
+    )
+    try:
+        with session_factory() as session, pytest.raises(AppError) as error:
+            await _create_test_real_run(
+                session,
+                RaisingSupervisor(WorkerTimeoutError("native worker deadline")),
+                object(),
+            )
+        _assert_initial_timeout_persisted(session_factory, error.value)
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_initial_owner_validation_timeout_persists_terminal_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, session_factory = _create_sqlite_optimizer_run(tmp_path, selected=True)
+    _patch_real_run_dependencies(monkeypatch, inputs=_batch_inputs())
+    candidate = Candidate((), status="no_trade")
+    monkeypatch.setattr(
+        optimizer_service,
+        "_core_contract",
+        lambda: (Request, lambda _request, _deadline: candidate, lambda *args, **kwargs: Validation(True)),
+    )
+    try:
+        with session_factory() as session, pytest.raises(AppError) as error:
+            await _create_test_real_run(
+                session,
+                FakeSupervisor(candidate),
+                RaisingValidationExecutor(WorkerTimeoutError("owner validation deadline")),
+            )
+        _assert_initial_timeout_persisted(session_factory, error.value)
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_initial_publication_deadline_persists_timeout_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, session_factory = _create_sqlite_optimizer_run(tmp_path, selected=True)
+    _patch_real_run_dependencies(monkeypatch, inputs=_batch_inputs())
+    candidate = Candidate((), status="no_trade")
+    deadline = time.monotonic() - 1
+
+    async def fake_solve(*args: object, **kwargs: object) -> optimizer_service.ValidatedOptimizerCandidate:
+        del args, kwargs
+        return optimizer_service.ValidatedOptimizerCandidate(candidate, Validation(True), deadline, "no_trade")
+
+    def delayed_publication(
+        _session: Session, _prepared: object, *, deadline: float | None = None
+    ) -> None:
+        assert deadline is not None
+        assert time.monotonic() >= deadline
+        raise WorkerTimeoutError("optimizer publication missed the shared deadline")
+
+    monkeypatch.setattr(optimizer_service, "run_validated_candidate", fake_solve)
+    monkeypatch.setattr(optimizer_service, "assert_optimizer_run_current", delayed_publication)
+    try:
+        with session_factory() as session, pytest.raises(AppError) as error:
+            await _create_test_real_run(session, object(), object())
+        _assert_initial_timeout_persisted(session_factory, error.value)
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_capacity_rejection_is_not_persisted_as_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, session_factory = _create_sqlite_optimizer_run(tmp_path, selected=True)
+    _patch_real_run_dependencies(monkeypatch, inputs=_batch_inputs())
+    monkeypatch.setattr(
+        optimizer_service,
+        "_core_contract",
+        lambda: (Request, lambda _request, _deadline: Candidate((), status="no_trade"), lambda *args, **kwargs: Validation(True)),
+    )
+    try:
+        with session_factory() as session, pytest.raises(AppError) as error:
+            await _create_test_real_run(
+                session,
+                RaisingSupervisor(WorkerCapacityError("worker capacity full")),
+                object(),
+            )
+        assert error.value.code == "optimizer_capacity_exceeded"
+        assert error.value.status_code == 503
+        assert "run_id" not in error.value.details
+        with session_factory() as session:
+            assert session.scalar(select(func.count()).select_from(OptimizerRun)) == 1
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_stale_initial_publication_never_persists_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, session_factory = _create_sqlite_optimizer_run(tmp_path, selected=True)
+    _patch_real_run_dependencies(monkeypatch, inputs=_batch_inputs())
+    candidate = Candidate((), status="no_trade")
+
+    async def fake_solve(*args: object, **kwargs: object) -> optimizer_service.ValidatedOptimizerCandidate:
+        del args, kwargs
+        return optimizer_service.ValidatedOptimizerCandidate(candidate, Validation(True), time.monotonic() + 20, "no_trade")
+
+    def stale_publication(
+        _session: Session, _prepared: object, *, deadline: float | None = None
+    ) -> None:
+        assert deadline is not None
+        raise AppError(
+            "stale_optimizer_input",
+            "inputs changed during optimization",
+            status_code=409,
+            details={"basket_unchanged": True},
+        )
+
+    monkeypatch.setattr(optimizer_service, "run_validated_candidate", fake_solve)
+    monkeypatch.setattr(optimizer_service, "assert_optimizer_run_current", stale_publication)
+    try:
+        with session_factory() as session, pytest.raises(AppError, match="inputs changed") as error:
+            await _create_test_real_run(session, object(), object())
+        assert error.value.code == "stale_optimizer_input"
+        with session_factory() as session:
+            assert session.scalar(select(func.count()).select_from(OptimizerRun)) == 1
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_initial_search_incomplete_is_truthful_nonactionable_terminal_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, session_factory = _create_sqlite_optimizer_run(tmp_path, selected=True)
+    _patch_real_run_dependencies(monkeypatch, inputs=ServiceInputs((ServiceLot("ABC", "LOT-1"),)))
+    candidate = _search_incomplete_candidate()
+
+    async def incomplete_solve(*args: object, **kwargs: object) -> optimizer_service.ValidatedOptimizerCandidate:
+        del args, kwargs
+        return optimizer_service.ValidatedOptimizerCandidate(
+            candidate, None, time.monotonic() + 20, "search_incomplete"
+        )
+
+    monkeypatch.setattr(optimizer_service, "run_validated_candidate", incomplete_solve)
+    try:
+        with session_factory() as session:
+            run = await _create_test_real_run(session, object(), object())
+            assert run.status == "FAILED"
+            assert run.metrics["optimizer_status"] == "search_incomplete"
+            assert run.metrics["search_evidence"]["search_state"] == "incomplete"
+            assert run.metrics["search_evidence"]["feasibility_proven"] is False
+            assert run.metrics["search_evidence"]["tax_region_search_complete"] is False
+            assert "search_incomplete_no_feasibility_claim" in run.warnings
+            recommendations = optimizer_service.real_run_recommendations(session, run)
+            assert recommendations["status"] == "failed"
+            assert recommendations["optimizer_metrics"]["optimizer_status"] == "search_incomplete"
+            assert recommendations["groups"] == []
+            assert recommendations["consolidated_legs"] == []
+        with session_factory() as session:
+            assert session.scalar(
+                select(func.count()).select_from(RecommendationGroup).where(RecommendationGroup.run_id == run.id)
+            ) == 0
+            assert session.scalar(
+                select(func.count()).select_from(RecommendationLeg).join(
+                    RecommendationGroup, RecommendationGroup.id == RecommendationLeg.group_id
+                ).where(RecommendationGroup.run_id == run.id)
+            ) == 0
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_subset_search_incomplete_reports_evidence_and_preserves_saved_basket(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, session_factory = _create_sqlite_subset_optimizer_run(tmp_path)
+    _patch_real_run_dependencies(monkeypatch, inputs=_subset_inputs())
+    before = _subset_snapshot(session_factory)
+    candidate = _search_incomplete_candidate()
+
+    async def incomplete_solve(*args: object, **kwargs: object) -> optimizer_service.ValidatedOptimizerCandidate:
+        del args, kwargs
+        return optimizer_service.ValidatedOptimizerCandidate(
+            candidate, None, time.monotonic() + 20, "search_incomplete"
+        )
+
+    monkeypatch.setattr(optimizer_service, "run_validated_candidate", incomplete_solve)
+    try:
+        with session_factory() as session:
+            state = _capture_real_run_state(session, _SUBSET_RUN_ID)
+            with pytest.raises(AppError) as error:
+                await optimizer_service._recompute_real_basket(
+                    session,
+                    _SUBSET_RUN_ID,
+                    state,
+                    ("LOT-A1",),
+                    {"sale:AAA": True},
+                    object(),
+                    object(),
+                    correlation_id="subset-incomplete",
+                    event_type="test_subset_incomplete",
+                    event_details={},
+                )
+        assert error.value.code == "optimizer_subset_rejected"
+        assert error.value.status_code == 422
+        assert error.value.details["optimizer_status"] == "search_incomplete"
+        assert error.value.details["search_evidence"]["feasibility_proven"] is False
+        assert error.value.details["basket_unchanged"] is True
+        assert _subset_snapshot(session_factory) == before
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeout_stage", ["worker", "publication"])
+async def test_subset_timeout_preserves_prior_recommendations_and_annotations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timeout_stage: str
+) -> None:
+    engine, session_factory = _create_sqlite_subset_optimizer_run(tmp_path)
+    _patch_real_run_dependencies(monkeypatch, inputs=_subset_inputs())
+    before = _subset_snapshot(session_factory)
+    selected_lots = ("LOT-A1",)
+
+    async def timeout_solve(*args: object, **kwargs: object) -> optimizer_service.ValidatedOptimizerCandidate:
+        del args, kwargs
+        if timeout_stage == "worker":
+            raise WorkerTimeoutError("subset solve timed out")
+        return optimizer_service.ValidatedOptimizerCandidate(
+            PublicationCandidate("late-subset", _sell_legs_for_ids(_subset_inputs(), selected_lots)),
+            Validation(True),
+            time.monotonic() - 1,
+            "ready",
+        )
+
+    if timeout_stage == "publication":
+        def delayed_publication(
+            _session: Session, _prepared: object, *, deadline: float | None = None
+        ) -> None:
+            assert deadline is not None
+            assert time.monotonic() >= deadline
+            raise WorkerTimeoutError("subset publication missed the shared deadline")
+
+        monkeypatch.setattr(optimizer_service, "assert_optimizer_run_current", delayed_publication)
+    monkeypatch.setattr(optimizer_service, "run_validated_candidate", timeout_solve)
+    try:
+        with session_factory() as session:
+            state = _capture_real_run_state(session, _SUBSET_RUN_ID)
+            with pytest.raises(AppError) as error:
+                await optimizer_service._recompute_real_basket(
+                    session,
+                    _SUBSET_RUN_ID,
+                    state,
+                    selected_lots,
+                    {"sale:AAA": True},
+                    object(),
+                    object(),
+                    correlation_id=f"subset-{timeout_stage}-timeout",
+                    event_type="test_subset_timeout",
+                    event_details={},
+                )
+        assert error.value.code == "optimizer_timeout"
+        assert error.value.status_code == 504
+        assert error.value.details["basket_unchanged"] is True
+        assert _subset_snapshot(session_factory) == before
+    finally:
+        engine.dispose()

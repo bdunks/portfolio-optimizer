@@ -36,6 +36,7 @@ from app.domain.financial_inputs import (
 )
 from app.domain.portfolio_accounting import ConsolidatedLeg, LotAllocation
 from app.domain.tax import TaxAffineRegion, TaxProfile
+from app.domain.wash import ProposedLotSale
 from app.optimizer.core import (
     OptimizerRequest,
     TradeGroupPriority,
@@ -1963,7 +1964,7 @@ def test_wash_dependency_owner_assessment_call_count_is_bounded_for_2500_lots(
     calls: list[int] = []
 
     def counted_assessment(
-        _inputs: FinancialInputs, proposed_sales: tuple[object, ...]
+        _inputs: FinancialInputs, proposed_sales: tuple[ProposedLotSale, ...]
     ) -> tuple[SimpleNamespace, ...]:
         calls.append(len(proposed_sales))
         return tuple(
@@ -1995,7 +1996,7 @@ def test_wash_dependency_checks_deadline_after_owner_assessment(
     monkeypatch.setattr(core_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
 
     def expire_during_assessment(
-        _inputs: FinancialInputs, proposed_sales: tuple[object, ...]
+        _inputs: FinancialInputs, proposed_sales: tuple[ProposedLotSale, ...]
     ) -> tuple[SimpleNamespace, ...]:
         clock[0] = deadline
         return tuple(

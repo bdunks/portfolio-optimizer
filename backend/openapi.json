@@ -554,16 +554,29 @@
         "additionalProperties": false,
         "properties": {
           "cash_after_usd": {
-            "title": "Cash After Usd",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash After Usd"
           },
           "demo": {
-            "const": true,
             "title": "Demo",
             "type": "boolean"
           },
           "portfolio_effects": {
-            "$ref": "#/components/schemas/PortfolioEffectsResponse"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PortfolioEffectsResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "realized_lt_usd": {
             "title": "Realized Lt Usd",
@@ -574,16 +587,37 @@
             "type": "string"
           },
           "replacement_buy_cost_usd": {
-            "title": "Replacement Buy Cost Usd",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replacement Buy Cost Usd"
           },
           "replacement_buy_shares": {
-            "title": "Replacement Buy Shares",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replacement Buy Shares"
           },
           "risk_tracking_score": {
-            "title": "Risk Tracking Score",
-            "type": "null"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Tracking Score"
           },
           "selected_sell_lots_count": {
             "title": "Selected Sell Lots Count",
@@ -594,7 +628,6 @@
             "type": "string"
           },
           "wash_status": {
-            "const": "not_validated_demo",
             "title": "Wash Status",
             "type": "string"
           }
@@ -929,7 +962,6 @@
             "type": "string"
           },
           "demo": {
-            "const": true,
             "title": "Demo",
             "type": "boolean"
           },
@@ -946,6 +978,22 @@
               }
             ],
             "title": "Input Fingerprint"
+          },
+          "mode": {
+            "default": "recommendations_only",
+            "enum": [
+              "recommendations_only",
+              "real_optimizer"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "optimizer_metrics": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JSONValue"
+            },
+            "title": "Optimizer Metrics",
+            "type": "object"
           },
           "policy_revision_id": {
             "title": "Policy Revision Id",
@@ -968,7 +1016,6 @@
             "type": "string"
           },
           "solver_version": {
-            "const": "DEMO",
             "title": "Solver Version",
             "type": "string"
           },
@@ -1089,11 +1136,17 @@
             "type": "array"
           },
           "constraints_satisfied": {
-            "title": "Constraints Satisfied",
-            "type": "null"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Constraints Satisfied"
           },
           "demo": {
-            "const": true,
             "title": "Demo",
             "type": "boolean"
           },
@@ -1106,16 +1159,19 @@
             "type": "string"
           },
           "estimated_tax_benefit_status": {
-            "enum": [
-              "tax_profile_incomplete",
-              "optimizer_unavailable"
-            ],
             "title": "Estimated Tax Benefit Status",
             "type": "string"
           },
           "estimated_tax_benefit_usd": {
-            "title": "Estimated Tax Benefit Usd",
-            "type": "null"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Tax Benefit Usd"
           },
           "frozen_display_context": {
             "$ref": "#/components/schemas/FrozenRunDisplayContextResponse"
@@ -1143,7 +1199,10 @@
             "type": "integer"
           },
           "mode": {
-            "const": "recommendations_only",
+            "enum": [
+              "recommendations_only",
+              "real_optimizer"
+            ],
             "title": "Mode",
             "type": "string"
           },
@@ -1156,6 +1215,13 @@
                 "type": "null"
               }
             ]
+          },
+          "optimizer_metrics": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JSONValue"
+            },
+            "title": "Optimizer Metrics",
+            "type": "object"
           },
           "orders_count": {
             "title": "Orders Count",
@@ -1196,7 +1262,6 @@
             "type": "string"
           },
           "solver_version": {
-            "const": "DEMO",
             "title": "Solver Version",
             "type": "string"
           },
@@ -1216,7 +1281,6 @@
             "type": "integer"
           },
           "status": {
-            "const": "demo",
             "title": "Status",
             "type": "string"
           },
@@ -1373,11 +1437,17 @@
             "title": "Cash Before Usd"
           },
           "constraints_satisfied": {
-            "title": "Constraints Satisfied",
-            "type": "null"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Constraints Satisfied"
           },
           "demo": {
-            "const": true,
             "title": "Demo",
             "type": "boolean"
           },
@@ -1390,16 +1460,19 @@
             "type": "string"
           },
           "estimated_tax_benefit_status": {
-            "enum": [
-              "tax_profile_incomplete",
-              "optimizer_unavailable"
-            ],
             "title": "Estimated Tax Benefit Status",
             "type": "string"
           },
           "estimated_tax_benefit_usd": {
-            "title": "Estimated Tax Benefit Usd",
-            "type": "null"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Tax Benefit Usd"
           },
           "frozen_display_context": {
             "$ref": "#/components/schemas/FrozenRunDisplayContextResponse"
@@ -1420,7 +1493,10 @@
             "type": "integer"
           },
           "mode": {
-            "const": "recommendations_only",
+            "enum": [
+              "recommendations_only",
+              "real_optimizer"
+            ],
             "title": "Mode",
             "type": "string"
           },
@@ -1433,6 +1509,13 @@
                 "type": "null"
               }
             ]
+          },
+          "optimizer_metrics": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JSONValue"
+            },
+            "title": "Optimizer Metrics",
+            "type": "object"
           },
           "orders_count": {
             "title": "Orders Count",
@@ -1473,7 +1556,6 @@
             "type": "string"
           },
           "solver_version": {
-            "const": "DEMO",
             "title": "Solver Version",
             "type": "string"
           },
@@ -1493,7 +1575,6 @@
             "type": "integer"
           },
           "status": {
-            "const": "demo",
             "title": "Status",
             "type": "string"
           },
@@ -2875,20 +2956,33 @@
             "type": "array"
           },
           "estimated_benefit_usd": {
-            "title": "Estimated Benefit Usd",
-            "type": "null"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Benefit Usd"
           },
           "group_id": {
             "title": "Group Id",
             "type": "string"
           },
           "group_type": {
-            "const": "demo_loss_harvest",
             "title": "Group Type",
             "type": "string"
           },
           "impact": {
-            "$ref": "#/components/schemas/GroupImpactResponse"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GroupImpactResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "leg_ids": {
             "items": {
@@ -2936,8 +3030,15 @@
             "type": "boolean"
           },
           "sleeve_key": {
-            "title": "Sleeve Key",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sleeve Key"
           },
           "warnings": {
             "items": {
@@ -4853,7 +4954,7 @@
     },
     "/api/v1/optimizer/runs/{run_id}/lot-review-intent": {
       "post": {
-        "description": "Atomically replace the confirmed DEMO basket with the requested broker lots. The source generation must match; requests are rejected without mutation when unsupported or infeasible. This request does not approve or place orders.",
+        "description": "Atomically replace the confirmed DEMO or real optimizer basket with the requested broker lots. The source generation must match; requests are rejected without mutation when unsupported or infeasible. This request does not approve or place orders.",
         "operationId": "optimizer_run_lot_review_intent_api_v1_optimizer_runs__run_id__lot_review_intent_post",
         "parameters": [
           {

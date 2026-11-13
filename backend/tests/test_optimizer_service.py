@@ -17,10 +17,16 @@ class Request:
     inputs: object
     sell_lot_ids: tuple[str, ...] | None
 
+@dataclass(frozen=True)
+class Metadata:
+    input_generation: int = 1
+    source_checksum: str = "checksum"
 
 @dataclass(frozen=True)
 class Candidate:
     legs: tuple[object, ...]
+    status: str = "ready"
+    metadata: Metadata = Metadata()
 
 
 @dataclass(frozen=True)
@@ -37,7 +43,8 @@ class Policy:
 @dataclass(frozen=True)
 class Inputs:
     policy: Policy
-
+    source_generation: int = 1
+    source_checksum: str = "checksum"
 
 class FakeSupervisor:
     def __init__(self, value: object, *, deadline: float | None = None) -> None:
@@ -113,7 +120,7 @@ async def test_run_validated_candidate_passes_explicit_lot_subset_to_core(monkey
         "_core_contract",
         lambda: (Request, worker, validator),
     )
-    inputs = object()
+    inputs = _batch_inputs()
     lots = ("LOT-1", "LOT-2")
 
     result = await optimizer_service.run_validated_candidate(inputs, supervisor, sell_lot_ids=lots)  # type: ignore[arg-type]
@@ -128,7 +135,8 @@ async def test_run_validated_candidate_passes_explicit_lot_subset_to_core(monkey
 
 @pytest.mark.asyncio
 async def test_run_validated_candidate_does_not_publish_rejected_candidate(monkeypatch: pytest.MonkeyPatch) -> None:
-    candidate = Candidate(())
+    candidate = Candidate((), status="no_trade")
+    inputs = _batch_inputs()
     supervisor = FakeSupervisor(candidate)
 
     monkeypatch.setattr(
@@ -138,7 +146,7 @@ async def test_run_validated_candidate_does_not_publish_rejected_candidate(monke
     )
 
     with pytest.raises(AppError) as error:
-        await optimizer_service.run_validated_candidate(object(), supervisor)  # type: ignore[arg-type]
+        await optimizer_service.run_validated_candidate(inputs, supervisor)  # type: ignore[arg-type]
 
     assert error.value.code == "optimizer_candidate_rejected"
     assert error.value.details == {"reasons": ["cash_shortfall"], "basket_unchanged": True}
@@ -146,7 +154,8 @@ async def test_run_validated_candidate_does_not_publish_rejected_candidate(monke
 
 @pytest.mark.asyncio
 async def test_run_validated_candidate_rejects_late_owner_validation(monkeypatch: pytest.MonkeyPatch) -> None:
-    candidate = Candidate(())
+    candidate = Candidate((), status="no_trade")
+    inputs = _batch_inputs()
     supervisor = FakeSupervisor(candidate, deadline=time.monotonic() - 1)
     monkeypatch.setattr(
         optimizer_service,
@@ -155,4 +164,4 @@ async def test_run_validated_candidate_rejects_late_owner_validation(monkeypatch
     )
 
     with pytest.raises(WorkerTimeoutError):
-        await optimizer_service.run_validated_candidate(object(), supervisor)  # type: ignore[arg-type]
+        await optimizer_service.run_validated_candidate(inputs, supervisor)  # type: ignore[arg-type]

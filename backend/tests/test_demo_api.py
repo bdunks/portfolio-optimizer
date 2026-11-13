@@ -1160,13 +1160,20 @@ def test_export_metadata_lot_attribution_notes_activity_and_disabled_future_rout
         client.post("/api/v1/auth/etrade/verify", json={"verifier": "12345"}),
         client.post("/api/v1/orders/fake-leg/preview"),
         client.post("/api/v1/orders/fake-leg/submit"),
-        client.post("/api/v1/optimizer/runs", json={"mode": "real_optimizer"}),
     ]
     assert disabled[0].json()["status"] == "disabled"
     for response in disabled[1:]:
         assert response.status_code == 503
         assert {"code", "message", "details", "correlation_id"} <= set(response.json())
         assert response.json()["details"]["available"] is False
+    real_run_response = client.post("/api/v1/optimizer/runs", json={"mode": "real_optimizer"})
+    assert real_run_response.status_code == 201, real_run_response.text
+    real_run = real_run_response.json()
+    assert real_run["mode"] == "real_optimizer"
+    assert real_run["demo"] is False
+    assert real_run["actionable"] is False
+    assert real_run["optimizer_metrics"]["engine"] == "production_optimizer"
+    assert real_run["solver_version"] != "DEMO"
     assert broker.fetch_count == 1
     assert not hasattr(broker, "preview_order")
     assert not hasattr(broker, "submit_approved_order")

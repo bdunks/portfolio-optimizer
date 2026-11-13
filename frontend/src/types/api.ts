@@ -94,17 +94,17 @@ export type FrozenRunDisplayContextResponse = {
 };
 
 export type GroupImpactResponse = {
-  "demo": true;
-  "wash_status": "not_validated_demo";
+  "demo": boolean;
+  "wash_status": string;
   "selected_sell_lots_count": number;
   "sell_proceeds_usd": string;
   "realized_st_usd": string;
   "realized_lt_usd": string;
-  "replacement_buy_shares": string;
-  "replacement_buy_cost_usd": string;
-  "cash_after_usd": string;
-  "portfolio_effects": PortfolioEffectsResponse;
-  "risk_tracking_score": null;
+  "replacement_buy_shares": string | null;
+  "replacement_buy_cost_usd": string | null;
+  "cash_after_usd": string | null;
+  "portfolio_effects": PortfolioEffectsResponse | null;
+  "risk_tracking_score": string | null;
 };
 
 export type HealthResponse = {
@@ -159,13 +159,15 @@ export type OptimizerExportMetadataResponse = {
   "source_generation": number;
   "as_of": string;
   "proposed_trade_date": string | null;
-  "solver_version": "DEMO";
-  "demo": true;
+  "solver_version": string;
+  "demo": boolean;
+  "mode"?: "recommendations_only" | "real_optimizer";
   "actionable": false;
   "input_fingerprint": string | null;
   "source_checksum": string | null;
   "warnings": Array<string>;
   "frozen_display_context": FrozenRunDisplayContextResponse;
+  "optimizer_metrics"?: Record<string, JSONValue>;
 };
 
 export type OptimizerLotReviewIntentInput = {
@@ -175,33 +177,34 @@ export type OptimizerLotReviewIntentInput = {
 
 export type OptimizerRecommendationsResponse = {
   "run_id": string;
-  "status": "demo";
-  "mode": "recommendations_only";
+  "status": string;
+  "mode": "recommendations_only" | "real_optimizer";
   "policy_revision_id": string;
   "source_generation": number;
   "as_of": string;
-  "solver_version": "DEMO";
+  "solver_version": string;
   "proposed_trade_date"?: string | null;
-  "demo": true;
+  "demo": boolean;
   "actionable": false;
   "input_fingerprint": string | null;
   "source_checksum": string | null;
   "batch_settings": Record<string, JSONValue>;
   "estimated_realized_st_usd": string;
   "estimated_realized_lt_usd": string;
-  "estimated_tax_benefit_usd": null;
-  "estimated_tax_benefit_status": "tax_profile_incomplete" | "optimizer_unavailable";
+  "estimated_tax_benefit_usd": string | null;
+  "estimated_tax_benefit_status": string;
   "lots_sold_count": number;
   "positions_exited_count": number;
   "orders_count": number;
   "cash_before_usd": string | null;
   "cash_after_usd": string | null;
   "portfolio_effects": PortfolioEffectsResponse | null;
-  "constraints_satisfied": null;
+  "constraints_satisfied": boolean | null;
   "no_trade_reason": JSONValue | null;
   "warnings": Array<string>;
   "tax_profile_configured": boolean;
   "frozen_display_context": FrozenRunDisplayContextResponse;
+  "optimizer_metrics"?: Record<string, JSONValue>;
   "groups": Array<RecommendationGroupResponse>;
   "consolidated_legs": Array<RecommendationLegResponse>;
 };
@@ -216,33 +219,34 @@ export type OptimizerRunInput = {
 
 export type OptimizerRunResponse = {
   "run_id": string;
-  "status": "demo";
-  "mode": "recommendations_only";
+  "status": string;
+  "mode": "recommendations_only" | "real_optimizer";
   "policy_revision_id": string;
   "source_generation": number;
   "as_of": string;
-  "solver_version": "DEMO";
+  "solver_version": string;
   "proposed_trade_date"?: string | null;
-  "demo": true;
+  "demo": boolean;
   "actionable": false;
   "input_fingerprint": string | null;
   "source_checksum": string | null;
   "batch_settings": Record<string, JSONValue>;
   "estimated_realized_st_usd": string;
   "estimated_realized_lt_usd": string;
-  "estimated_tax_benefit_usd": null;
-  "estimated_tax_benefit_status": "tax_profile_incomplete" | "optimizer_unavailable";
+  "estimated_tax_benefit_usd": string | null;
+  "estimated_tax_benefit_status": string;
   "lots_sold_count": number;
   "positions_exited_count": number;
   "orders_count": number;
   "cash_before_usd": string | null;
   "cash_after_usd": string | null;
   "portfolio_effects": PortfolioEffectsResponse | null;
-  "constraints_satisfied": null;
+  "constraints_satisfied": boolean | null;
   "no_trade_reason": JSONValue | null;
   "warnings": Array<string>;
   "tax_profile_configured": boolean;
   "frozen_display_context": FrozenRunDisplayContextResponse;
+  "optimizer_metrics"?: Record<string, JSONValue>;
 };
 
 export type OptimizerSelectionInput = {
@@ -449,11 +453,11 @@ export type RecommendationAnnotationInput = {
 export type RecommendationGroupResponse = {
   "group_id": string;
   "rank": number;
-  "group_type": "demo_loss_harvest";
-  "sleeve_key": string;
+  "group_type": string;
+  "sleeve_key": string | null;
   "rationale": string;
-  "estimated_benefit_usd": null;
-  "impact": GroupImpactResponse;
+  "estimated_benefit_usd": string | null;
+  "impact": GroupImpactResponse | null;
   "dependencies": Array<string>;
   "selected": boolean;
   "rejected": boolean;

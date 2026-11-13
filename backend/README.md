@@ -62,7 +62,7 @@ For a deterministic fixture that splits VB into two separately attributed sell l
 cd backend && uv run --offline pytest -q tests/test_demo_api.py::test_demo_run_persistence_selection_arithmetic_and_restart
 ```
 
-All values, lot IDs, group IDs and results are hypothetical. `mode: "real_optimizer"`, OAuth start/verify and both order preview/submit routes fail explicitly with the documented `503` error envelope. OAuth/account integration and order tables/workflows are not implemented. Do not use these responses as actionable trades.
+The deterministic `recommendations_only` run retains hypothetical demo values, lot IDs, and results. `mode: "real_optimizer"` invokes the configured production solver against frozen current inputs through a bounded worker and independent validator; its recommendations remain advisory and non-actionable. OAuth/account integration, user-approved broker orders, and order preview/placement are not implemented, so OAuth start/verify and both order preview/submit routes return the documented `503` error envelope. Never treat any output as an approved trade.
 
 ## Generated API contract
 

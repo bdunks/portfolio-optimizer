@@ -7,7 +7,6 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from scripts.compare_optimizer_quality import (
-from scripts.compare_optimizer_quality import (
     _build_summaries,
     _git_value,
     _production_domain_check,

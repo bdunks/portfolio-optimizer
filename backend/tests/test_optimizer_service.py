@@ -33,6 +33,7 @@ from app.db.session import create_database_engine
 from app.domain.financial_inputs import PolicySettings
 from app.domain.portfolio_accounting import ConsolidatedLeg, LotAllocation
 from app.optimizer.runtime import WorkerCapacityError, WorkerResult, WorkerTimeoutError
+from app.optimizer.validation import CandidateValidation, validate_candidate
 from app.schemas import (
     OptimizerLotReviewIntentInput,
     OptimizerSelectionInput,
@@ -40,6 +41,7 @@ from app.schemas import (
 )
 from app.services import optimizer_service
 from app.services.errors import AppError
+from tests.optimizer_benchmark_fixture import build_optimizer_benchmark_inputs
 
 
 @dataclass(frozen=True)
@@ -226,7 +228,9 @@ def _owner_validation_echo(value: str, *, deadline: float) -> str:
     return value
 
 
-async def _wait_for_owner_validation(executor: optimizer_service.BoundedValidationExecutor, started: Event) -> int:
+async def _wait_for_owner_validation(
+    executor: optimizer_service.BoundedValidationExecutor, started: Event
+) -> int:
     loop = asyncio.get_running_loop()
     wait_until = loop.time() + 8
     while not started.is_set():
@@ -272,9 +276,10 @@ async def test_bounded_validation_executor_kills_timeout_reaps_and_releases_capa
         assert pulse_count > 20
         assert executor._supervisor.active_workers == 0
         _assert_process_reaped(child_pid)
-        assert await executor.run(
+        reclaimed = await executor.run(
             _owner_validation_echo, "capacity-reclaimed", deadline=time.monotonic() + 3
-        ) == "capacity-reclaimed"
+        )
+        assert reclaimed == "capacity-reclaimed"
     finally:
         pulse_stop.set()
         await asyncio.gather(pulse_task, return_exceptions=True)
@@ -285,7 +290,7 @@ async def test_bounded_validation_executor_kills_timeout_reaps_and_releases_capa
 
 
 @pytest.mark.asyncio
-async def test_bounded_validation_executor_rejects_saturation_and_cleans_cancelled_and_closed_jobs() -> None:
+async def test_bounded_validation_executor_rejects_and_cleans_up_active_jobs() -> None:
     context = multiprocessing.get_context("spawn")
     executor = optimizer_service.BoundedValidationExecutor(max_workers=1)
     started = context.Event()
@@ -306,9 +311,10 @@ async def test_bounded_validation_executor_rejects_saturation_and_cleans_cancell
             await running
         assert executor._supervisor.active_workers == 0
         _assert_process_reaped(child_pid)
-        assert await executor.run(
+        reclaimed = await executor.run(
             _owner_validation_echo, "cancel-released", deadline=time.monotonic() + 3
-        ) == "cancel-released"
+        )
+        assert reclaimed == "cancel-released"
 
         closing_started = context.Event()
         closing = asyncio.create_task(
@@ -358,6 +364,24 @@ async def test_bounded_validation_executor_keeps_original_absolute_deadline() ->
         if not validation_task.done():
             validation_task.cancel()
         await asyncio.gather(validation_task, return_exceptions=True)
+        await executor.aclose()
+
+
+@pytest.mark.asyncio
+async def test_bounded_validation_executor_returns_real_candidate_validation() -> None:
+    inputs = build_optimizer_benchmark_inputs(seed=17)
+    executor = optimizer_service.BoundedValidationExecutor(max_workers=1)
+    try:
+        validation = await executor.run(
+            validate_candidate,
+            inputs,
+            (),
+            deadline=time.monotonic() + 10,
+        )
+        assert isinstance(validation, CandidateValidation)
+        assert validation.accepted
+        assert validation.evaluation is not None
+    finally:
         await executor.aclose()
 
 

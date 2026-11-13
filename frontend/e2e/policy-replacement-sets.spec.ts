@@ -17,6 +17,23 @@ async function expectNoPageOverflow(page: Page, context: string): Promise<void> 
   ).toBeLessThanOrEqual(dimensions.viewport + 1);
 }
 
+test('replacement-set fragment navigation moves keyboard focus to its heading', async ({
+  page,
+  seededApp,
+}) => {
+  await page.goto(new URL('/#/policy', seededApp.baseUrl).toString(), {
+    waitUntil: 'domcontentloaded',
+  });
+  const heading = page.getByRole('heading', { name: 'Replacement sets', exact: true });
+  await expect(heading).toBeVisible();
+
+  await page.goto(new URL('/#/policy#replacement-sets', seededApp.baseUrl).toString(), {
+    waitUntil: 'domcontentloaded',
+  });
+
+  await expect(heading).toBeFocused();
+});
+
 test('replacement candidates are accessible, keyboard-usable, and responsive', async ({
   page,
   seededApp,

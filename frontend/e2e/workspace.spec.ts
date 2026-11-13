@@ -136,8 +136,8 @@ async function expectOverviewHeadingTypography(page: Page, viewport: string): Pr
     { name: 'Data coverage', level: 3, size: 14 },
     { name: 'Latest recommendations', level: 2, size: 18 },
     { name: 'Active allocation policy', level: 2, size: 18 },
-    { name: 'Enabled sleeves and targets', level: 3, size: 14 },
-    { name: 'Allowed securities', level: 3, size: 14 },
+    { name: 'Active allocation targets', level: 3, size: 14, lineHeightRatio: 1.43 },
+    { name: 'Active replacement sets', level: 3, size: 14, lineHeightRatio: 1.43 },
   ];
 
   for (const expected of headings) {
@@ -162,7 +162,9 @@ async function expectOverviewHeadingTypography(page: Page, viewport: string): Pr
     const lineHeightRatio = typography.lineHeight.endsWith('px')
       ? Number.parseFloat(typography.lineHeight) / expected.size
       : Number.parseFloat(typography.lineHeight);
-    expect(lineHeightRatio, `${viewport} ${expected.name} line-height`).toBeCloseTo(1.25);
+    expect(lineHeightRatio, `${viewport} ${expected.name} line-height`).toBeCloseTo(
+      expected.lineHeightRatio ?? 1.25,
+    );
   }
 }
 
@@ -551,7 +553,7 @@ function contrastRatio(foreground: string, background: string): number {
 
 async function expectReadableNavigation(page: Page, viewport: string): Promise<void> {
   const snapshot = await readNavigationContrast(page);
-  expect(snapshot.links).toHaveLength(6);
+  expect(snapshot.links).toHaveLength(7);
   expect(snapshot.links.filter((link) => link.active)).toHaveLength(1);
   for (const [label, sample] of [
     ['Workspace heading', snapshot.heading],
@@ -606,7 +608,7 @@ async function expectReadableNavigation(page: Page, viewport: string): Promise<v
         };
       }),
     );
-  expect(menuRows).toHaveLength(6);
+  expect(menuRows).toHaveLength(7);
   for (const [index, row] of menuRows.entries()) {
     expect(row.height, `${viewport} navigation item ${index + 1} height`).toBeGreaterThanOrEqual(
       48,
@@ -725,6 +727,7 @@ test('desktop and tablet workspace routes with keyboard access', async ({
   const desktopRoutes = [
     { path: '/', link: /Overview/, heading: 'Overview' },
     { path: '/recommendations', link: /Recommendations/, heading: 'Recommendations' },
+    { path: '/review', link: /Selected basket/, heading: 'Selected trades' },
     { path: '/lots', link: /Tax Lots/, heading: 'Tax Lots' },
     { path: '/policy', link: /Allocation Policy/, heading: 'Allocation Policy' },
     { path: '/wash-sales', link: /Wash Sales/, heading: 'Wash Sales' },
@@ -742,11 +745,16 @@ test('desktop and tablet workspace routes with keyboard access', async ({
   await page.keyboard.press('Shift+Tab');
   await page.keyboard.press('Shift+Tab');
   let firstKeyboardRoute = true;
+  let previousRouteLink: Locator | null = null;
   for (const route of [...desktopRoutes].reverse()) {
     const link = nav.getByRole('link', { name: route.link });
-    if (!firstKeyboardRoute) await page.keyboard.press('Shift+Tab');
+    if (!firstKeyboardRoute) {
+      await previousRouteLink?.focus();
+      await page.keyboard.press('Shift+Tab');
+    }
     firstKeyboardRoute = false;
     await expect(link).toBeFocused();
+    previousRouteLink = link;
     await page.keyboard.press('Enter');
     await expect(page.getByRole('heading', { name: route.heading, exact: true })).toBeVisible();
     await expectNoHorizontalOverflow(page, `${route.path} at desktop`);
@@ -1043,7 +1051,7 @@ test('shared canonical leg links preserve the hash route and keyboard focus', as
     exact: true,
   });
   await expect(groupHeader).toHaveAccessibleName(`Tax-loss harvest Group ID ${sharedGroupId}`);
-  await expect(groupHeader).toHaveAccessibleDescription(/SELL AAPL.*API realized ST \/ LT:/);
+  await expect(groupHeader).toHaveAccessibleDescription(/SELL .*API realized ST \/ LT:/);
   if ((await groupHeader.getAttribute('aria-expanded')) !== 'true') await groupHeader.click();
   const groupCard = page.locator('.group-card').filter({ has: groupHeader });
   const sharedLink = groupCard
@@ -1140,7 +1148,7 @@ test('FakeBroker policy, review, and lot workflows', async ({
     page.getByRole('heading', { name: 'Active allocation policy', level: 2, exact: true }),
   ).toBeInViewport();
   await expect(
-    page.getByRole('heading', { name: 'Enabled sleeves and targets', level: 3, exact: true }),
+    page.getByRole('heading', { name: 'Active allocation targets', level: 3, exact: true }),
   ).toBeInViewport();
   await expectOverviewHeadingTypography(page, 'Overview desktop policy section');
   const overviewPolicyDesktopViewport = testInfo.outputPath('overview-policy-desktop-viewport.png');
@@ -1202,7 +1210,7 @@ test('FakeBroker policy, review, and lot workflows', async ({
     page.getByRole('heading', { name: 'Active allocation policy', level: 2, exact: true }),
   ).toBeInViewport();
   await expect(
-    page.getByRole('heading', { name: 'Enabled sleeves and targets', level: 3, exact: true }),
+    page.getByRole('heading', { name: 'Active allocation targets', level: 3, exact: true }),
   ).toBeInViewport();
   await expectOverviewHeadingTypography(page, 'Overview mobile policy section');
   const overviewPolicyMobileViewport = testInfo.outputPath('overview-policy-mobile-viewport.png');

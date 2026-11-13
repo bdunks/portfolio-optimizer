@@ -204,7 +204,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { useWorkspace } from '@/composables/use-workspace';
 import type { RecommendationLegResponse } from '@/types/api';
-import { canonicalLegs } from '@/pages/recommendations-state';
+import { canonicalLegs, selectedSellGrossLossUsd } from '@/pages/recommendations-state';
 import { selectRunPresentation } from '@/stores/workspace-selectors';
 import { formatUsd } from '@/utils/display-values';
 import { isNegativeExactUsd, sumExactUsd } from '@/utils/exact-usd';
@@ -254,24 +254,9 @@ const selectedSellLots = computed(() =>
 const selectedSellLotCount = computed(
   () => new Set(selectedSellLots.value.map((lot) => lot.broker_lot_id)).size,
 );
-const grossLossUsd = computed(() => {
-  if (!canShowSelectedBasket.value) return null;
-  if (selectedSellLegs.value.length === 0) return '0.00';
-  const negativeLotValues: string[] = [];
-  for (const leg of selectedSellLegs.value) {
-    if (!Array.isArray(leg.selected_lots)) return null;
-    const selectedLots = leg.selected_lots.filter((lot) => lot.selected);
-    if (selectedLots.length === 0) return null;
-    for (const lot of selectedLots) {
-      const isNegative = isNegativeExactUsd(lot.realized_pl_usd);
-      if (isNegative === null) return null;
-      if (isNegative) negativeLotValues.push(lot.realized_pl_usd);
-    }
-  }
-  if (negativeLotValues.length === 0) return '0.00';
-  const negativeTotal = sumExactUsd(negativeLotValues);
-  return negativeTotal?.startsWith('-') ? negativeTotal.slice(1) : negativeTotal;
-});
+const grossLossUsd = computed(() =>
+  canShowSelectedBasket.value ? selectedSellGrossLossUsd(selectedCanonicalLegs.value) : null,
+);
 const realizedStUsd = computed(() => validApiUsd(run.value?.estimated_realized_st_usd));
 const realizedLtUsd = computed(() => validApiUsd(run.value?.estimated_realized_lt_usd));
 const netRealizedUsd = computed(() => sumExactUsd([realizedStUsd.value, realizedLtUsd.value]));

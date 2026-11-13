@@ -8,6 +8,7 @@ import {
   buildSelectionPayload,
   canonicalLegs,
   requestLotSelection,
+  selectedSellGrossLossUsd,
   sharedLegs,
 } from './recommendations-state';
 
@@ -241,6 +242,65 @@ function multiLotRun(
 }
 
 describe('recommendations selection state', () => {
+  it('sums selected negative lot P/L exactly and excludes signed leg nets and unselected lots', () => {
+    const firstSell = run.consolidated_legs[0]!;
+    const secondSell = run.consolidated_legs[1]!;
+    const selectedFirst = {
+      ...firstSell,
+      selected: true,
+      selected_lots: [
+        { ...firstSell.selected_lots[0]!, realized_pl_usd: '-1.25', selected: true },
+        {
+          ...firstSell.selected_lots[0]!,
+          broker_lot_id: 'positive-lot',
+          realized_pl_usd: '3.00',
+          selected: true,
+        },
+        {
+          ...firstSell.selected_lots[0]!,
+          broker_lot_id: 'unselected-loss',
+          realized_pl_usd: '-8.00',
+          selected: false,
+        },
+      ],
+    };
+    const selectedSecond = {
+      ...secondSell,
+      selected: true,
+      selected_lots: [
+        { ...secondSell.selected_lots[0]!, realized_pl_usd: '-0.05', selected: true },
+      ],
+    };
+    const selectedBuy = { ...run.consolidated_legs[2]!, selected: true };
+
+    expect(selectedSellGrossLossUsd([selectedFirst, selectedSecond, selectedBuy])).toBe('1.30');
+  });
+
+  it('returns exact zero for no selected SELL losses and withholds malformed selected lot values', () => {
+    const sell = run.consolidated_legs[0]!;
+    expect(selectedSellGrossLossUsd([sell])).toBe('0.00');
+    expect(
+      selectedSellGrossLossUsd([
+        {
+          ...sell,
+          selected: true,
+          selected_lots: [{ ...sell.selected_lots[0]!, selected: false }],
+        },
+      ]),
+    ).toBeNull();
+    expect(
+      selectedSellGrossLossUsd([
+        {
+          ...sell,
+          selected: true,
+          selected_lots: [
+            { ...sell.selected_lots[0]!, realized_pl_usd: 'not-a-decimal', selected: true },
+          ],
+        },
+      ]),
+    ).toBeNull();
+  });
+
   it('keeps a canonical shared BUY leg unique and links it from both groups', () => {
     expect(canonicalLegs(run).filter((leg) => leg.leg_id === 'buy-shared')).toHaveLength(1);
     expect(sharedLegs(run).map((leg) => leg.leg_id)).toEqual(['buy-shared']);

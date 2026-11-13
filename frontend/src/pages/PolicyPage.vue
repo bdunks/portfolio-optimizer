@@ -351,7 +351,9 @@
       class="tw:flex tw:flex-col tw:gap-2 tw:rounded-md tw:border tw:p-4 tw:md:flex-row tw:md:items-center tw:md:justify-between"
     >
       <div class="tw:space-y-1">
-        <h2 class="tw:m-0! tw:text-base tw:font-semibold">Replacement sets</h2>
+        <h2 id="replacement-sets" tabindex="-1" class="tw:m-0! tw:text-base tw:font-semibold">
+          Replacement sets
+        </h2>
         <p class="tw:m-0! tw:text-sm tw:text-muted-foreground">
           Open all configured candidates to reach custom, disabled, unassigned, or otherwise
           unavailable assignments.

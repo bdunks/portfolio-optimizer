@@ -4,7 +4,7 @@ import type {
   RecommendationGroupResponse,
   RecommendationLegResponse,
 } from '@/types/api';
-
+import { isNegativeExactUsd, sumExactUsd } from '@/utils/exact-usd';
 export type RecommendationFilters = {
   sleeve: string;
   action: '' | 'BUY' | 'SELL';
@@ -21,6 +21,30 @@ export function canonicalLegs(run: OptimizerRecommendationsResponse): Recommenda
     if (!unique.has(leg.leg_id)) unique.set(leg.leg_id, leg);
   }
   return [...unique.values()].sort((left, right) => left.sequence - right.sequence);
+}
+
+/** Sum only negative realized P/L from API-selected lots on selected canonical SELL legs. */
+export function selectedSellGrossLossUsd(
+  legs: readonly RecommendationLegResponse[],
+): string | null {
+  const selectedSellLegs = legs.filter((leg) => leg.side === 'SELL' && leg.selected);
+  if (selectedSellLegs.length === 0) return '0.00';
+
+  const negativeLotValues: string[] = [];
+  for (const leg of selectedSellLegs) {
+    if (!Array.isArray(leg.selected_lots)) return null;
+    const selectedLots = leg.selected_lots.filter((lot) => lot.selected);
+    if (selectedLots.length === 0) return null;
+    for (const lot of selectedLots) {
+      const isNegative = isNegativeExactUsd(lot.realized_pl_usd);
+      if (isNegative === null) return null;
+      if (isNegative) negativeLotValues.push(lot.realized_pl_usd);
+    }
+  }
+
+  if (negativeLotValues.length === 0) return '0.00';
+  const negativeTotal = sumExactUsd(negativeLotValues);
+  return negativeTotal?.startsWith('-') ? negativeTotal.slice(1) : negativeTotal;
 }
 
 export function groupLegs(

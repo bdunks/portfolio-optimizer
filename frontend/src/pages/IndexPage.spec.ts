@@ -10,9 +10,10 @@ import {
   currentRunForTest,
 } from '@/test-utils/workspace-harness';
 import { workspaceQueryKeys } from '@/composables/queries/workspace-queries';
-import { getTestQueryClient } from '@/test-utils/workspace-mount';
+import { getTestQueryClient, getTestQueryClientForPinia } from '@/test-utils/workspace-mount';
 import type { QueryClient } from '@tanstack/vue-query';
 import IndexPage from './IndexPage.vue';
+import type { PolicyResponse } from '@/types/api';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -130,6 +131,161 @@ function currentRunFixture(realizedSt = '-5.00', allocationWeight = '70.0000') {
   };
 }
 
+function selectedOverviewRunFixture() {
+  return {
+    ...currentRunFixture(),
+    frozen_display_context: {
+      available: true,
+      source: 'policy_revision',
+      policy_revision_id: 'active-policy-b',
+      revision_number: 3,
+      created_at: '2026-01-01T00:00:00Z',
+      activated_at: '2026-01-01T00:00:00Z',
+      sleeves: [
+        {
+          sleeve_key: 'us',
+          display_name: 'U.S. direct-index container',
+          sort_order: 1,
+          parent_sleeve_key: null,
+          target_pct: '100.0000',
+          drift_band_pp: '5.0000',
+          enabled: true,
+          is_direct_index_container: true,
+          is_direct_index_sleeve: false,
+          is_transition_destination: false,
+          is_cash_sleeve: false,
+        },
+        {
+          sleeve_key: 'legacy',
+          display_name: 'Legacy U.S. holdings',
+          sort_order: 2,
+          parent_sleeve_key: 'us',
+          target_pct: '70.0000',
+          drift_band_pp: '5.0000',
+          enabled: true,
+          is_direct_index_container: false,
+          is_direct_index_sleeve: true,
+          is_transition_destination: false,
+          is_cash_sleeve: false,
+        },
+        {
+          sleeve_key: 'transition_nested',
+          display_name: 'New U.S. holdings',
+          sort_order: 3,
+          parent_sleeve_key: 'us',
+          target_pct: '30.0000',
+          drift_band_pp: '5.0000',
+          enabled: true,
+          is_direct_index_container: false,
+          is_direct_index_sleeve: false,
+          is_transition_destination: true,
+          is_cash_sleeve: false,
+        },
+      ],
+      settings: { target_retained_net_loss_usd: '0.00' },
+      allowed_securities: [],
+      overrides: [],
+      unavailable_reason: null,
+    },
+    estimated_realized_st_usd: '-5.00',
+    estimated_realized_lt_usd: '2.00',
+    estimated_tax_benefit_usd: null,
+    estimated_tax_benefit_status: 'optimizer_unavailable',
+    groups: [
+      {
+        group_id: 'group-lower-priority',
+        rank: 4,
+        sleeve_key: 'legacy',
+        rationale: 'Reduce AAPL legacy exposure.',
+        selected: true,
+        rejected: false,
+        leg_ids: ['sell-aapl', 'buy-shared'],
+        impact: { realized_st_usd: '-5.00', realized_lt_usd: '0.00' },
+      },
+      {
+        group_id: 'group-top-priority',
+        rank: 1,
+        sleeve_key: 'legacy',
+        rationale: 'Reduce MSFT legacy exposure.',
+        selected: true,
+        rejected: false,
+        leg_ids: ['sell-msft', 'buy-shared'],
+        impact: { realized_st_usd: '0.00', realized_lt_usd: '2.00' },
+      },
+    ],
+    consolidated_legs: [
+      {
+        leg_id: 'sell-aapl',
+        side: 'SELL',
+        ticker: 'AAPL',
+        shares: '2',
+        estimated_unit_price_usd: '20.00',
+        estimated_notional_usd: '40.00',
+        net_st_realized_usd: '-5.00',
+        net_lt_realized_usd: '0.00',
+        selected: true,
+        group_ids: ['group-lower-priority'],
+        sequence: 1,
+        dependencies: [],
+        selected_lots: [
+          {
+            broker_lot_id: 'AAPL-LOT-1',
+            shares: '2',
+            acquired_date: '2024-01-01',
+            adjusted_basis_usd: '45.00',
+            st_lt: 'ST',
+            realized_pl_usd: '-5.00',
+            selected: true,
+          },
+        ],
+        details: {},
+      },
+      {
+        leg_id: 'sell-msft',
+        side: 'SELL',
+        ticker: 'MSFT',
+        shares: '1',
+        estimated_unit_price_usd: '30.00',
+        estimated_notional_usd: '30.00',
+        net_st_realized_usd: '0.00',
+        net_lt_realized_usd: '2.00',
+        selected: true,
+        group_ids: ['group-top-priority'],
+        sequence: 2,
+        dependencies: [],
+        selected_lots: [
+          {
+            broker_lot_id: 'MSFT-LOT-1',
+            shares: '1',
+            acquired_date: '2020-01-01',
+            adjusted_basis_usd: '28.00',
+            st_lt: 'LT',
+            realized_pl_usd: '-3.00',
+            selected: true,
+          },
+        ],
+        details: {},
+      },
+      {
+        leg_id: 'buy-shared',
+        side: 'BUY',
+        ticker: 'VTI',
+        shares: '1',
+        estimated_unit_price_usd: '50.00',
+        estimated_notional_usd: '50.00',
+        net_st_realized_usd: '0.00',
+        net_lt_realized_usd: '0.00',
+        selected: true,
+        group_ids: ['group-lower-priority', 'group-top-priority'],
+        sequence: 3,
+        dependencies: ['sell-aapl', 'sell-msft'],
+        selected_lots: [],
+        details: {},
+      },
+    ],
+  } as never;
+}
+
 function jsonResponse(value: unknown): Response {
   return new Response(JSON.stringify(value), {
     status: 200,
@@ -200,6 +356,254 @@ describe('IndexPage', () => {
     expect(wrapper.findAll('.overview-page-action')).toHaveLength(2);
     wrapper.unmount();
   });
+  it('leads with confirmed optimization outcomes and a grouped API-sourced preview', async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const store = mountWorkspaceHarness().workspace;
+    seedCurrentRunForTest(store, selectedOverviewRunFixture());
+    store.currentRunView = 'current';
+    const queryClient = getTestQueryClientForPinia(pinia);
+    seedMismatchedPortfolioAndPolicy(queryClient, 'active-policy-b', 'active-policy-b');
+    queryClient.setQueryData(workspaceQueryKeys.health, {
+      status: 'ok',
+      schema_ready: true,
+      broker_mode: 'demo',
+      live_broker_enabled: false,
+      order_submission_enabled: false,
+    });
+    queryClient.setQueryData(workspaceQueryKeys.portfolio, portfolioFixture('active-policy-b'));
+    queryClient.setQueryData(workspaceQueryKeys.policy, {
+      active: {
+        id: 'active-policy-b',
+        revision_number: 3,
+        status: 'ACTIVE',
+        created_at: '2026-01-01T00:00:00Z',
+        activated_at: '2026-01-01T00:00:00Z',
+        settings: {
+          prefer_etf_buys: false,
+          allow_gain_sales: false,
+          permit_etf_harvest: false,
+          permit_muni_exit: false,
+          gain_budget_usd: '0.00',
+          max_sell_tickers_per_batch: 2,
+          max_sell_lots_per_batch: 4,
+          max_total_orders_per_batch: 6,
+        },
+        sleeves: [
+          {
+            sleeve_key: 'us',
+            display_name: 'U.S. direct-index container',
+            sort_order: 1,
+            parent_sleeve_key: null,
+            target_pct: '100.0000',
+            drift_band_pp: '5.0000',
+            enabled: true,
+            is_direct_index_container: true,
+            is_direct_index_sleeve: false,
+            is_transition_destination: false,
+            is_cash_sleeve: false,
+          },
+          {
+            sleeve_key: 'legacy',
+            display_name: 'Legacy U.S. holdings',
+            sort_order: 2,
+            parent_sleeve_key: 'us',
+            target_pct: '70.0000',
+            drift_band_pp: '5.0000',
+            enabled: true,
+            is_direct_index_container: false,
+            is_direct_index_sleeve: true,
+            is_transition_destination: false,
+            is_cash_sleeve: false,
+          },
+          {
+            sleeve_key: 'transition_nested',
+            display_name: 'New U.S. holdings',
+            sort_order: 3,
+            parent_sleeve_key: 'us',
+            target_pct: '30.0000',
+            drift_band_pp: '5.0000',
+            enabled: true,
+            is_direct_index_container: false,
+            is_direct_index_sleeve: false,
+            is_transition_destination: true,
+            is_cash_sleeve: false,
+          },
+          {
+            sleeve_key: 'disabled-destination',
+            display_name: 'Disabled destination',
+            sort_order: 4,
+            parent_sleeve_key: 'us',
+            target_pct: '0.0000',
+            drift_band_pp: '0.0000',
+            enabled: false,
+            is_direct_index_container: false,
+            is_direct_index_sleeve: false,
+            is_transition_destination: true,
+            is_cash_sleeve: false,
+          },
+        ],
+        allowed_securities: [
+          {
+            ticker: 'VTI',
+            sleeve_key: 'transition_nested',
+            sub_sleeve_key: 'new',
+            replacement_set_id: 'new-us-set',
+            priority: 1,
+            enabled: true,
+            exposure_suitability: 'broad-market',
+          },
+          {
+            ticker: 'SCHB',
+            sleeve_key: 'transition_nested',
+            sub_sleeve_key: 'new',
+            replacement_set_id: 'new-us-set',
+            priority: 2,
+            enabled: false,
+            exposure_suitability: 'broad-market',
+          },
+          {
+            ticker: 'VXF',
+            sleeve_key: 'transition_nested',
+            sub_sleeve_key: 'new',
+            replacement_set_id: 'second-set',
+            priority: 3,
+            enabled: true,
+            exposure_suitability: null,
+          },
+          {
+            ticker: 'CUSTOM',
+            sleeve_key: 'custom-destination',
+            sub_sleeve_key: null,
+            replacement_set_id: 'custom-set',
+            priority: 1,
+            enabled: false,
+            exposure_suitability: 'custom-only',
+          },
+          {
+            ticker: 'COLLISION-ONE',
+            sleeve_key: 'a',
+            sub_sleeve_key: 'b:c',
+            replacement_set_id: 'd',
+            priority: 1,
+            enabled: true,
+            exposure_suitability: null,
+          },
+          {
+            ticker: 'COLLISION-TWO',
+            sleeve_key: 'a',
+            sub_sleeve_key: 'b',
+            replacement_set_id: 'c:d',
+            priority: 2,
+            enabled: true,
+            exposure_suitability: null,
+          },
+        ],
+        overrides: [],
+      },
+      drafts: [],
+      superseded: [],
+    } as never);
+    const router = createRouter({ history: createMemoryHistory(), routes: [] });
+    const wrapper = mountWithWorkspace(IndexPage, {
+      global: { plugins: [pinia, router] },
+    });
+    await flushPromises();
+
+    const workspaceCards = wrapper.findAll('.workspace-card');
+    expect(
+      workspaceCards.map((card) =>
+        card
+          .classes()
+          .find((name) =>
+            [
+              'transition-card',
+              'allocation-card',
+              'run-card',
+              'policy-card',
+              'account-card',
+            ].includes(name),
+          ),
+      ),
+    ).toEqual(['transition-card', 'allocation-card', 'run-card', 'policy-card', 'account-card']);
+    const outcomes = wrapper.get('[aria-label="Current optimization outcomes"]');
+    expect(outcomes.text()).toContain('Selected gross losses');
+    expect(outcomes.text()).toContain('8.00 USD');
+    expect(outcomes.text()).toContain('Estimated tax benefit');
+    expect(outcomes.text()).toContain('Estimate unavailable');
+    expect(outcomes.text()).toContain('ST-5.00 USD');
+    expect(outcomes.text()).toContain('LT2.00 USD');
+    expect(outcomes.text()).toContain('Net-3.00 USD');
+    expect(outcomes.text()).toContain('Risk tracking Unavailable');
+
+    const preview = wrapper.get('.run-card');
+    expect(preview.text().indexOf('Priority 1')).toBeLessThan(preview.text().indexOf('Priority 4'));
+    expect(preview.text()).toContain('Reduce MSFT legacy exposure.');
+    expect(preview.text()).toContain('AAPL-LOT-1');
+    expect(preview.text()).toContain('2 shares');
+    expect(preview.text()).toContain('P/L -5.00 USD');
+    expect(preview.text().split('BUY 1 shares VTI').length - 1).toBe(1);
+    expect(preview.find('a[href="/recommendations"]').exists()).toBe(true);
+    expect(preview.find('a[href="/review"]').exists()).toBe(true);
+
+    const policy = wrapper.get('.policy-card');
+    expect(policy.text()).toContain(
+      'Individual equities, VB and VXF default to U.S. direct-index container',
+    );
+    expect(policy.text()).toContain('Configured U.S. new destination: New U.S. holdings');
+    expect(policy.text()).toContain('Prefer ETF buysDisabled');
+    expect(policy.text()).toContain('Allow gain salesDisabled');
+    expect(policy.text()).toContain('Gain budget0.00 USD');
+    expect(policy.text()).toContain('2 tickers · 4 lots · 6 total orders');
+    expect(policy.text()).toContain(
+      'Small legacy and DRIP lots are not blocked by a minimum SELL notional',
+    );
+    expect(policy.text()).toContain('new-us-set');
+    expect(policy.text()).toContain('VTI');
+    expect(policy.text()).toContain('SCHB');
+    expect(policy.text()).toContain('Disabled · Suitability: broad-market');
+    expect(policy.text()).toContain('second-set');
+    expect(policy.text()).toContain('custom-destination (unconfigured destination)');
+    expect(policy.text()).toContain('COLLISION-ONE');
+    expect(policy.text()).toContain('COLLISION-TWO');
+    const collisionGroups = policy
+      .findAll('li')
+      .filter(
+        (item) =>
+          item.classes().includes('tw:rounded-md') &&
+          (item.text().includes('COLLISION-ONE') || item.text().includes('COLLISION-TWO')),
+      );
+    expect(collisionGroups).toHaveLength(2);
+    expect(collisionGroups.map((item) => item.text())).toEqual([
+      expect.stringContaining('COLLISION-ONE'),
+      expect.stringContaining('COLLISION-TWO'),
+    ]);
+    const cachedPolicy = queryClient.getQueryData<PolicyResponse>(workspaceQueryKeys.policy);
+    if (!cachedPolicy?.active) throw new Error('The active policy fixture is unavailable');
+    queryClient.setQueryData(workspaceQueryKeys.policy, {
+      ...cachedPolicy,
+      active: {
+        ...cachedPolicy.active,
+        allowed_securities: [...cachedPolicy.active.allowed_securities].reverse(),
+      },
+    });
+    await flushPromises();
+    const reorderedCollisionGroups = policy
+      .findAll('li')
+      .filter(
+        (item) =>
+          item.classes().includes('tw:rounded-md') &&
+          (item.text().includes('COLLISION-ONE') || item.text().includes('COLLISION-TWO')),
+      );
+    expect(reorderedCollisionGroups).toHaveLength(2);
+    expect(reorderedCollisionGroups.map((item) => item.text())).toEqual([
+      expect.stringContaining('COLLISION-TWO'),
+      expect.stringContaining('COLLISION-ONE'),
+    ]);
+    expect(policy.find('a[href="/policy#replacement-sets"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
   it('uses shared freshness selectors to withhold an unconfirmed run comparison', async () => {
     const pinia = createPinia();
     setActivePinia(pinia);
@@ -228,9 +632,8 @@ describe('IndexPage', () => {
       })
       .catch(() => undefined);
     await flushPromises();
-    expect(wrapper.get('.policy-subhead').classes()).toEqual(
-      expect.arrayContaining(['tw:text-sm!', 'tw:text-muted-foreground', 'tw:uppercase']),
-    );
+    expect(wrapper.get('.policy-card').text()).toContain('Active allocation targets');
+    expect(wrapper.get('.policy-card').text()).toContain('No enabled targets returned.');
 
     expect(wrapper.text()).toContain('No current matching recommendation run');
 

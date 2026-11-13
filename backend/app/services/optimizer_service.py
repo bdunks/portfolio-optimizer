@@ -529,7 +529,6 @@ def _optimizer_metrics(prepared: PreparedOptimizerRun, result: ValidatedOptimize
                 "core_group_id": priority.group_id,
                 "rank": priority.rank,
                 "priority_score": _jsonable(priority.priority_score),
-                "objective_components": {key: str(value) for key, value in priority.objective_components},
                 "rationale": list(priority.rationale),
             }
         )

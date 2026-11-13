@@ -1149,10 +1149,18 @@ def test_published_financial_metrics_use_owner_validation_and_survive_summary_re
         baseline_objective_value=Decimal(888888),
         estimated_tax_benefit_usd=Decimal(777777),
         estimated_trading_cost_usd=Decimal(666666),
+        trade_group_priorities=(
+            SimpleNamespace(
+                group_id="group-1",
+                rank=1,
+                priority_score=Decimal("4.56"),
+                objective_components=(("worker_only", Decimal("999.99")),),
+                rationale=("test rationale",),
+            ),
+        ),
         exposure_coverage_complete=True,
         rounding_attempts=0,
         warnings=(),
-        trade_group_priorities=(),
     )
     candidate = Candidate((), status="no_trade", metadata=metadata)  # type: ignore[arg-type]
     validation = SimpleNamespace(
@@ -1194,6 +1202,13 @@ def test_published_financial_metrics_use_owner_validation_and_survive_summary_re
         assert run.metrics["objective_value"] == "12.34"
         assert run.metrics["baseline_objective_value"] is None
         assert run.metrics["objective_components"] == {"tax": "2.34"}
+        assert "objective_components" not in run.metrics["trade_group_priorities"][0]
+        assert run.metrics["trade_group_priorities"][0] == {
+            "core_group_id": "group-1",
+            "rank": 1,
+            "priority_score": "4.56",
+            "rationale": ["test rationale"],
+        }
         assert run.metrics["estimated_tax_benefit_usd"] is None
         assert run.metrics["estimated_trading_cost_usd"] == "1.23"
         summary = optimizer_service.real_run_summary(run, session)

@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import time
-from types import SimpleNamespace
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -1118,7 +1118,7 @@ async def test_worker_subset_result_must_exactly_match_positive_whole_lot_intent
 
 @pytest.mark.parametrize("subset", [False, True])
 def test_published_financial_metrics_use_owner_validation_and_survive_summary_readback(
-    tmp_path: Path, subset: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, subset: bool
 ) -> None:
     if subset:
         engine, session_factory = _create_sqlite_subset_optimizer_run(tmp_path)
@@ -1126,6 +1126,9 @@ def test_published_financial_metrics_use_owner_validation_and_survive_summary_re
     else:
         engine, session_factory = _create_sqlite_optimizer_run(tmp_path, selected=True)
         run_id = _RUN_ID
+    monkeypatch.setattr(
+        optimizer_service, "_stable_id", lambda _run_id, prefix, value: f"{prefix}:{value}"
+    )
 
     metadata = SimpleNamespace(
         solver="fake-solver",
@@ -1142,10 +1145,10 @@ def test_published_financial_metrics_use_owner_validation_and_survive_summary_re
         screened_lot_count=0,
         selected_lot_ids=(),
         candidate_types=(),
-        objective_value=Decimal("999999"),
-        baseline_objective_value=Decimal("888888"),
-        estimated_tax_benefit_usd=Decimal("777777"),
-        estimated_trading_cost_usd=Decimal("666666"),
+        objective_value=Decimal(999999),
+        baseline_objective_value=Decimal(888888),
+        estimated_tax_benefit_usd=Decimal(777777),
+        estimated_trading_cost_usd=Decimal(666666),
         exposure_coverage_complete=True,
         rounding_attempts=0,
         warnings=(),

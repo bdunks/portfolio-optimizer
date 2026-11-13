@@ -552,8 +552,12 @@ def _optimizer_metrics(prepared: PreparedOptimizerRun, result: ValidatedOptimize
         "candidate_types": list(metadata.candidate_types),
         "objective_value": _jsonable(getattr(validation, "objective_value", None)),
         "baseline_objective_value": None,
-        "estimated_tax_benefit_usd": _jsonable(getattr(validation, "estimated_tax_benefit_usd", None)),
-        "estimated_trading_cost_usd": _jsonable(getattr(validation, "estimated_trading_cost_usd", None)),
+        "estimated_tax_benefit_usd": _jsonable(
+            getattr(validation, "estimated_tax_benefit_usd", None)
+        ),
+        "estimated_trading_cost_usd": _jsonable(
+            getattr(validation, "estimated_trading_cost_usd", None)
+        ),
         "objective_components": {
             key: str(value) for key, value in getattr(validation, "objective_components", ())
         },

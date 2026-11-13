@@ -21,6 +21,7 @@ from app.domain.financial_inputs import (
     LookThroughExposureInput,
     LotInput,
     PolicyInput,
+    PolicySectorBandInput,
     PolicySettings,
     PositionInput,
     QuoteInput,
@@ -136,7 +137,16 @@ def build_optimizer_benchmark_inputs(seed: int = 4602500) -> FinancialInputs:
         }
     )
     policy_input = PolicyInput(
-        "benchmark-policy-r1", policy, settings, revision_number=1, status="active"
+        "benchmark-policy-r1",
+        policy,
+        settings,
+        revision_number=1,
+        status="active",
+        sector_bands=(
+            PolicySectorBandInput("technology", Decimal(34), Decimal(8)),
+            PolicySectorBandInput("healthcare", Decimal(33), Decimal(8)),
+            PolicySectorBandInput("other", Decimal(33), Decimal(8)),
+        ),
     )
     securities = [
         SecurityInput(SecurityIdentity(ticker, "EQUITY"), i + 1)
@@ -281,6 +291,18 @@ def build_optimizer_benchmark_inputs(seed: int = 4602500) -> FinancialInputs:
             )
             for index, member in enumerate(members)
         )
+    sector_keys = ("technology", "healthcare", "other")
+    exposures_list.extend(
+        LookThroughExposureInput(
+            ticker,
+            "sector",
+            sector_keys[index % len(sector_keys)],
+            Decimal(1),
+            "fixture-v1",
+            TRADE_DATE,
+        )
+        for index, ticker in enumerate(stock_tickers)
+    )
     exposures = tuple(exposures_list)
     fingerprint = ";".join(
         f"{lot.broker_lot_id}:{lot.adjusted_unit_basis_usd}:{lot.shares}" for lot in lots

@@ -117,7 +117,7 @@ def _git_value(*args: str) -> str | None:
             check=True,
             capture_output=True,
             text=True,
-            cwd=_repo_root(),
+            cwd=_repo_root().parent,
         )
     except OSError:
         return None

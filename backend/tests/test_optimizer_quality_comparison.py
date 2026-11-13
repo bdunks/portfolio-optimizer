@@ -7,7 +7,9 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from scripts.compare_optimizer_quality import (
+from scripts.compare_optimizer_quality import (
     _build_summaries,
+    _git_value,
     _production_domain_check,
     nearest_rank,
     objective_gap_percent,
@@ -113,3 +115,17 @@ def test_one_real_spawned_production_comparison_is_provisional_and_bounded() -> 
     assert row["production"]["independently_revalidated"] is True
     assert row["production"]["supervisor_wall_seconds"] < 10
     assert row["production"]["production_total_wall_seconds"] < 10
+
+
+def test_file_last_commit_uses_repository_root_path_context() -> None:
+    commit = _git_value(
+        "log",
+        "-1",
+        "--format=%H",
+        "--",
+        "backend/tests/optimizer_quality_reference.py",
+    )
+
+    assert commit is not None
+    assert len(commit) == 40
+    assert all(character in "0123456789abcdef" for character in commit)

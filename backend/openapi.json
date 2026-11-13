@@ -295,6 +295,30 @@
             "title": "Quotes",
             "type": "boolean"
           },
+          "transaction_history_end_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transaction History End Date"
+          },
+          "transaction_history_start_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transaction History Start Date"
+          },
           "transactions": {
             "title": "Transactions",
             "type": "boolean"
@@ -2517,7 +2541,17 @@
           },
           "coverage": {
             "additionalProperties": {
-              "type": "boolean"
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "title": "Coverage",
             "type": "object"
@@ -2597,7 +2631,17 @@
           },
           "coverage": {
             "additionalProperties": {
-              "type": "boolean"
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "title": "Coverage",
             "type": "object"

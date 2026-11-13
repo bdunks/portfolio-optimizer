@@ -44,6 +44,8 @@ class CoverageInput(StrictModel):
     balances: bool
     quotes: bool
     lookthrough: bool = False
+    transaction_history_start_date: date | None = None
+    transaction_history_end_date: date | None = None
 
 
 class PositionInput(StrictModel):
@@ -102,6 +104,7 @@ class TransactionInput(StrictModel):
     trade_date: date
     shares: ExactDecimal
     amount_usd: ExactDecimal
+    realized_pl_usd: ExactDecimal | None = None
     is_acquisition: bool
     broker_lot_id: str | None = None
     source: str = Field(min_length=1, max_length=40)
@@ -342,6 +345,8 @@ class CoverageResponse(StrictModel):
     balances: bool
     quotes: bool
     lookthrough: bool = False
+    transaction_history_start_date: date | None = None
+    transaction_history_end_date: date | None = None
 
 
 class SyncStatusResponse(StrictModel):
@@ -443,7 +448,7 @@ class PortfolioNotSyncedResponse(StrictModel):
     cash_usd: str
     portfolio_total_usd: str
     positions: list[PositionResponse]
-    coverage: dict[str, bool]
+    coverage: dict[str, bool | str | None]
     sync: SyncStatusResponse
     allocation: AllocationResponse
     us_transition: None
@@ -463,7 +468,7 @@ class PortfolioReadyResponse(StrictModel):
     positions: list[PositionResponse]
     active_policy_revision_id: str | None
     unassigned_tickers: list[str]
-    coverage: dict[str, bool]
+    coverage: dict[str, bool | str | None]
     sync: SyncStatusResponse
     allocation: AllocationResponse
     us_transition: USTransitionResponse | None

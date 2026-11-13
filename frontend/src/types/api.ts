@@ -59,6 +59,8 @@ export type CoverageResponse = {
   "balances": boolean;
   "quotes": boolean;
   "lookthrough"?: boolean;
+  "transaction_history_start_date"?: string | null;
+  "transaction_history_end_date"?: string | null;
 };
 
 export type ErrorEnvelope = {
@@ -400,7 +402,7 @@ export type PortfolioNotSyncedResponse = {
   "cash_usd": string;
   "portfolio_total_usd": string;
   "positions": Array<PositionResponse>;
-  "coverage": Record<string, boolean>;
+  "coverage": Record<string, boolean | string | null>;
   "sync": SyncStatusResponse;
   "allocation": AllocationResponse;
   "us_transition": null;
@@ -420,7 +422,7 @@ export type PortfolioReadyResponse = {
   "positions": Array<PositionResponse>;
   "active_policy_revision_id": string | null;
   "unassigned_tickers": Array<string>;
-  "coverage": Record<string, boolean>;
+  "coverage": Record<string, boolean | string | null>;
   "sync": SyncStatusResponse;
   "allocation": AllocationResponse;
   "us_transition": USTransitionResponse | null;

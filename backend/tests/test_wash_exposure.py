@@ -6,7 +6,11 @@ from decimal import Decimal
 import pytest
 
 from app.domain.allocation import AllocationPolicy, SecurityIdentity
-from app.domain.exposure import aggregate_lookthrough_exposure, exposure_overlap
+from app.domain.exposure import (
+    ExposureSourceFreshness,
+    aggregate_lookthrough_exposure,
+    exposure_overlap,
+)
 from app.domain.financial_inputs import (
     AccountInput,
     FinancialInputs,
@@ -20,7 +24,12 @@ from app.domain.financial_inputs import (
     TransactionInput,
     financial_inputs_from_provenance,
 )
-from app.domain.wash import ProposedBuy, ProposedLotSale, assess_wash_sales
+from app.domain.wash import (
+    ProposedBuy,
+    ProposedLotSale,
+    assess_proposed_buys,
+    assess_wash_sales,
+)
 
 TRADE_DATE = date(2026, 11, 13)
 NOW = datetime(2026, 11, 13, 16, 0, tzinfo=UTC)
@@ -121,6 +130,7 @@ def _transaction(
     ticker: str = "XYZ",
     kind: str = "BUY",
     is_acquisition: bool = True,
+    realized_pl_usd: str | None = None,
 ) -> TransactionInput:
     return TransactionInput(
         broker_transaction_key=key,
@@ -130,6 +140,7 @@ def _transaction(
         trade_date=trade_date,
         shares=Decimal(shares),
         amount_usd=Decimal(0),
+        realized_pl_usd=Decimal(realized_pl_usd) if realized_pl_usd is not None else None,
         is_acquisition=is_acquisition,
         broker_lot_id=lot_id,
         source="TEST",
@@ -207,21 +218,86 @@ def test_acquisition_lookback_includes_day_30_but_not_day_31(
     assert assessment.conflicting_transaction_keys == (("recent-buy",) if blocked else ())
 
 
-@pytest.mark.parametrize(("days_after", "blocked"), [(30, True), (31, False)])
-def test_proposed_buy_forward_window_includes_day_30_not_day_31(
-    days_after: int, blocked: bool
+@pytest.mark.parametrize(("days_since_loss", "blocked"), [(0, True), (30, True), (31, False)])
+def test_executed_loss_blocks_buy_through_day_30_but_not_day_31(
+    days_since_loss: int, blocked: bool
 ) -> None:
-    buy = ProposedBuy(
-        ticker="XYZ",
-        shares=Decimal(1),
-        trade_group_id="replacement",
-        buy_date=TRADE_DATE + timedelta(days=days_after),
+    loss_date = TRADE_DATE - timedelta(days=days_since_loss)
+    executed_loss = _transaction(
+        "executed-loss",
+        trade_date=loss_date,
+        lot_id=None,
+        kind="SELL",
+        is_acquisition=False,
+        realized_pl_usd="-5",
+    )
+    buy = ProposedBuy("XYZ", Decimal(1), "replacement", TRADE_DATE)
+    inputs = _inputs(
+        transactions=(executed_loss,),
+        metadata=_metadata(history_start=TRADE_DATE - timedelta(days=31)),
     )
 
-    assessment = assess_wash_sales(_inputs(), (_loss_sale(),), (buy,))[0]
+    assessment = assess_proposed_buys(inputs, (buy,))[0]
 
-    assert ("proposed_same_security_buy" in assessment.reasons) is blocked
     assert assessment.eligible is not blocked
+    assert ("executed_loss_restriction" in assessment.reasons) is blocked
+    assert assessment.conflicting_transaction_keys == (("executed-loss",) if blocked else ())
+    if blocked:
+        assert assessment.no_buy_through == loss_date + timedelta(days=30)
+        assert assessment.next_eligible_purchase_date == loss_date + timedelta(days=31)
+    else:
+        assert assessment.no_buy_through is None
+        assert assessment.next_eligible_purchase_date is None
+
+
+def test_executed_loss_buy_check_requires_explicit_attribution_and_complete_history() -> None:
+    buy = ProposedBuy("XYZ", Decimal(1), "replacement", TRADE_DATE)
+    unknown_sale = _transaction(
+        "unknown-loss",
+        trade_date=TRADE_DATE - timedelta(days=3),
+        lot_id=None,
+        kind="SELL",
+        is_acquisition=False,
+    )
+    unknown = assess_proposed_buys(_inputs(transactions=(unknown_sale,)), (buy,))[0]
+    assert not unknown.eligible
+    assert "executed_loss_attribution_unknown" in unknown.reasons
+    assert unknown.conflicting_transaction_keys == ("unknown-loss",)
+
+    gain_sale = _transaction(
+        "known-gain",
+        trade_date=TRADE_DATE - timedelta(days=3),
+        lot_id=None,
+        kind="SELL",
+        is_acquisition=False,
+        realized_pl_usd="10",
+    )
+    known_gain = assess_proposed_buys(_inputs(transactions=(gain_sale,)), (buy,))[0]
+    assert known_gain.eligible
+    assert not known_gain.reasons
+
+    incomplete = assess_proposed_buys(_inputs(metadata=InputSourceMetadata()), (buy,))[0]
+    assert not incomplete.eligible
+    assert incomplete.reasons == ("incomplete_executed_loss_history",)
+
+
+def test_wash_action_dates_must_match_frozen_trade_date_and_proposed_losses_gate_buys() -> None:
+    inputs = _inputs()
+    with pytest.raises(
+        ValueError, match="wash-sale action date must match frozen proposed trade date"
+    ):
+        assess_wash_sales(inputs, (_loss_sale(sale_date=TRADE_DATE - timedelta(days=1)),))
+
+    wrong_date_buy = ProposedBuy("XYZ", Decimal(1), "replacement", TRADE_DATE + timedelta(days=1))
+    with pytest.raises(
+        ValueError, match="wash-sale action date must match frozen proposed trade date"
+    ):
+        assess_proposed_buys(inputs, (wrong_date_buy,))
+
+    buy = ProposedBuy("XYZ", Decimal(1), "replacement", TRADE_DATE)
+    assessment = assess_proposed_buys(inputs, (buy,), (_loss_sale(),))[0]
+    assert not assessment.eligible
+    assert assessment.reasons == ("proposed_loss_sale_restriction",)
     assert assessment.no_buy_through == TRADE_DATE + timedelta(days=30)
     assert assessment.next_eligible_purchase_date == TRADE_DATE + timedelta(days=31)
 
@@ -327,6 +403,90 @@ def test_vb_and_vxf_cached_lookthrough_rows_are_included() -> None:
     assert values[("security", "BBB")] == Decimal("150.00")
 
 
+def test_lookthrough_uses_one_latest_snapshot_and_does_not_resurrect_removed_constituents() -> None:
+    inputs = _inputs(
+        positions=(_position("FUND", "100"),),
+        exposures=(
+            _exposure("FUND", "AAA", "0.6", as_of_date=TRADE_DATE - timedelta(days=1)),
+            _exposure("FUND", "BBB", "0.4", as_of_date=TRADE_DATE - timedelta(days=1)),
+            _exposure("FUND", "AAA", "1.0", as_of_date=TRADE_DATE),
+        ),
+    )
+
+    aggregate = aggregate_lookthrough_exposure(inputs)
+    values = {row.exposure_key: row.value_usd for row in aggregate.values}
+
+    assert aggregate.coverage.complete is True
+    assert values == {"AAA": Decimal("100.0")}
+    assert aggregate.coverage.duplicate_rows_removed == 2
+
+
+def test_lookthrough_falls_back_to_a_current_provider_snapshot() -> None:
+    inputs = _inputs(
+        positions=(_position("FUND", "100"),),
+        exposures=(
+            _exposure("FUND", "AAA", "1.0", as_of_date=TRADE_DATE - timedelta(days=96)),
+            _exposure(
+                "FUND", "AAA", "0.5", provider="ishares", as_of_date=TRADE_DATE - timedelta(days=2)
+            ),
+        ),
+    )
+
+    aggregate = aggregate_lookthrough_exposure(inputs)
+
+    assert aggregate.coverage.complete is True
+    assert aggregate.values[0].value_usd == Decimal("50.0")
+    assert aggregate.coverage.sources == (
+        ExposureSourceFreshness("ishares", TRADE_DATE - timedelta(days=2)),
+    )
+
+
+def test_requested_dimension_requires_coverage_for_every_selected_holding() -> None:
+    inputs = _inputs(
+        positions=(_position("FUND-A", "100"), _position("FUND-B", "50")),
+        exposures=(
+            _exposure("FUND-A", "AAA", "1", dimension="security"),
+            _exposure("FUND-B", "BBB", "1", dimension="security"),
+            _exposure("FUND-A", "US", "1", dimension="region"),
+        ),
+    )
+
+    security = aggregate_lookthrough_exposure(inputs)
+    region = aggregate_lookthrough_exposure(inputs, dimension="region")
+    selected_region = aggregate_lookthrough_exposure(
+        inputs, tickers=("FUND-A",), dimension="region"
+    )
+
+    assert security.coverage.complete is True
+    assert region.coverage.complete is False
+    assert region.coverage.missing_tickers == ("FUND-B",)
+    assert exposure_overlap(region, region, dimension="region").overlap_pct is None
+    assert selected_region.coverage.complete is True
+    assert (
+        exposure_overlap(security, security, dimension="region").reason
+        == "requested_dimension_not_aggregated"
+    )
+
+
+def test_direct_equity_requires_explicit_non_security_exposure_coverage() -> None:
+    direct_equity = _position("AAA", "100", asset_type="EQUITY")
+    missing = aggregate_lookthrough_exposure(
+        _inputs(positions=(direct_equity,)), dimension="region"
+    )
+    covered = aggregate_lookthrough_exposure(
+        _inputs(
+            positions=(direct_equity,),
+            exposures=(_exposure("AAA", "US", "1", dimension="region"),),
+        ),
+        dimension="region",
+    )
+
+    assert missing.coverage.complete is False
+    assert missing.coverage.missing_tickers == ("AAA",)
+    assert covered.coverage.complete is True
+    assert covered.values[0].value_usd == Decimal(100)
+
+
 @pytest.mark.parametrize("failure", ["missing", "stale", "conflicting"])
 def test_missing_stale_and_conflicting_lookthrough_coverage_fail_closed(failure: str) -> None:
     rows: tuple[LookThroughExposureInput, ...]
@@ -337,7 +497,7 @@ def test_missing_stale_and_conflicting_lookthrough_coverage_fail_closed(failure:
     else:
         rows = (
             _exposure("FUND", "AAA", "0.7"),
-            _exposure("FUND", "AAA", "0.6", provider="ishares"),
+            _exposure("FUND", "AAA", "0.6", provider="vanguard"),
         )
     aggregate = aggregate_lookthrough_exposure(
         _inputs(positions=(_position("FUND", "100"),), exposures=rows)

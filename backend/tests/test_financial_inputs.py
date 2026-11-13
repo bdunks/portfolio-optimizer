@@ -12,6 +12,7 @@ from sqlalchemy import select
 from app.broker.fake import FakeBroker
 from app.db.models import (
     Account,
+    BrokerTransaction,
     CurrentTaxLot,
     PolicyRevision,
     Security,
@@ -274,6 +275,8 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
             vti = session.scalar(select(Security).where(Security.ticker == "VTI"))
             assert state is not None
             assert vti is not None
+            stk000 = session.scalar(select(Security).where(Security.ticker == "STK000"))
+            assert stk000 is not None
             state.complete = True
             state.coverage = {
                 **state.coverage,
@@ -292,6 +295,22 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
                     as_of_date=date(2026, 11, 4),
                 )
             )
+            session.add(
+                BrokerTransaction(
+                    broker_transaction_key="TEST-EXECUTED-LOSS",
+                    account_id=1,
+                    security_id=stk000.id,
+                    transaction_kind="SELL",
+                    transaction_time=datetime(2026, 11, 4, 20, tzinfo=UTC),
+                    trade_date=date(2026, 11, 4),
+                    shares=Decimal(1),
+                    amount_usd=Decimal(0),
+                    realized_pl_usd=Decimal(-5),
+                    is_acquisition=False,
+                    broker_lot_id=None,
+                    source="DEMO",
+                )
+            )
 
         def load_inputs() -> FinancialInputs:
             with app.state.session_factory() as session:
@@ -305,12 +324,35 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
                     session, account, state, policy, DEMO_PROPOSED_TRADE_DATE
                 )
 
+
+        def load_without_transactions() -> FinancialInputs:
+            with app.state.session_factory() as session:
+                account = session.get(Account, 1)
+                state = session.get(SyncState, 1)
+                policy = session.scalar(select(PolicyRevision).where(PolicyRevision.status == "ACTIVE"))
+                assert account is not None
+                assert state is not None
+                assert policy is not None
+                return load_financial_inputs(
+                    session,
+                    account,
+                    state,
+                    policy,
+                    DEMO_PROPOSED_TRADE_DATE,
+                    include_transactions=False,
+                )
         inputs, full_input_selects = count_selects(app.state.engine, load_inputs)
+        without_transactions = load_without_transactions()
+        assert without_transactions.transactions == ()
+        assert without_transactions.source_metadata.transaction_history_complete is False
+        assert without_transactions.source_metadata.transaction_history_start_date == date(2026, 10, 1)
         assert len(inputs.positions) == 460
         assert len(inputs.lots) == 2500
         assert full_input_selects == 12
         assert inputs.exposures[0].ticker == "VTI"
         assert inputs.exposures[0].weight == Decimal("0.25")
+        assert len(inputs.transactions) == 1
+        assert inputs.transactions[0].realized_pl_usd == Decimal(-5)
         assert inputs.source_metadata.transaction_history_complete is True
         assert inputs.source_metadata.transaction_history_start_date == date(2026, 10, 1)
         assert inputs.source_metadata.transaction_history_end_date == DEMO_PROPOSED_TRADE_DATE
@@ -364,6 +406,11 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
         for legacy_lot in legacy_lots:
             assert isinstance(legacy_lot, dict)
             legacy_lot.pop("sync_generation")
+        legacy_transactions = legacy_bundle["transactions"]
+        assert isinstance(legacy_transactions, list)
+        for legacy_transaction in legacy_transactions:
+            assert isinstance(legacy_transaction, dict)
+            legacy_transaction.pop("realized_pl_usd", None)
         legacy_restored = financial_inputs_from_provenance(
             legacy_bundle, proposed_trade_date=DEMO_PROPOSED_TRADE_DATE
         )
@@ -379,5 +426,15 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
         with pytest.raises(TypeError, match="frozen lot has no sync_generation"):
             financial_inputs_from_provenance(
                 current_bundle_missing_lot_generation,
+                proposed_trade_date=DEMO_PROPOSED_TRADE_DATE,
+            )
+
+        malformed_exposure_bundle = inputs.to_provenance()
+        exposure_rows = malformed_exposure_bundle["exposures"]
+        assert isinstance(exposure_rows, list)
+        exposure_rows.append(None)
+        with pytest.raises(TypeError, match="frozen exposure data is malformed"):
+            financial_inputs_from_provenance(
+                malformed_exposure_bundle,
                 proposed_trade_date=DEMO_PROPOSED_TRADE_DATE,
             )

@@ -39,6 +39,17 @@ class WashSaleAssessment:
     next_eligible_purchase_date: date | None
 
 
+@dataclass(frozen=True, slots=True)
+class BuyWashSaleAssessment:
+    ticker: str
+    trade_group_id: str
+    eligible: bool
+    reasons: tuple[str, ...]
+    conflicting_transaction_keys: tuple[str, ...]
+    no_buy_through: date | None
+    next_eligible_purchase_date: date | None
+
+
 def _has_required_history(inputs: FinancialInputs, sale_date: date) -> bool:
     metadata = inputs.source_metadata
     required_start = sale_date - timedelta(days=30)
@@ -120,6 +131,17 @@ def _recent_lot_issues(
     return reasons, transaction_keys
 
 
+def _validate_action_dates(
+    inputs: FinancialInputs,
+    proposed_sales: Sequence[ProposedLotSale],
+    proposed_buys: Sequence[ProposedBuy],
+) -> None:
+    if any(sale.sale_date != inputs.proposed_trade_date for sale in proposed_sales) or any(
+        buy.buy_date != inputs.proposed_trade_date for buy in proposed_buys
+    ):
+        raise ValueError("wash-sale action date must match frozen proposed trade date")
+
+
 def assess_wash_sales(
     inputs: FinancialInputs,
     proposed_sales: Sequence[ProposedLotSale],
@@ -129,8 +151,9 @@ def assess_wash_sales(
 
     A recent acquisition is cleared only when its currently retained shares are fully
     available and sold in the same trade group as the loss sale. History must explicitly
-    cover the complete lookback interval and the proposed sale date; unknown coverage fails closed.
+    cover the complete lookback interval and the proposed trade date; unknown coverage fails closed.
     """
+    _validate_action_dates(inputs, proposed_sales, proposed_buys)
     assessments: list[WashSaleAssessment] = []
     for sale in proposed_sales:
         ticker = sale.ticker.upper()
@@ -183,6 +206,75 @@ def assess_wash_sales(
                 ticker=ticker,
                 broker_lot_id=sale.broker_lot_id,
                 trade_group_id=sale.trade_group_id,
+                eligible=not reasons,
+                reasons=tuple(sorted(reasons)),
+                conflicting_transaction_keys=tuple(sorted(transaction_keys)),
+                no_buy_through=no_buy_through,
+                next_eligible_purchase_date=next_eligible,
+            )
+        )
+    return tuple(assessments)
+
+
+def assess_proposed_buys(
+    inputs: FinancialInputs,
+    proposed_buys: Sequence[ProposedBuy],
+    proposed_sales: Sequence[ProposedLotSale] = (),
+) -> tuple[BuyWashSaleAssessment, ...]:
+    """Check buy eligibility against frozen executed losses and proposed loss sales.
+
+    Transaction realized P/L must be explicitly attributed. A recent SELL with absent P/L,
+    or transaction history that does not cover the required window, fails closed rather than
+    treating unknown attribution as a gain.
+    """
+    _validate_action_dates(inputs, proposed_sales, proposed_buys)
+    assessments: list[BuyWashSaleAssessment] = []
+    for buy in proposed_buys:
+        ticker = buy.ticker.upper()
+        reasons: set[str] = set()
+        transaction_keys: set[str] = set()
+        no_buy_through: date | None = None
+        if not _has_required_history(inputs, buy.buy_date):
+            reasons.add("incomplete_executed_loss_history")
+
+        lookback_start = buy.buy_date - timedelta(days=30)
+        for transaction in inputs.transactions:
+            if (
+                transaction.ticker.upper() != ticker
+                or transaction.transaction_kind.upper() != "SELL"
+                or transaction.is_acquisition
+                or not lookback_start <= transaction.trade_date <= buy.buy_date
+            ):
+                continue
+            if transaction.realized_pl_usd is None:
+                reasons.add("executed_loss_attribution_unknown")
+                transaction_keys.add(transaction.broker_transaction_key)
+                restriction_end = transaction.trade_date + timedelta(days=30)
+            elif transaction.realized_pl_usd < 0:
+                reasons.add("executed_loss_restriction")
+                transaction_keys.add(transaction.broker_transaction_key)
+                restriction_end = transaction.trade_date + timedelta(days=30)
+            else:
+                continue
+            no_buy_through = max(no_buy_through or restriction_end, restriction_end)
+
+        proposed_loss_sales = tuple(
+            sale
+            for sale in proposed_sales
+            if sale.ticker.upper() == ticker and sale.realized_pl_usd < 0
+        )
+        if proposed_loss_sales:
+            reasons.add("proposed_loss_sale_restriction")
+            no_buy_through = max(
+                no_buy_through or buy.buy_date,
+                max(sale.sale_date + timedelta(days=30) for sale in proposed_loss_sales),
+            )
+
+        next_eligible = no_buy_through + timedelta(days=1) if no_buy_through is not None else None
+        assessments.append(
+            BuyWashSaleAssessment(
+                ticker=ticker,
+                trade_group_id=buy.trade_group_id,
                 eligible=not reasons,
                 reasons=tuple(sorted(reasons)),
                 conflicting_transaction_keys=tuple(sorted(transaction_keys)),

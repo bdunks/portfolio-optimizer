@@ -37,6 +37,7 @@ class ExposureCoverage:
     invalid_tickers: tuple[str, ...]
     duplicate_rows_removed: int
     sources: tuple[ExposureSourceFreshness, ...]
+    dimension: str = "security"
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,39 +64,68 @@ def _normalise_key(dimension: str, key: str) -> str:
 
 def _selected_rows(
     exposures: Sequence[LookThroughExposureInput],
+    dimension: str,
+    evaluation_date: date,
 ) -> tuple[dict[tuple[str, str, str], LookThroughExposureInput], set[str], int]:
-    grouped: dict[tuple[str, str, str], list[LookThroughExposureInput]] = defaultdict(list)
+    snapshots: dict[tuple[str, str], dict[tuple[str, date], list[LookThroughExposureInput]]] = (
+        defaultdict(lambda: defaultdict(list))
+    )
     for row in exposures:
-        key = (
-            row.ticker.upper(),
-            _normalise_dimension(row.dimension),
-            _normalise_key(row.dimension, row.exposure_key),
-        )
-        grouped[key].append(row)
+        normalized_dimension = _normalise_dimension(row.dimension)
+        if normalized_dimension != dimension:
+            continue
+        snapshots[(row.ticker.upper(), normalized_dimension)][
+            (row.provider, row.as_of_date)
+        ].append(row)
 
     selected: dict[tuple[str, str, str], LookThroughExposureInput] = {}
     conflicts: set[str] = set()
     duplicates_removed = 0
-    for key, rows in grouped.items():
-        newest_date = max(row.as_of_date for row in rows)
-        newest = [row for row in rows if row.as_of_date == newest_date]
-        if len({row.weight for row in newest}) > 1:
-            conflicts.add(key[0])
-        winner = max(newest, key=lambda row: (_PROVIDER_ORDER.get(row.provider, -1), row.provider))
-        selected[key] = winner
-        duplicates_removed += len(rows) - 1
+    stale_before = evaluation_date - timedelta(days=EXPOSURE_CACHE_MAX_AGE_DAYS)
+    for (ticker, row_dimension), candidates in snapshots.items():
+        valid = [
+            (snapshot, rows)
+            for snapshot, rows in candidates.items()
+            if stale_before <= snapshot[1] <= evaluation_date
+        ]
+        available = valid or list(candidates.items())
+        (provider, as_of_date), winning_rows = max(
+            available,
+            key=lambda item: (
+                item[0][1],
+                -_PROVIDER_ORDER.get(item[0][0], len(_PROVIDER_ORDER)),
+                item[0][0],
+            ),
+        )
+        del provider, as_of_date
+        duplicates_removed += sum(len(rows) for rows in candidates.values()) - len(winning_rows)
+        by_key: dict[str, list[LookThroughExposureInput]] = defaultdict(list)
+        for row in winning_rows:
+            by_key[_normalise_key(row.dimension, row.exposure_key)].append(row)
+        for exposure_key, rows in by_key.items():
+            if len({row.weight for row in rows}) > 1:
+                conflicts.add(ticker)
+            duplicates_removed += len(rows) - 1
+            selected[(ticker, row_dimension, exposure_key)] = min(
+                rows, key=lambda row: (str(row.weight), row.exposure_key)
+            )
     return selected, conflicts, duplicates_removed
 
 
 def aggregate_lookthrough_exposure(
-    inputs: FinancialInputs, *, tickers: Sequence[str] | None = None
+    inputs: FinancialInputs,
+    *,
+    tickers: Sequence[str] | None = None,
+    dimension: str = "security",
 ) -> ExposureAggregate:
-    """Aggregate current dollar exposure by economic dimension using only cached rows.
+    """Aggregate selected positions for one economic dimension using cached rows only.
 
-    Direct equities are represented at security level. ETFs, including VB and VXF, are
-    expanded using their cached security-level look-through rows. A ticker selector can
-    build a unit-notional benchmark aggregate for an ETF not currently held.
+    Direct equities are represented directly for the security dimension. Every other
+    position/dimension pair requires an explicit cached row; a missing contributor makes
+    coverage incomplete rather than silently normalizing the available subset. VB and VXF
+    use their ordinary cached security-level look-through rows.
     """
+    normalized_dimension = _normalise_dimension(dimension)
     positions_by_ticker = {position.ticker.upper(): position for position in inputs.positions}
     if tickers is None:
         selected_positions = tuple(inputs.positions)
@@ -131,30 +161,36 @@ def aggregate_lookthrough_exposure(
 
     relevant_tickers = {position.ticker.upper() for position in selected_positions}
     relevant_exposures = tuple(
-        row for row in inputs.exposures if row.ticker.upper() in relevant_tickers
+        row
+        for row in inputs.exposures
+        if row.ticker.upper() in relevant_tickers
+        and _normalise_dimension(row.dimension) == normalized_dimension
     )
-    selected_rows, conflicting_tickers, duplicates_removed = _selected_rows(relevant_exposures)
+    selected_rows, conflicting_tickers, duplicates_removed = _selected_rows(
+        relevant_exposures, normalized_dimension, inputs.proposed_trade_date
+    )
     values: dict[tuple[str, str], list[Decimal]] = defaultdict(list)
     missing_tickers: set[str] = set()
     stale_tickers: set[str] = set()
     invalid_tickers: set[str] = set()
     evaluation_date = inputs.proposed_trade_date
     stale_before = evaluation_date - timedelta(days=EXPOSURE_CACHE_MAX_AGE_DAYS)
-
     lookthrough_required = False
+
     for position in selected_positions:
         ticker = position.ticker.upper()
         security = inputs.security_for(ticker)
         asset_type = security.identity.asset_type if security is not None else position.asset_type
-        if asset_type != "EQUITY":
-            lookthrough_required = True
         market_value = Decimal(1) if ticker in unit_notional_tickers else position.market_value_usd
-        if asset_type == "EQUITY":
+        if asset_type == "EQUITY" and normalized_dimension == "security":
             values[("security", ticker)].append(market_value)
             continue
 
+        lookthrough_required = True
         ticker_rows = [
-            row for (row_ticker, _, _), row in selected_rows.items() if row_ticker == ticker
+            row
+            for (row_ticker, row_dimension, _), row in selected_rows.items()
+            if row_ticker == ticker and row_dimension == normalized_dimension
         ]
         if not ticker_rows:
             missing_tickers.add(ticker)
@@ -167,13 +203,12 @@ def aggregate_lookthrough_exposure(
             if not row.weight.is_finite() or row.weight < 0 or row.weight > 1:
                 invalid_tickers.add(ticker)
                 continue
-            dimension = _normalise_dimension(row.dimension)
             exposure_key = _normalise_key(row.dimension, row.exposure_key)
-            values[(dimension, exposure_key)].append(market_value * row.weight)
+            values[(normalized_dimension, exposure_key)].append(market_value * row.weight)
 
     as_of_date = max((row.as_of_date for row in selected_rows.values()), default=None)
     source_dates: dict[str, date] = {}
-    for row in relevant_exposures:
+    for row in selected_rows.values():
         source_dates[row.provider] = max(
             source_dates.get(row.provider, row.as_of_date), row.as_of_date
         )
@@ -197,11 +232,12 @@ def aggregate_lookthrough_exposure(
             ExposureSourceFreshness(provider, source_dates[provider])
             for provider in sorted(source_dates)
         ),
+        dimension=normalized_dimension,
     )
     return ExposureAggregate(
         values=tuple(
-            ExposureValue(dimension, exposure_key, exact_sum(amounts))
-            for (dimension, exposure_key), amounts in sorted(values.items())
+            ExposureValue(value_dimension, exposure_key, exact_sum(amounts))
+            for (value_dimension, exposure_key), amounts in sorted(values.items())
         ),
         coverage=coverage,
     )
@@ -212,6 +248,11 @@ def exposure_overlap(
 ) -> ExposureOverlap:
     """Return shared normalized weight for one exposure dimension; never infer tracking error."""
     normalized_dimension = _normalise_dimension(dimension)
+    if (
+        left.coverage.dimension != normalized_dimension
+        or right.coverage.dimension != normalized_dimension
+    ):
+        return ExposureOverlap(normalized_dimension, None, "requested_dimension_not_aggregated")
     if left.coverage.complete is not True or right.coverage.complete is not True:
         return ExposureOverlap(
             normalized_dimension, None, "incomplete_or_unknown_exposure_coverage"

@@ -357,6 +357,7 @@ def sync_portfolio(
                         trade_date=transaction.trade_date,
                         shares=transaction.shares,
                         amount_usd=transaction.amount_usd,
+                        realized_pl_usd=transaction.realized_pl_usd,
                         is_acquisition=transaction.is_acquisition,
                         broker_lot_id=transaction.broker_lot_id,
                         source=transaction.source,
@@ -369,6 +370,7 @@ def sync_portfolio(
                     existing.trade_date = transaction.trade_date
                     existing.shares = transaction.shares
                     existing.amount_usd = transaction.amount_usd
+                    existing.realized_pl_usd = transaction.realized_pl_usd
                     existing.is_acquisition = transaction.is_acquisition
                     existing.broker_lot_id = transaction.broker_lot_id
                     existing.source = transaction.source

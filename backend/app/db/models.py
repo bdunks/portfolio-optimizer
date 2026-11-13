@@ -204,6 +204,7 @@ class BrokerTransaction(Base):
     trade_date: Mapped[date] = mapped_column(Date, nullable=False)
     shares: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
     amount_usd: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
+    realized_pl_usd: Mapped[Decimal | None] = mapped_column(DecimalText())
     is_acquisition: Mapped[bool] = mapped_column(Boolean, nullable=False)
     broker_lot_id: Mapped[str | None] = mapped_column(String(128))
     source: Mapped[str] = mapped_column(String(40), nullable=False)

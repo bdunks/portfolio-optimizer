@@ -69,9 +69,13 @@ def _coverage_date(value: object) -> date | None:
             return None
 
 
-def _source_metadata(sync_state: SyncState | None) -> InputSourceMetadata:
+def _source_metadata(
+    sync_state: SyncState | None, *, include_transactions: bool = True
+) -> InputSourceMetadata:
     if sync_state is None:
-        return InputSourceMetadata()
+        return InputSourceMetadata(
+            transaction_history_complete=False if not include_transactions else None
+        )
     coverage = sync_state.coverage if isinstance(sync_state.coverage, dict) else {}
 
     def coverage_flag(name: str) -> bool | None:
@@ -83,6 +87,8 @@ def _source_metadata(sync_state: SyncState | None) -> InputSourceMetadata:
     if not sync_state.complete:
         transactions_complete = False if transactions_complete is not None else None
         lookthrough_complete = False if lookthrough_complete is not None else None
+    if not include_transactions:
+        transactions_complete = False
     return InputSourceMetadata(
         sync_complete=sync_state.complete,
         sync_started_at=sync_state.started_at,
@@ -317,6 +323,7 @@ def load_financial_inputs(
             trade_date=row.trade_date,
             shares=row.shares,
             amount_usd=row.amount_usd,
+            realized_pl_usd=row.realized_pl_usd,
             is_acquisition=row.is_acquisition,
             broker_lot_id=row.broker_lot_id,
             source=row.source,
@@ -348,5 +355,5 @@ def load_financial_inputs(
         quotes=quote_inputs,
         transactions=transaction_inputs,
         exposures=exposure_inputs,
-        source_metadata=_source_metadata(sync_state),
+        source_metadata=_source_metadata(sync_state, include_transactions=include_transactions),
     )

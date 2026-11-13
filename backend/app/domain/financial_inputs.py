@@ -256,6 +256,7 @@ class TransactionInput:
     is_acquisition: bool
     broker_lot_id: str | None
     source: str
+    realized_pl_usd: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -443,6 +444,7 @@ class FinancialInputs:
                     "trade_date": row.trade_date.isoformat(),
                     "shares": str(row.shares),
                     "amount_usd": str(row.amount_usd),
+                    "realized_pl_usd": str(row.realized_pl_usd) if row.realized_pl_usd is not None else None,
                     "is_acquisition": row.is_acquisition,
                     "broker_lot_id": row.broker_lot_id,
                     "source": row.source,
@@ -599,9 +601,15 @@ def financial_inputs_from_provenance(
     )
     raw_lots = bundle.get("lots")
     raw_transactions = bundle.get("transactions", [])
+
     raw_exposures = bundle.get("exposures", [])
     if not isinstance(raw_exposures, list):
         raise TypeError("frozen exposure data is malformed")
+    exposure_rows: list[dict[str, object]] = []
+    for row in raw_exposures:
+        if not isinstance(row, dict):
+            raise TypeError("frozen exposure data is malformed")
+        exposure_rows.append(row)
     exposures = tuple(
         LookThroughExposureInput(
             ticker=str(row["ticker"]),
@@ -611,8 +619,7 @@ def financial_inputs_from_provenance(
             provider=str(row["provider"]),
             as_of_date=_parse_date(row["as_of_date"]),
         )
-        for row in raw_exposures
-        if isinstance(row, dict)
+        for row in exposure_rows
     )
     source_metadata = InputSourceMetadata.from_provenance(bundle.get("source_metadata"))
     if not isinstance(raw_lots, list) or not isinstance(raw_transactions, list):
@@ -645,8 +652,11 @@ def financial_inputs_from_provenance(
             shares=Decimal(str(row["shares"])),
             amount_usd=Decimal(str(row["amount_usd"])),
             is_acquisition=bool(row["is_acquisition"]),
-            broker_lot_id=str(row["broker_lot_id"]) if row.get("broker_lot_id") is not None else None,
+            broker_lot_id=(
+                str(row["broker_lot_id"]) if row.get("broker_lot_id") is not None else None
+            ),
             source=str(row["source"]),
+            realized_pl_usd=_decimal(row.get("realized_pl_usd")),
         )
         for row in raw_transactions
         if isinstance(row, dict)

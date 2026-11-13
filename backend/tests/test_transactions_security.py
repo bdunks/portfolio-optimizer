@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from threading import Barrier, Event
@@ -16,6 +17,7 @@ from app.db.migrate import upgrade_database
 from app.db.models import (
     Account,
     ActivityEvent,
+    BrokerTransaction,
     CurrentPosition,
     CurrentQuote,
     CurrentTaxLot,
@@ -44,6 +46,44 @@ def _snapshot_with_values(cash: str, aapl_value: str) -> BrokerSnapshot:
         }
     )
 
+
+
+
+def test_sync_persists_realized_loss_and_transaction_history_bounds(tmp_path: Path) -> None:
+    snapshot = FakeBroker.demo_snapshot()
+    executed_loss = snapshot.transactions[0].model_copy(
+        update={
+            "transaction_kind": "SELL",
+            "is_acquisition": False,
+            "realized_pl_usd": Decimal("-12.50"),
+        }
+    )
+    coverage = snapshot.coverage.model_copy(
+        update={
+            "transaction_history_start_date": date(2025, 1, 1),
+            "transaction_history_end_date": date(2026, 11, 5),
+        }
+    )
+    broker = FakeBroker(
+        snapshot.model_copy(update={"transactions": [executed_loss], "coverage": coverage})
+    )
+    app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'realized-loss-sync.sqlite3'}",
+        broker=broker,
+    )
+
+    with TestClient(app, base_url="http://localhost:8000") as client:
+        response = client.post("/api/v1/portfolio/sync")
+        assert response.status_code == 200, response.text
+
+    with app.state.session_factory() as session:
+        transaction = session.scalar(select(BrokerTransaction))
+        state = session.get(SyncState, 1)
+        assert transaction is not None
+        assert transaction.realized_pl_usd == Decimal("-12.50")
+        assert state is not None
+        assert state.coverage["transaction_history_start_date"] == "2025-01-01"
+        assert state.coverage["transaction_history_end_date"] == "2026-11-05"
 
 def _assert_no_sync_write(factory: sessionmaker[Session], broker: FakeBroker) -> None:
     assert broker.fetch_count == 0

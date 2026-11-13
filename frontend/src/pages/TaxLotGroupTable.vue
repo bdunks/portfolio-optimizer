@@ -34,6 +34,7 @@ import BrokerLotIdentity from '@/components/BrokerLotIdentity.vue';
 import type { LotResponse } from '@/types/api';
 import type { LotQuery } from '@/services/api';
 import { formatPercent, formatUsd } from '@/utils/display-values';
+import { isNegativeExactUsd, isZeroExactUsd } from '@/utils/exact-usd';
 
 const props = defineProps<{
   ticker: string;
@@ -111,6 +112,15 @@ const columns: Array<ColumnDef<LotTableFeatures, LotResponse>> = [
   { id: 'flags', header: 'Quality and cleanup flags', cell: ({ row }) => row.original.source },
 ];
 
+function financialReviewLabel(value: string | null): string {
+  const isLoss = isNegativeExactUsd(value);
+  if (isLoss === true) return 'Loss opportunity · eligibility unknown';
+  if (isLoss === false && isZeroExactUsd(value) === false) {
+    return 'Appreciated-lot review · not authorized';
+  }
+  if (isLoss === false) return 'No unrealized gain or loss';
+  return 'Financial review unavailable';
+}
 const rowSelection = computed<RowSelectionState>(() =>
   Object.fromEntries(
     props.lots
@@ -244,6 +254,9 @@ function requestSelectionFromClick(
               >{{ formatUsd(row.original.unrealized_pl_usd) }} /
               {{ formatPercent(row.original.unrealized_pl_pct) }}</span
             >
+            <span class="tw:mt-1! tw:block tw:text-xs tw:text-muted-foreground">
+              {{ financialReviewLabel(row.original.unrealized_pl_usd) }}
+            </span>
           </TableCell>
           <TableCell v-else-if="cell.column.id === 'sleeve'" class="tw:whitespace-normal">
             <span class="tw:block">{{ row.original.sleeve_key ?? 'Unassigned' }}</span>

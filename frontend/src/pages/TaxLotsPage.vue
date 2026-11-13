@@ -33,6 +33,38 @@
     />
     <ResourceFreshnessNotice :resources="['lots']" />
 
+    <Card class="tw:mt-4! tw:min-w-0" aria-labelledby="lot-interpretation-title">
+      <CardHeader>
+        <CardTitle id="lot-interpretation-title" role="heading" aria-level="2"
+          >How to interpret these lots</CardTitle
+        >
+        <CardDescription>
+          Adjusted unit basis is the adjusted cost per share; adjusted total basis is the basis for
+          the remaining lot. Broker lot IDs and available shares identify the specific position and
+          quantity reported for review.
+        </CardDescription>
+      </CardHeader>
+      <CardContent class="tw:grid tw:gap-2 tw:text-sm">
+        <p class="tw:m-0!">
+          Unrealized P/L is a financial review signal, not an eligibility or authorization decision:
+          a loss may be an opportunity to review, but is not automatically harvestable; an
+          appreciated lot may merit gain review, but is not authorized for sale. Eligibility is
+          unknown here. Quality and cleanup flags describe data or position conditions separately.
+        </p>
+        <p class="tw:m-0!">
+          ST/LT describes the holding period, not the actual tax benefit or tax due. Wash-sale
+          restrictions can apply across the account; see <a href="#/wash-sales">Wash Sales</a>
+          for the available account view. Small legacy or DRIP lots may still be considered for
+          cleanup; there is no minimum SELL notional, and multiple lots of one ticker can be
+          consolidated into one SELL order.
+        </p>
+        <p class="tw:m-0!">
+          Requested lot intent is a complete-set request. A successful response updates the
+          backend-confirmed recommendation selection; neither request nor selection approves an
+          order. This page does not execute the optimizer or create a run implicitly.
+        </p>
+      </CardContent>
+    </Card>
     <form aria-label="Tax lot filters" class="tw:min-w-0" @submit.prevent="applyFilters">
       <Card class="tw:min-w-0">
         <CardHeader class="tw:sr-only">

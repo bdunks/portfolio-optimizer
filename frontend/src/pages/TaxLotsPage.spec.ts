@@ -172,6 +172,7 @@ describe('TaxLotsPage', () => {
     expect(wrapper.text()).toContain('123.4500 USD / 154.3125 USD');
     expect(wrapper.text()).toContain('8.1875 USD / 5.3099%');
     expect(wrapper.text()).toContain('synthetic-quality-flag');
+    expect(wrapper.text()).toContain('Appreciated-lot review · not authorized');
     expect(wrapper.text()).toContain('Fractional cleanup unsupported; not executable');
     expect(wrapper.text()).toContain('synthetic-test-source · as of 2025-02-04T12:00:00Z');
     expect(wrapper.text()).toContain('DEMO ONLY');
@@ -195,6 +196,31 @@ describe('TaxLotsPage', () => {
     expect(
       fetcher.mock.calls.some(([input]) => requestUrl(input).pathname.includes('/orders/')),
     ).toBe(false);
+  });
+
+  it('labels loss, gain, and unavailable P/L as interpretation rather than eligibility', async () => {
+    const lots: LotResponse[] = [
+      { ...lot, broker_lot_id: 'LOSS-LOT', unrealized_pl_usd: '-0.0001' },
+      { ...lot, broker_lot_id: 'GAIN-LOT', unrealized_pl_usd: '12.00' },
+      { ...lot, broker_lot_id: 'UNKNOWN-LOT', unrealized_pl_usd: null },
+      { ...lot, broker_lot_id: 'EXPONENT-ZERO-LOT', unrealized_pl_usd: '0E-8' },
+      { ...lot, broker_lot_id: 'SIGNED-EXPONENT-ZERO-LOT', unrealized_pl_usd: '-0E-8' },
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(() => Promise.resolve(jsonResponse(page(lots)))),
+    );
+    const wrapper = mount(TaxLotsPage);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('Loss opportunity · eligibility unknown');
+    expect(wrapper.text()).toContain('Appreciated-lot review · not authorized');
+    expect(wrapper.text()).toContain('Financial review unavailable');
+    expect(wrapper.text()).toContain('No unrealized gain or loss');
+    expect(wrapper.text()).toContain('Quality and cleanup flags');
+    expect(wrapper.text()).toContain('Wash Sales');
+    expect(wrapper.get('a[href="#/wash-sales"]').text()).toBe('Wash Sales');
+    expect(wrapper.text()).toContain('Requested lot intent is a complete-set request');
   });
 
   it('sends server-side filters and sorting while preserving API row order', async () => {

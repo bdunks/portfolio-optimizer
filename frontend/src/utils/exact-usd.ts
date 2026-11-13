@@ -22,6 +22,12 @@ export function isNegativeExactUsd(value: string | null | undefined): boolean | 
   return parsed === null ? null : parsed.units < 0n;
 }
 
+/** Return true only when a valid exact API USD decimal is mathematically zero. */
+export function isZeroExactUsd(value: string | null | undefined): boolean | null {
+  const parsed = parseExactUsd(value);
+  return parsed === null ? null : parsed.units === 0n;
+}
+
 /** Add API USD decimal strings without converting through floating-point; invalid or absent inputs are withheld. */
 export function sumExactUsd(values: readonly (string | null | undefined)[]): string | null {
   if (values.length === 0) return null;

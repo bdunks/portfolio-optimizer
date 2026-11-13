@@ -408,6 +408,41 @@ describe('central policy conversion boundary', () => {
       'cash reserve is required; blank values are not changed to zero.',
     );
   });
+  it('preserves signed legacy caps while rejecting negative new objective and cost parameters', () => {
+    const editable = validSettings();
+    editable.gain_budget_usd = '-2.00';
+    editable.max_incremental_tax_cost_usd = '-1.00';
+    editable.st_gain_limit_usd = '-3.00';
+    editable.lt_gain_limit_usd = '-4.00';
+    const converted = policySettingsToInput(editable);
+    expect(converted.value?.gain_budget_usd).toBe('-2.00');
+    expect(converted.value?.max_incremental_tax_cost_usd).toBe('-1.00');
+    expect(converted.value?.st_gain_limit_usd).toBe('-3.00');
+    expect(converted.value?.lt_gain_limit_usd).toBe('-4.00');
+
+    const fields = [
+      'objective_band_weight',
+      'objective_allocation_weight',
+      'objective_tax_weight',
+      'objective_trading_cost_weight',
+      'objective_turnover_weight',
+      'objective_cleanup_weight',
+      'estimated_spread_bps',
+      'estimated_fee_per_order_usd',
+    ] as const;
+    for (const field of fields) {
+      editable[field] = '-0.01';
+      expect(policySettingsToInput(editable).value).toBeNull();
+      expect(policySettingsToInput(editable).issues.join(' ')).toContain(
+        'must be an exact decimal string or blank (null)',
+      );
+      editable[field] = '0';
+      expect(policySettingsToInput(editable).value).not.toBeNull();
+      editable[field] = null;
+      expect(policySettingsToInput(editable).value).not.toBeNull();
+    }
+  });
+
 
   it('converts positive safe integer limits and rejects invalid values', () => {
     const editable = validSettings();

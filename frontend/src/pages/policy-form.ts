@@ -70,6 +70,16 @@ const nullableDecimalFields = [
   ['estimated spread (bps)', 'estimated_spread_bps'],
   ['estimated fee per order (USD)', 'estimated_fee_per_order_usd'],
 ] as const satisfies ReadonlyArray<[string, keyof EditablePolicySettings]>;
+const nonnegativeNullableDecimalFields = new Set<keyof EditablePolicySettings>([
+  'objective_band_weight',
+  'objective_allocation_weight',
+  'objective_tax_weight',
+  'objective_trading_cost_weight',
+  'objective_turnover_weight',
+  'objective_cleanup_weight',
+  'estimated_spread_bps',
+  'estimated_fee_per_order_usd',
+]);
 const decimalSettingKeys = new Set<keyof EditablePolicySettings>([
   ...requiredDecimalFields.map(([, key]) => key),
   ...nullableDecimalFields.map(([, key]) => key),
@@ -436,7 +446,8 @@ export function policySettingsValidationIssues(settings: EditablePolicySettings)
     if (
       typeof value === 'string' &&
       value.trim() &&
-      (!decimalPattern.test(value.trim()) || value.trim().startsWith('-'))
+      (!decimalPattern.test(value.trim()) ||
+        (nonnegativeNullableDecimalFields.has(key) && value.trim().startsWith('-')))
     ) {
       issues.push(`${label} must be an exact decimal string or blank (null).`);
     }

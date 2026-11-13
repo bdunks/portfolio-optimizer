@@ -4,9 +4,14 @@ import time
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
+import cvxpy as cp
+import numpy as np
 import pytest
 
+import app.optimizer.core as core_module
+import app.optimizer.validation as validation_module
 from app.domain.allocation import (
     AllocationPolicy,
     AllocationSleeve,
@@ -25,9 +30,10 @@ from app.domain.financial_inputs import (
     PositionInput,
     QuoteInput,
     SecurityInput,
+    TransactionInput,
 )
-from app.domain.portfolio_accounting import LotAllocation
-from app.optimizer.core import OptimizerRequest, optimize_worker, resolve_subset
+from app.domain.portfolio_accounting import ConsolidatedLeg, LotAllocation
+from app.optimizer.core import OptimizerRequest, _decimal_solution, optimize_worker, resolve_subset
 from app.optimizer.validation import read_objective_policy, validate_candidate
 
 TRADE_DATE = date(2026, 11, 13)
@@ -118,6 +124,44 @@ def _inputs(*, objective_settings: bool = True) -> FinancialInputs:
         ),
     )
 
+def _drift_test_inputs(equity_value: int, cash_value: int, *, nested: bool = False) -> FinancialInputs:
+    inputs = _inputs()
+    shares = Decimal(equity_value) / Decimal(50)
+    sleeves = (
+        (
+            AllocationSleeve("equity", None, True, target_pct=Decimal(50), drift_band_pp=Decimal(50)),
+            AllocationSleeve("cash", None, True, cash_sleeve=True, target_pct=Decimal(50), drift_band_pp=Decimal(50)),
+            AllocationSleeve("child-one", "equity", True, target_pct=Decimal(50), drift_band_pp=Decimal(10)),
+            AllocationSleeve("child-two", "equity", True, target_pct=Decimal(50), drift_band_pp=Decimal(10)),
+        )
+        if nested
+        else (
+            AllocationSleeve("equity", None, True, target_pct=Decimal(50), drift_band_pp=Decimal(5)),
+            AllocationSleeve("cash", None, True, cash_sleeve=True, target_pct=Decimal(50), drift_band_pp=Decimal(5)),
+        )
+    )
+    allocation = replace(inputs.policy.allocation, sleeves=sleeves)
+    return replace(
+        inputs,
+        account=replace(
+            inputs.account,
+            cash_usd=Decimal(cash_value),
+            settled_buying_power_usd=Decimal(cash_value),
+        ),
+        policy=replace(inputs.policy, allocation=allocation),
+        positions=(
+            replace(
+                inputs.positions[0],
+                shares=shares,
+                market_value_usd=Decimal(equity_value),
+                assignment=SleeveAssignment("equity", "child-one" if nested else None),
+            ),
+        ),
+        lots=(
+            replace(inputs.lots[0], shares=shares, available_shares=shares, adjusted_unit_basis_usd=Decimal(55)),
+        ),
+        quotes=tuple(replace(quote, bid_usd=Decimal(50), ask_usd=Decimal(50)) for quote in inputs.quotes),
+    )
 
 
 def _install_objective_accessor(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -148,6 +192,142 @@ def test_policy_settings_get_provides_typed_objective_decimals() -> None:
     assert config.estimated_spread_bps == Decimal(0)
 
 
+@pytest.mark.parametrize(
+    ("equity_value", "cash_value", "side", "shares", "accepted"),
+    [
+        (700, 300, "SELL", 5, True),
+        (700, 300, "SELL", 6, False),
+        (300, 700, "BUY", 5, True),
+        (300, 700, "BUY", 6, False),
+    ],
+)
+def test_validator_enforces_asymmetric_sleeve_bounds_and_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+    equity_value: int,
+    cash_value: int,
+    side: str,
+    shares: int,
+    accepted: bool,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _drift_test_inputs(equity_value, cash_value)
+    leg = (
+        ConsolidatedLeg(
+            "sell:AAPL",
+            "SELL",
+            "AAPL",
+            Decimal(shares),
+            Decimal(50),
+            (LotAllocation("loss-lot", Decimal(shares)),),
+            (),
+            0,
+            ("sale:AAPL",),
+        )
+        if side == "SELL"
+        else ConsolidatedLeg("buy:NEWETF", "BUY", "NEWETF", Decimal(shares), Decimal(50), (), (), 1, ("buy:NEWETF",))
+    )
+
+    validation = validate_candidate(inputs, (leg,))
+
+    assert validation.accepted is accepted
+    if not accepted:
+        assert "sleeve_drift_worsened:equity" in validation.reasons
+
+
+@pytest.mark.parametrize(("shares", "accepted"), [(10, True), (12, False)])
+def test_validator_scales_nested_band_to_whole_portfolio_target(
+    monkeypatch: pytest.MonkeyPatch, shares: int, accepted: bool
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _drift_test_inputs(700, 300, nested=True)
+    leg = ConsolidatedLeg(
+        "sell:AAPL",
+        "SELL",
+        "AAPL",
+        Decimal(shares),
+        Decimal(50),
+        (LotAllocation("loss-lot", Decimal(shares)),),
+        (),
+        0,
+        ("sale:AAPL",),
+    )
+
+    validation = validate_candidate(inputs, (leg,))
+
+    assert validation.accepted is accepted
+    if not accepted:
+        assert "sleeve_drift_worsened:child-one" in validation.reasons
+
+
+@pytest.mark.parametrize("solver", ["OSQP", "CLARABEL"])
+def test_decimal_solution_converts_positive_cvxpy_scalar(solver: str) -> None:
+    variable = cp.Variable()
+    problem = cp.Problem(cp.Minimize(cp.square(variable - 2)), [variable >= 1.5])
+    problem.solve(solver=solver)
+
+    assert problem.status == cp.OPTIMAL
+    assert np.asarray(variable.value).shape == ()
+    assert _decimal_solution(variable.value, Decimal(3)) == Decimal(2)
+
+
+@pytest.mark.parametrize(
+    ("value", "maximum", "expected"),
+    [
+        (np.array(2.75), Decimal(3), Decimal(2)),
+        (np.array(8.0), Decimal(3), Decimal(3)),
+        (np.array(float("nan")), Decimal(3), Decimal(0)),
+        (np.array(-1.0), Decimal(3), Decimal(0)),
+        (None, Decimal(3), Decimal(0)),
+        (np.array([2.0]), Decimal(3), Decimal(0)),
+        (np.array([[2.0]]), Decimal(3), Decimal(0)),
+    ],
+)
+def test_decimal_solution_rejects_invalid_or_nonscalar_values(
+    value: object, maximum: Decimal, expected: Decimal
+) -> None:
+    assert _decimal_solution(value, maximum) == expected
+
+
+def test_validation_rejects_deadline_exceeded_during_wash(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = [0.0]
+    deadline = 5.0
+
+    def delayed_wash(*_args: object, **_kwargs: object) -> tuple[list[str], tuple[object, ...], tuple[object, ...]]:
+        clock[0] = deadline
+        return [], (), ()
+
+    monkeypatch.setattr(validation_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(validation_module, "_wash_validation", delayed_wash)
+    _install_objective_accessor(monkeypatch)
+
+    validation = validate_candidate(_inputs(), (), deadline)
+
+    assert not validation.accepted
+    assert "validation_deadline_exceeded" in validation.reasons
+    assert validation.objective_value is None
+
+def test_worker_owner_rechecks_deadline_after_group_priorities(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = [0.0]
+    deadline = 5.0
+    fake_time = SimpleNamespace(monotonic=lambda: clock[0])
+    monkeypatch.setattr(core_module, "time", fake_time)
+    monkeypatch.setattr(validation_module, "time", fake_time)
+    _install_objective_accessor(monkeypatch)
+
+    def expire_after_ranking(*_args: object) -> tuple[tuple[object, ...], tuple[str, ...]]:
+        clock[0] = deadline
+        return (), ()
+
+    monkeypatch.setattr(core_module, "_group_priorities", expire_after_ranking)
+
+    result = optimize_worker(OptimizerRequest(_inputs()), deadline)
+
+    assert result.status == "deadline_exceeded"
+    assert result.legs == ()
+    assert "computation_deadline_exceeded" in result.metadata.warnings
+
+
+
 def test_no_trade_preserves_baseline_objective(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_objective_accessor(monkeypatch)
     inputs = _inputs()
@@ -160,9 +340,30 @@ def test_no_trade_preserves_baseline_objective(monkeypatch: pytest.MonkeyPatch) 
     assert result.metadata.objective_value == result.metadata.baseline_objective_value
 
 
-def test_unfunded_cash_reserve_is_infeasible(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_worker_can_sell_to_repair_unfunded_cash_reserve(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_objective_accessor(monkeypatch)
     inputs = _inputs()
+    settings = tuple(
+        (key, Decimal(1) if key == "cash_reserve_usd" else value)
+        for key, value in inputs.policy.settings.values
+    )
+    inputs = replace(inputs, policy=replace(inputs.policy, settings=PolicySettings(settings)))
+
+    result = optimize_worker(OptimizerRequest(inputs), time.monotonic() + 10)
+
+    assert result.status == "ready"
+    assert result.legs
+    assert any(leg.side == "SELL" for leg in result.legs)
+    validation = validate_candidate(inputs, result.legs)
+    assert validation.accepted
+    assert validation.evaluation is not None
+    assert validation.evaluation.proposed.cash_usd >= Decimal(1)
+
+
+def test_worker_never_publishes_no_trade_when_reserve_is_unmet(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _inputs()
+    inputs = replace(inputs, lots=(replace(inputs.lots[0], adjusted_unit_basis_usd=Decimal(100)),))
     settings = tuple(
         (key, Decimal(1) if key == "cash_reserve_usd" else value)
         for key, value in inputs.policy.settings.values
@@ -215,6 +416,56 @@ def test_joint_loss_harvest_is_independently_validated_and_prioritized(monkeypat
     subset = resolve_subset(request, ("loss-lot",), time.monotonic() + 10)
     assert subset.status == "ready"
     assert subset.metadata.selected_lot_ids == ("loss-lot",)
+
+
+def test_worker_fills_buy_slot_after_filtering_wash_blocked_priority_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _inputs()
+    settings = tuple(
+        (key, Decimal(1) if key == "objective_allocation_weight" else value)
+        for key, value in inputs.policy.settings.values
+    )
+    allocation = replace(
+        inputs.policy.allocation,
+        allowed_securities=(
+            AllowedSecurity("NEWETF", "equity", None, 0, True, "replacement"),
+            AllowedSecurity("ALTETF", "equity", None, 1, True, "replacement"),
+        ),
+    )
+    blocked_loss = TransactionInput(
+        "executed-loss",
+        "NEWETF",
+        "SELL",
+        NOW - timedelta(days=10),
+        TRADE_DATE - timedelta(days=10),
+        Decimal(1),
+        Decimal(100),
+        False,
+        None,
+        "TEST",
+        Decimal(-10),
+    )
+    inputs = replace(
+        inputs,
+        policy=replace(inputs.policy, allocation=allocation, settings=PolicySettings(settings)),
+        securities=(*inputs.securities, SecurityInput(SecurityIdentity("ALTETF", "ETF"))),
+        quotes=(*inputs.quotes, QuoteInput("ALTETF", Decimal(100), Decimal(100), None, "TEST", NOW, "good", 1)),
+        transactions=(blocked_loss,),
+        exposures=(
+            *inputs.exposures,
+            LookThroughExposureInput("ALTETF", "security", "US_MARKET", Decimal(1), "TEST", TRADE_DATE),
+        ),
+    )
+
+    result = optimize_worker(OptimizerRequest(inputs), time.monotonic() + 10)
+
+    assert result.status == "ready"
+    assert any(leg.side == "BUY" and leg.ticker == "ALTETF" for leg in result.legs)
+    assert not any(leg.side == "BUY" and leg.ticker == "NEWETF" for leg in result.legs)
+    assert any("buy_wash_sale_ineligible:NEWETF:executed_loss_restriction" in warning for warning in result.metadata.warnings)
+    assert validate_candidate(inputs, result.legs).accepted
 
 
 def test_expired_deadline_returns_no_legs(monkeypatch: pytest.MonkeyPatch) -> None:

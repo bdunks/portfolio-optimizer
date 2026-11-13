@@ -34,6 +34,7 @@ from app.domain.tax import (
     tax_value,
 )
 from app.domain.trade_dates import classify_holding_period
+from app.domain.wash import ProposedBuy, assess_proposed_buys
 from app.optimizer.validation import (
     CandidateValidation,
     ObjectivePolicy,
@@ -487,6 +488,20 @@ def _screen(
         max_shares = _whole_floor(max_turnover_usd / buy_price)
         if max_shares <= 0 or buy_price * max_shares < buy_minimum:
             continue
+        buy_wash_assessments = assess_proposed_buys(
+            inputs,
+            (ProposedBuy(ticker, _ONE, f"screen-buy:{ticker}", inputs.proposed_trade_date),),
+        )
+        if time.monotonic() >= deadline:
+            warnings.append("deadline_during_buy_screening")
+            break
+        if not all(assessment.eligible for assessment in buy_wash_assessments):
+            warnings.extend(
+                f"buy_wash_sale_ineligible:{ticker}:{reason}"
+                for assessment in buy_wash_assessments
+                for reason in assessment.reasons
+            )
+            continue
         buy_candidates.append(
             _BuyCandidate(ticker, max_shares, mark, buy_price, path, priority, replacement_set)
         )
@@ -672,9 +687,10 @@ def _model_region(
             band = band * (parent_target.target_whole_portfolio_pct if parent_target else _ZERO) / _HUNDRED
         band_terms.append(cp.pos(cp.abs(post_weight - _cp_float(target)) - _cp_float(band)) / _cp_float(_HUNDRED))
         current_weight = current_value * _HUNDRED / total if total else _ZERO
-        allowed_distance = max(abs(current_weight - target), band)
-        constraints.append(post_weight >= _cp_float(target - allowed_distance))
-        constraints.append(post_weight <= _cp_float(target + allowed_distance))
+        lower_bound = min(current_weight, target - band)
+        upper_bound = max(current_weight, target + band)
+        constraints.append(post_weight >= _cp_float(lower_bound))
+        constraints.append(post_weight <= _cp_float(upper_bound))
 
     spread_cost: Any = cp.Constant(0.0)
     for index, candidate in enumerate(screen.sales):
@@ -782,14 +798,30 @@ def _canonical_legs(
 
 
 def _decimal_solution(value: object, maximum: Decimal) -> Decimal:
-    if value is None or not isinstance(value, (int, float, Decimal)):
+    if value is None:
         return _ZERO
-    numeric = float(value)
+    shape = getattr(value, "shape", None)
+    if shape is not None and shape != ():
+        return _ZERO
+    item = getattr(value, "item", None)
+    if callable(item):
+        try:
+            value = item()
+        except (TypeError, ValueError):
+            return _ZERO
+    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+        return _ZERO
+    try:
+        numeric = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return _ZERO
     if not math.isfinite(numeric) or numeric <= 0:
         return _ZERO
-    raw = min(Decimal(str(numeric)), maximum)
+    try:
+        raw = min(Decimal(str(value)), maximum)
+    except (ArithmeticError, TypeError, ValueError):
+        return _ZERO
     return _whole_floor(raw)
-
 
 def _scaled_legs(legs: tuple[ConsolidatedLeg, ...], factor: Decimal) -> tuple[ConsolidatedLeg, ...]:
     scaled: list[ConsolidatedLeg] = []
@@ -1072,7 +1104,15 @@ def optimize_worker(request: OptimizerRequest, computation_deadline: float) -> O
         meta = _metadata(inputs, status, None, (), started, screen_started, solve_started, 0, 0, False, 0, (), (), None, None, None, None, None, 0, screen_errors)
         return OptimizerResult(status, (), meta)
     baseline_result = validate_candidate(inputs, (), computation_deadline)
-    if not baseline_result.accepted or baseline_result.objective_value is None:
+    baseline_reserve_repairable = (
+        not baseline_result.accepted
+        and baseline_result.reasons == ("cash_reserve_breached_after_fees",)
+        and baseline_result.evaluation is not None
+    )
+    if (
+        (not baseline_result.accepted and not baseline_reserve_repairable)
+        or baseline_result.objective_value is None
+    ):
         meta = _metadata(
             inputs,
             "configuration_required" if any("configuration_required" in reason for reason in baseline_result.reasons) else "infeasible",
@@ -1155,6 +1195,8 @@ def optimize_worker(request: OptimizerRequest, computation_deadline: float) -> O
     if not profile.tax_rates_complete:
         region_complete = True
     warnings = list(screen.warnings)
+    if not baseline_result.accepted:
+        warnings.extend(baseline_result.reasons)
     if not profile.tax_rates_complete:
         warnings.append("tax_profile_incomplete_estimated_benefit_null")
     if not region_search_needed:
@@ -1166,8 +1208,11 @@ def optimize_worker(request: OptimizerRequest, computation_deadline: float) -> O
         observed_statuses = tuple(status.rsplit(":", 1)[-1] for status in solver_statuses)
         if time.monotonic() >= computation_deadline:
             status = "deadline_exceeded"
-        elif observed_statuses and all(
-            value in {cp.INFEASIBLE, cp.INFEASIBLE_INACCURATE} for value in observed_statuses
+        elif not baseline_result.accepted or (
+            observed_statuses
+            and all(
+                value in {cp.INFEASIBLE, cp.INFEASIBLE_INACCURATE} for value in observed_statuses
+            )
         ):
             status = "infeasible"
         elif not region_complete:
@@ -1201,6 +1246,33 @@ def optimize_worker(request: OptimizerRequest, computation_deadline: float) -> O
         inputs, screen, baseline_result, best_legs, computation_deadline
     )
     warnings.extend(group_priority_warnings)
+
+    if time.monotonic() >= computation_deadline:
+        warnings.append("computation_deadline_exceeded")
+        meta = _metadata(
+            inputs,
+            "deadline_exceeded",
+            "+".join(sorted(set(used_solvers))) or None,
+            tuple(solver_statuses),
+            started,
+            screen_started,
+            solve_started,
+            len(region_list) if region_search_needed else 0,
+            solved_regions,
+            region_complete,
+            screen.screened_lot_count,
+            (),
+            screen.candidate_types,
+            None,
+            baseline_objective,
+            None,
+            None,
+            None,
+            rounding_attempts,
+            tuple(warnings),
+            group_priorities,
+        )
+        return OptimizerResult("deadline_exceeded", (), meta)
 
     status = "ready"
     meta = _metadata(

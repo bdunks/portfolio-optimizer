@@ -145,12 +145,12 @@ def _distance_sum(
     for key, target, band in targets:
         current = percentage(current_values.get(key, _ZERO), total_before)
         proposed = percentage(proposed_values.get(key, _ZERO), total_after)
-        current_distance = abs(current - target)
         proposed_distance = abs(proposed - target)
         allocation_distance.append(proposed_distance / _HUNDRED)
         band_distance.append(max(_ZERO, proposed_distance - band) / _HUNDRED)
-        allowed_distance = max(current_distance, band)
-        if proposed_distance > allowed_distance:
+        lower_bound = min(current, target - band)
+        upper_bound = max(current, target + band)
+        if proposed < lower_bound or proposed > upper_bound:
             errors.append(f"sleeve_drift_worsened:{key}")
     return exact_sum(allocation_distance), exact_sum(band_distance), tuple(errors)
 
@@ -449,6 +449,20 @@ def validate_candidate(
         return CandidateValidation(False, ("validation_deadline_exceeded",), (), evaluation, None, (), None, None, None, None)
     limit_errors, turnover, _fee_total = _cash_and_limits(inputs, normalized_legs, evaluation, config)
     errors.extend(limit_errors)
+    if deadline is not None and time.monotonic() >= deadline:
+        errors.append("validation_deadline_exceeded")
+        return CandidateValidation(
+            accepted=False,
+            reasons=tuple(dict.fromkeys(errors)),
+            warnings=tuple(dict.fromkeys(warnings)),
+            evaluation=evaluation,
+            tax=None,
+            wash_assessments=(),
+            exposure_coverage=None,
+            objective_value=None,
+            estimated_tax_benefit_usd=None,
+            estimated_trading_cost_usd=None,
+        )
     tax = evaluate_tax(
         TaxProfile.from_policy_settings(inputs.policy.settings),
         evaluation.realized_st_usd,
@@ -456,13 +470,57 @@ def validate_candidate(
     )
     if deadline is not None and time.monotonic() >= deadline:
         errors.append("validation_deadline_exceeded")
+        return CandidateValidation(
+            accepted=False,
+            reasons=tuple(dict.fromkeys(errors)),
+            warnings=tuple(dict.fromkeys(warnings)),
+            evaluation=evaluation,
+            tax=tax,
+            wash_assessments=(),
+            exposure_coverage=None,
+            objective_value=None,
+            estimated_tax_benefit_usd=tax.estimated_tax_benefit_usd,
+            estimated_trading_cost_usd=None,
+        )
     wash_errors, wash_assessments, buy_wash_assessments = _wash_validation(inputs, normalized_legs, evaluation)
     errors.extend(wash_errors)
+    if deadline is not None and time.monotonic() >= deadline:
+        errors.append("validation_deadline_exceeded")
+        return CandidateValidation(
+            accepted=False,
+            reasons=tuple(dict.fromkeys(errors)),
+            warnings=tuple(dict.fromkeys(warnings)),
+            evaluation=evaluation,
+            tax=tax,
+            wash_assessments=wash_assessments,
+            exposure_coverage=None,
+            objective_value=None,
+            estimated_tax_benefit_usd=tax.estimated_tax_benefit_usd,
+            estimated_trading_cost_usd=None,
+            buy_wash_assessments=buy_wash_assessments,
+        )
     exposure_errors, exposure_coverage = _exposure_validation(inputs, normalized_legs)
     errors.extend(exposure_errors)
+    if deadline is not None and time.monotonic() >= deadline:
+        errors.append("validation_deadline_exceeded")
+        return CandidateValidation(
+            accepted=False,
+            reasons=tuple(dict.fromkeys(errors)),
+            warnings=tuple(dict.fromkeys(warnings)),
+            evaluation=evaluation,
+            tax=tax,
+            wash_assessments=wash_assessments,
+            exposure_coverage=exposure_coverage,
+            objective_value=None,
+            estimated_tax_benefit_usd=tax.estimated_tax_benefit_usd,
+            estimated_trading_cost_usd=None,
+            buy_wash_assessments=buy_wash_assessments,
+        )
     trading_cost = _trading_cost(config, normalized_legs, inputs)
     objective_value, drift_errors, objective_components = _objective(inputs, evaluation, tax, turnover, trading_cost, config)
     errors.extend(drift_errors)
+    if deadline is not None and time.monotonic() >= deadline:
+        errors.append("validation_deadline_exceeded")
     if tax.estimated_tax_benefit_usd is None:
         warnings.append("tax_profile_incomplete_estimated_benefit_null")
     if exposure_coverage is not None:

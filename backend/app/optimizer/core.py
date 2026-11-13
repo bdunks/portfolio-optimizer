@@ -404,6 +404,12 @@ def _screen(
     except BasketValidationError as error:
         return None, (f"current_portfolio_invalid:{error.code}",)
     warnings: list[str] = []
+    if config.estimated_fee_per_order_usd > _ZERO:
+        warnings.append(
+            "fixed_order_fee_tax_proxy: screening tests one-share P/L after one consolidated fee; "
+            "convex search allocates SELL fees linearly over maximum screened shares per ticker; "
+            "published tax uses exact consolidated-order validation."
+        )
     position_by_ticker = {row.ticker.upper(): row for row in inputs.positions}
     security_by_ticker = {row.identity.ticker.upper(): row for row in inputs.securities}
     quote_by_ticker = {row.ticker.upper(): row for row in inputs.quotes}
@@ -461,11 +467,12 @@ def _screen(
         if sell_price <= 0:
             continue
         gain_per_share = sell_price - lot.adjusted_unit_basis_usd
+        one_share_net_gain = gain_per_share - config.estimated_fee_per_order_usd
         is_equity, is_etf, is_muni = _asset_flags(security.identity.asset_type)
         sale_notional = sell_price * whole_available
         band_bonus = _current_overweight_rank(inputs, baseline, position, sale_notional)
         categories: list[str] = []
-        if gain_per_share < 0:
+        if one_share_net_gain < 0:
             if is_equity:
                 categories.append("stock_tlh")
             elif is_etf and etf_harvest_allowed:
@@ -479,20 +486,21 @@ def _screen(
                 categories.append("gain_aware_stock_cleanup")
             elif is_etf:
                 categories.append("allowed_etf_swap_exit")
-        if band_bonus > 0 and (gain_per_share <= 0 or gain_sales_allowed):
+        if band_bonus > 0 and (one_share_net_gain <= 0 or gain_sales_allowed):
             categories.append("allocation_exit")
         if not categories:
             continue
 
-        if gain_per_share > 0 and not inputs_profile.tax_rates_complete:
+        if one_share_net_gain > 0 and not inputs_profile.tax_rates_complete:
             warnings.append(f"gain_candidate_blocked_incomplete_tax_rates:{lot.broker_lot_id}")
             continue
         if lot.fractional_cleanup_unsupported and lot.available_shares < 1:
             continue
         quantity_gain = gain_per_share * whole_available
+        net_quantity_gain = quantity_gain - config.estimated_fee_per_order_usd
         term = classify_holding_period(lot.acquired_date, inputs.proposed_trade_date)
-        st_gain = quantity_gain if term == "ST" else _ZERO
-        lt_gain = quantity_gain if term == "LT" else _ZERO
+        st_gain = net_quantity_gain if term == "ST" else _ZERO
+        lt_gain = net_quantity_gain if term == "LT" else _ZERO
         tax_eval = evaluate_tax(inputs_profile, st_gain, lt_gain)
         tax_benefit = tax_eval.estimated_tax_benefit_usd or _ZERO
         cost = (
@@ -764,6 +772,13 @@ def _model_region(
     sell_by_ticker: dict[str, list[tuple[int, _SaleCandidate]]] = defaultdict(list)
     for index, candidate in enumerate(screen.sales):
         sell_by_ticker[candidate.lot.ticker.upper()].append((index, candidate))
+    sale_fee_per_share: dict[str, Decimal] = {}
+    sale_fee_proxy: Any = cp.Constant(0.0)
+    for ticker, rows in sell_by_ticker.items():
+        maximum_shares = exact_sum(candidate.maximum_shares for _, candidate in rows)
+        fee_per_share = config.estimated_fee_per_order_usd / maximum_shares
+        sale_fee_per_share[ticker] = fee_per_share
+        sale_fee_proxy += _cp_float(fee_per_share) * sum(sell_vars[index] for index, _ in rows)
     current_positions = {row.ticker.upper(): row for row in inputs.positions}
     sleeve_deltas: dict[str, Any] = defaultdict(lambda: cp.Constant(0.0))
     cash_path: tuple[str, ...] = ()
@@ -781,8 +796,8 @@ def _model_region(
     buy_turnover: Any = cp.Constant(0.0)
     realized_st: Any = cp.Constant(0.0)
     realized_lt: Any = cp.Constant(0.0)
-    gross_st_gain: Any = cp.Constant(0.0)
-    gross_lt_gain: Any = cp.Constant(0.0)
+    net_st_gain_budget: Any = cp.Constant(0.0)
+    net_lt_gain_budget: Any = cp.Constant(0.0)
     lot_cleanup: Any = cp.Constant(0.0)
     position_cleanup: Any = cp.Constant(0.0)
 
@@ -807,15 +822,15 @@ def _model_region(
             sell_turnover += _cp_float(candidate.execution_price) * variable
             for key in path:
                 sleeve_deltas[key] -= _cp_float(position_value_per_share) * variable
-            gain = candidate.gain_per_share
+            gain = candidate.gain_per_share - sale_fee_per_share[ticker]
             if candidate.term == "ST":
                 realized_st += _cp_float(gain) * variable
                 if gain > 0:
-                    gross_st_gain += _cp_float(gain) * variable
+                    net_st_gain_budget += _cp_float(gain) * variable
             else:
                 realized_lt += _cp_float(gain) * variable
                 if gain > 0:
-                    gross_lt_gain += _cp_float(gain) * variable
+                    net_lt_gain_budget += _cp_float(gain) * variable
             lot_cleanup += variable / max(_cp_float(candidate.maximum_shares), 1.0)
         for key in cash_path:
             sleeve_deltas[key] += sum(
@@ -867,14 +882,6 @@ def _model_region(
             constraints.append(proposed_sector_value >= _cp_float(lower_bound) * proposed_invested)
             constraints.append(proposed_sector_value <= _cp_float(upper_bound) * proposed_invested)
 
-    sale_fee_proxy: Any = cp.Constant(0.0)
-    for rows in sell_by_ticker.values():
-        max_shares = exact_sum(candidate.maximum_shares for _, candidate in rows)
-        sale_fee_proxy += (
-            _cp_float(config.estimated_fee_per_order_usd)
-            * sum(sell_vars[index] for index, _ in rows)
-            / max(_cp_float(max_shares), 1.0)
-        )
     buy_fee_proxy: Any = cp.Constant(0.0)
     for variable, candidate in zip(buy_vars, screen.buys, strict=True):
         buy_fee_proxy += (
@@ -900,11 +907,11 @@ def _model_region(
     st_gain_limit = _setting_decimal(inputs, "st_gain_limit_usd")
     lt_gain_limit = _setting_decimal(inputs, "lt_gain_limit_usd")
     if gain_budget is not None:
-        constraints.append(gross_st_gain + gross_lt_gain <= _cp_float(gain_budget))
+        constraints.append(net_st_gain_budget + net_lt_gain_budget <= _cp_float(gain_budget))
     if st_gain_limit is not None:
-        constraints.append(gross_st_gain <= _cp_float(st_gain_limit))
+        constraints.append(net_st_gain_budget <= _cp_float(st_gain_limit))
     if lt_gain_limit is not None:
-        constraints.append(gross_lt_gain <= _cp_float(lt_gain_limit))
+        constraints.append(net_lt_gain_budget <= _cp_float(lt_gain_limit))
 
     incremental_tax: Any = cp.Constant(0.0)
     if region is not None:

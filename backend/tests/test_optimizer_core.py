@@ -347,6 +347,146 @@ def test_owner_applies_order_fee_once_to_tax_and_cash(monkeypatch: pytest.Monkey
     )
 
 
+def test_worker_uses_order_fee_to_find_fee_flipped_loss_with_zero_gain_caps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _inputs()
+    settings = dict(inputs.policy.settings.values)
+    settings["estimated_fee_per_order_usd"] = Decimal(2)
+    assert settings["allow_gain_sales"] is False
+    assert (
+        settings["gain_budget_usd"]
+        == settings["st_gain_limit_usd"]
+        == settings["lt_gain_limit_usd"]
+        == 0
+    )
+    allocation = replace(
+        inputs.policy.allocation,
+        sleeves=(
+            replace(
+                inputs.policy.allocation.sleeves[0],
+                target_pct=Decimal(0),
+                drift_band_pp=Decimal(100),
+            ),
+            replace(
+                inputs.policy.allocation.sleeves[1],
+                target_pct=Decimal(100),
+                drift_band_pp=Decimal(100),
+            ),
+        ),
+    )
+    inputs = replace(
+        inputs,
+        positions=(replace(inputs.positions[0], shares=Decimal(1), market_value_usd=Decimal(100)),),
+        lots=(
+            replace(
+                inputs.lots[0],
+                shares=Decimal(1),
+                available_shares=Decimal(1),
+                adjusted_unit_basis_usd=Decimal(99),
+            ),
+        ),
+        policy=replace(
+            inputs.policy,
+            allocation=allocation,
+            settings=PolicySettings(tuple(sorted(settings.items()))),
+        ),
+    )
+
+    result = optimize_worker(
+        OptimizerRequest(inputs, sell_lot_ids=("loss-lot",)), time.monotonic() + 10
+    )
+
+    assert result.status == "ready", (result.metadata.warnings, result.metadata.solver_statuses)
+    sells = [leg for leg in result.legs if leg.side == "SELL"]
+    assert len(sells) == 1
+    assert sells[0].shares == Decimal(1)
+    validation = validate_candidate(inputs, result.legs)
+    assert validation.accepted, validation.reasons
+    assert validation.evaluation is not None
+    assert validation.evaluation.realized_st_usd == Decimal(-1)
+    assert "stock_tlh" in result.metadata.candidate_types
+    assert any(
+        warning.startswith("fixed_order_fee_tax_proxy:") for warning in result.metadata.warnings
+    )
+
+
+def test_consolidated_multi_lot_sell_allocates_one_fee_across_tax_terms(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _inputs()
+    settings = dict(inputs.policy.settings.values)
+    settings.update(
+        {
+            "estimated_fee_per_order_usd": Decimal(2),
+            "gain_budget_usd": Decimal(2),
+            "st_gain_limit_usd": Decimal(1),
+            "lt_gain_limit_usd": Decimal(1),
+            "max_incremental_tax_cost_usd": Decimal(1),
+            "allow_gain_sales": True,
+        }
+    )
+    allocation = replace(
+        inputs.policy.allocation,
+        sleeves=(
+            replace(
+                inputs.policy.allocation.sleeves[0],
+                target_pct=Decimal(0),
+                drift_band_pp=Decimal(100),
+            ),
+            replace(
+                inputs.policy.allocation.sleeves[1],
+                target_pct=Decimal(100),
+                drift_band_pp=Decimal(100),
+            ),
+        ),
+    )
+    short_lot = replace(
+        inputs.lots[0],
+        shares=Decimal(1),
+        available_shares=Decimal(1),
+        adjusted_unit_basis_usd=Decimal(98),
+    )
+    long_lot = replace(
+        short_lot,
+        broker_lot_id="long-lot",
+        acquired_date=TRADE_DATE - timedelta(days=400),
+    )
+    inputs = replace(
+        inputs,
+        positions=(replace(inputs.positions[0], shares=Decimal(2), market_value_usd=Decimal(200)),),
+        lots=(short_lot, long_lot),
+        policy=replace(
+            inputs.policy,
+            allocation=allocation,
+            settings=PolicySettings(tuple(sorted(settings.items()))),
+        ),
+    )
+    sale = ConsolidatedLeg(
+        "sell:AAPL",
+        "SELL",
+        "AAPL",
+        Decimal(2),
+        Decimal(100),
+        (LotAllocation("loss-lot", Decimal(1)), LotAllocation("long-lot", Decimal(1))),
+        (),
+        0,
+        ("sale:AAPL",),
+    )
+
+    result = validate_candidate(inputs, (sale,))
+
+    assert result.accepted, result.reasons
+    assert result.evaluation is not None
+    assert result.evaluation.realized_st_usd == Decimal(1)
+    assert result.evaluation.realized_lt_usd == Decimal(1)
+    assert result.evaluation.proposed.cash_usd == Decimal(198)
+    assert result.evaluation.proposed.portfolio_total_usd == Decimal(198)
+    assert result.estimated_trading_cost_usd == Decimal(2)
+
+
 @pytest.mark.parametrize(
     ("equity_value", "cash_value", "side", "shares", "accepted"),
     [

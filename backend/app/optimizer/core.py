@@ -48,6 +48,8 @@ _ONE = Decimal(1)
 _HUNDRED = Decimal(100)
 _BASIS_POINTS = Decimal(10000)
 _INTEGER_SEARCH_INCOMPLETE = "whole_share_search_incomplete_continuous_relaxation_rounded_down"
+_DOWNSTREAM_TIME_RESERVE_SECONDS = 1.0
+_DOWNSTREAM_TIME_RESERVE_FRACTION = 0.2
 OPTIMIZER_IMPLEMENTATION_VERSION = "t-0045-core-v1"
 
 
@@ -1022,7 +1024,14 @@ def _solve_problem(
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         return None, "deadline_exceeded"
-    native_limit = max(0.001, min(remaining, remaining / max(1, regions_remaining)))
+    downstream_reserve = min(
+        _DOWNSTREAM_TIME_RESERVE_SECONDS,
+        remaining * _DOWNSTREAM_TIME_RESERVE_FRACTION,
+    )
+    solver_budget = remaining - downstream_reserve
+    if solver_budget <= 0:
+        return None, "deadline_exceeded_with_downstream_reserve"
+    native_limit = solver_budget / max(1, regions_remaining)
     try:
         problem.solve(
             solver=cp.OSQP,
@@ -1039,10 +1048,11 @@ def _solve_problem(
     except cp.error.SolverError, ValueError, TypeError:
         status = "osqp_error"
     remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        return None, "deadline_exceeded_after_osqp"
+    if remaining <= downstream_reserve:
+        return None, "deadline_exceeded_after_osqp_with_downstream_reserve"
+    fallback_limit = remaining - downstream_reserve
     try:
-        problem.solve(solver=cp.CLARABEL, verbose=False, time_limit=remaining)
+        problem.solve(solver=cp.CLARABEL, verbose=False, time_limit=fallback_limit)
         return "CLARABEL", problem.status
     except cp.error.SolverError, ValueError, TypeError:
         return None, "solver_error"
@@ -1250,13 +1260,15 @@ def _metadata(
     solve_seconds: float = 0.0,
     repair_validate_rank_seconds: float = 0.0,
 ) -> OptimizerMetadata:
+    solver_versions = _package_versions()
+    metadata_finished = time.monotonic()
     return OptimizerMetadata(
         input_generation=inputs.source_generation,
         source_checksum=inputs.source_checksum,
         status=status,
         solver=solver,
         solver_statuses=solver_statuses,
-        elapsed_seconds=max(0.0, time.monotonic() - started),
+        elapsed_seconds=max(0.0, metadata_finished - started),
         screening_seconds=max(0.0, solve_started - screen_started),
         solve_seconds=max(0.0, solve_seconds),
         tax_regions_considered=regions_considered,
@@ -1274,7 +1286,7 @@ def _metadata(
         rounding_attempts=rounding_attempts,
         warnings=tuple(dict.fromkeys((*warnings, _INTEGER_SEARCH_INCOMPLETE))),
         implementation_version=OPTIMIZER_IMPLEMENTATION_VERSION,
-        solver_versions=_package_versions(),
+        solver_versions=solver_versions,
         trade_group_priorities=group_priorities,
         repair_validate_rank_seconds=max(0.0, repair_validate_rank_seconds),
     )
@@ -1807,6 +1819,19 @@ def optimize_worker(request: OptimizerRequest, computation_deadline: float) -> O
         solve_seconds=solve_seconds,
         repair_validate_rank_seconds=repair_validate_rank_seconds,
     )
+    if time.monotonic() >= computation_deadline:
+        timeout_warnings = tuple(dict.fromkeys((*meta.warnings, "computation_deadline_exceeded")))
+        meta = replace(
+            meta,
+            status="deadline_exceeded",
+            elapsed_seconds=max(0.0, time.monotonic() - started),
+            selected_lot_ids=(),
+            objective_value=None,
+            estimated_tax_benefit_usd=None,
+            estimated_trading_cost_usd=None,
+            warnings=timeout_warnings,
+        )
+        return OptimizerResult("deadline_exceeded", (), meta)
     return OptimizerResult(status, best_legs, meta)
 
 

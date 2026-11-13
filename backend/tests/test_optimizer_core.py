@@ -1057,6 +1057,57 @@ def test_buy_only_trade_group_is_ranked(monkeypatch: pytest.MonkeyPatch) -> None
     )
 
 
+def test_solver_fallback_preserves_downstream_deadline_reserve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [20.0]
+    monkeypatch.setattr(core_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    calls: list[tuple[str, float]] = []
+
+    class FakeProblem:
+        status = cp.INFEASIBLE_INACCURATE
+
+        def solve(self, *, solver: str, **kwargs: object) -> None:
+            calls.append((solver, cast(float, kwargs["time_limit"])))
+            if solver == cp.OSQP:
+                clock[0] += 4.0
+            else:
+                self.status = cp.OPTIMAL
+
+    solver_name, status = core_module._solve_problem(
+        cast(cp.Problem, FakeProblem()), 30.0, regions_remaining=1
+    )
+
+    assert calls == [(cp.OSQP, 9.0), (cp.CLARABEL, 5.0)]
+    assert solver_name == cp.CLARABEL
+    assert status == cp.OPTIMAL
+
+
+def test_worker_rejects_ready_basket_when_metadata_work_exceeds_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = time.monotonic()
+    clock = [started]
+    deadline = started + 10.0
+    monkeypatch.setattr(core_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    _install_objective_accessor(monkeypatch)
+
+    def delayed_versions() -> tuple[tuple[str, str], ...]:
+        clock[0] = deadline + 0.1
+        return (("cvxpy", "test"),)
+
+    monkeypatch.setattr(core_module, "_package_versions", delayed_versions)
+    result = optimize_worker(OptimizerRequest(_inputs()), deadline)
+
+    assert result.status == "deadline_exceeded"
+    assert result.legs == ()
+    assert result.metadata.status == "deadline_exceeded"
+    assert result.metadata.selected_lot_ids == ()
+    assert result.metadata.objective_value is None
+    assert result.metadata.elapsed_seconds >= clock[0] - started
+    assert "computation_deadline_exceeded" in result.metadata.warnings
+
+
 def test_infeasible_inaccurate_status_retries_with_clarabel(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

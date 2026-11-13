@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -37,7 +38,7 @@ AS_OF = datetime(2026, 11, 13, 16, tzinfo=UTC)
 
 
 def _inputs(*, cash: Decimal = Decimal(100), cash_reserve: Decimal = Decimal(0)) -> FinancialInputs:
-    settings: dict[str, Decimal | bool | int] = {
+    settings: dict[str, object] = {
         "short_term_tax_rate": Decimal("0.30"),
         "long_term_tax_rate": Decimal("0.15"),
         "st_loss_carryforward_usd": Decimal(0),
@@ -67,9 +68,16 @@ def _inputs(*, cash: Decimal = Decimal(100), cash_reserve: Decimal = Decimal(0))
     }
     allocation = AllocationPolicy(
         sleeves=(
-            AllocationSleeve("equity", None, True, target_pct=Decimal(90), drift_band_pp=Decimal(100)),
             AllocationSleeve(
-                "cash", None, True, cash_sleeve=True, target_pct=Decimal(10), drift_band_pp=Decimal(100)
+                "equity", None, True, target_pct=Decimal(90), drift_band_pp=Decimal(100)
+            ),
+            AllocationSleeve(
+                "cash",
+                None,
+                True,
+                cash_sleeve=True,
+                target_pct=Decimal(10),
+                drift_band_pp=Decimal(100),
             ),
         ),
         allowed_securities=(
@@ -152,9 +160,15 @@ def _inputs(*, cash: Decimal = Decimal(100), cash_reserve: Decimal = Decimal(0))
         transactions=(),
         source_checksum="synthetic-quality-fixture-v1",
         exposures=(
-            LookThroughExposureInput("AAA", "sector", "technology", Decimal(1), "manual_csv", TRADE_DATE),
-            LookThroughExposureInput("BBB", "sector", "technology", Decimal(1), "manual_csv", TRADE_DATE),
-            LookThroughExposureInput("BBB", "security", "US_MARKET", Decimal(1), "manual_csv", TRADE_DATE),
+            LookThroughExposureInput(
+                "AAA", "sector", "technology", Decimal(1), "manual_csv", TRADE_DATE
+            ),
+            LookThroughExposureInput(
+                "BBB", "sector", "technology", Decimal(1), "manual_csv", TRADE_DATE
+            ),
+            LookThroughExposureInput(
+                "BBB", "security", "US_MARKET", Decimal(1), "manual_csv", TRADE_DATE
+            ),
         ),
         source_metadata=InputSourceMetadata(
             sync_complete=True,
@@ -177,9 +191,7 @@ def _universe() -> CandidateUniverse:
 
 
 def test_tiny_exact_reference_enumerates_no_trade_and_consolidated_multilot_optimum() -> None:
-    result = enumerate_small_case(
-        _inputs(), _universe(), max_assignments=12, time_limit_seconds=10
-    )
+    result = enumerate_small_case(_inputs(), _universe(), max_assignments=12, time_limit_seconds=10)
 
     assert result.complete
     assert result.stop_reason == "exhausted"
@@ -208,9 +220,7 @@ def test_tiny_exact_reference_enumerates_no_trade_and_consolidated_multilot_opti
 
 
 def test_assignment_limit_reports_only_best_observed_not_an_exact_optimum() -> None:
-    result = enumerate_small_case(
-        _inputs(), _universe(), max_assignments=1, time_limit_seconds=10
-    )
+    result = enumerate_small_case(_inputs(), _universe(), max_assignments=1, time_limit_seconds=10)
 
     assert not result.complete
     assert result.stop_reason == "max_assignments"
@@ -262,3 +272,11 @@ def test_universe_bounds_must_respect_the_frozen_lot() -> None:
             max_assignments=3,
             time_limit_seconds=10,
         )
+
+
+def test_candidate_bounds_require_a_frozen_quote() -> None:
+    inputs = replace(_inputs(), quotes=())
+    universe = CandidateUniverse(buys=(BuyTickerBound("BBB", 1),))
+
+    with pytest.raises(ValueError, match="no usable frozen quote for BBB"):
+        enumerate_small_case(inputs, universe, max_assignments=2, time_limit_seconds=10)

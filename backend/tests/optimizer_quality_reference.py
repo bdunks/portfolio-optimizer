@@ -96,6 +96,7 @@ def _validate_universe(
         ticker = bound.ticker.strip().upper()
         if not ticker or not bound.broker_lot_id or bound.broker_lot_id in seen_lots:
             raise ValueError("sell bounds need a ticker and unique broker lot IDs")
+        _require_quote_mark(inputs, ticker)
         if isinstance(bound.max_shares, bool) or not isinstance(bound.max_shares, int):
             raise TypeError("sell bounds must use integer whole-share maxima")
         if bound.max_shares <= 0:
@@ -125,6 +126,7 @@ def _validate_universe(
         ticker = bound.ticker.strip().upper()
         if not ticker:
             raise ValueError("buy bounds need a ticker")
+        _require_quote_mark(inputs, ticker)
         if isinstance(bound.max_shares, bool) or not isinstance(bound.max_shares, int):
             raise TypeError("buy bounds must use integer whole-share maxima")
         if bound.max_shares <= 0:
@@ -155,6 +157,13 @@ def _quote_mark(inputs: FinancialInputs, ticker: str) -> Decimal | None:
     return None
 
 
+def _require_quote_mark(inputs: FinancialInputs, ticker: str) -> Decimal:
+    quote_mark = _quote_mark(inputs, ticker)
+    if quote_mark is None:
+        raise ValueError(f"candidate bound has no usable frozen quote for {ticker}")
+    return quote_mark
+
+
 def _canonical_key(legs: tuple[ConsolidatedLeg, ...]) -> tuple[object, ...]:
     return tuple(
         (
@@ -162,7 +171,9 @@ def _canonical_key(legs: tuple[ConsolidatedLeg, ...]) -> tuple[object, ...]:
             leg.ticker,
             leg.shares,
             leg.estimated_unit_price_usd,
-            tuple((allocation.broker_lot_id, allocation.shares) for allocation in leg.selected_lots),
+            tuple(
+                (allocation.broker_lot_id, allocation.shares) for allocation in leg.selected_lots
+            ),
             leg.depends_on_leg_ids,
             leg.sequence,
         )
@@ -194,12 +205,8 @@ def _build_legs(
         allocations = tuple(
             sorted(allocations_by_ticker[ticker], key=lambda allocation: allocation.broker_lot_id)
         )
-        quote_mark = _quote_mark(inputs, ticker)
-        price = (
-            quote_mark * (Decimal(1) - half_spread)
-            if quote_mark is not None
-            else Decimal(1)
-        )
+        quote_mark = _require_quote_mark(inputs, ticker)
+        price = quote_mark * (Decimal(1) - half_spread)
         legs.append(
             ConsolidatedLeg(
                 leg_id=f"sell:{ticker}",
@@ -216,12 +223,8 @@ def _build_legs(
     for index, (bound, quantity) in enumerate(zip(buys, buy_quantities, strict=True)):
         if not quantity:
             continue
-        quote_mark = _quote_mark(inputs, bound.ticker)
-        price = (
-            quote_mark * (Decimal(1) + half_spread)
-            if quote_mark is not None
-            else Decimal(1)
-        )
+        quote_mark = _require_quote_mark(inputs, bound.ticker)
+        price = quote_mark * (Decimal(1) + half_spread)
         legs.append(
             ConsolidatedLeg(
                 leg_id=f"buy:{bound.ticker}",
@@ -280,12 +283,20 @@ def enumerate_small_case(
     deadline = started + time_limit_seconds
 
     objective_policy, _ = read_objective_policy(inputs)
-    spread_bps = objective_policy.estimated_spread_bps if objective_policy is not None else Decimal(0)
+    spread_bps = (
+        objective_policy.estimated_spread_bps if objective_policy is not None else Decimal(0)
+    )
     incumbent_validation = validate_candidate(inputs, incumbent_legs, deadline=deadline)
-    incumbent_completed = "validation_deadline_exceeded" not in incumbent_validation.reasons
+    incumbent_completed = (
+        "validation_deadline_exceeded" not in incumbent_validation.reasons
+        and monotonic() < deadline
+    )
     incumbent = ReferenceCandidate(tuple(incumbent_legs), incumbent_validation, incumbent_completed)
 
     candidates: list[ReferenceCandidate] = []
+    feasible_count = 0
+    best_observed: ReferenceCandidate | None = None
+    best_score: Decimal | None = None
     seen: set[tuple[object, ...]] = set()
     assignments_examined = 0
     stop_reason: StopReason = "exhausted"
@@ -306,8 +317,17 @@ def enumerate_small_case(
                 continue
             seen.add(key)
             validation = validate_candidate(inputs, legs, deadline=deadline)
-            completed = "validation_deadline_exceeded" not in validation.reasons
-            candidates.append(ReferenceCandidate(legs, validation, completed))
+            completed = (
+                "validation_deadline_exceeded" not in validation.reasons and monotonic() < deadline
+            )
+            candidate = ReferenceCandidate(legs, validation, completed)
+            candidates.append(candidate)
+            if candidate.feasible:
+                feasible_count += 1
+                score = validation.objective_value
+                if score is not None and (best_score is None or score < best_score):
+                    best_observed = candidate
+                    best_score = score
             if not completed:
                 stop_reason = "deadline"
                 break
@@ -316,20 +336,16 @@ def enumerate_small_case(
         if stop_reason == "exhausted" and assignments_examined < theoretical_count:
             stop_reason = "max_assignments"
 
-    feasible = tuple(candidate for candidate in candidates if candidate.feasible)
-    best_observed = min(
-        feasible,
-        key=lambda candidate: candidate.validation.objective_value,
-        default=None,
-    )
-    complete = stop_reason == "exhausted" and len(seen) == theoretical_count
+    if stop_reason == "exhausted" and monotonic() >= deadline:
+        stop_reason = "deadline"
+    complete = stop_reason == "exhausted" and assignments_examined == theoretical_count
     return SmallCaseSearchResult(
         complete=complete,
         stop_reason=stop_reason,
         theoretical_assignment_count=theoretical_count,
         assignments_examined=assignments_examined,
         canonical_baskets_examined=len(candidates),
-        feasible_basket_count=len(feasible),
+        feasible_basket_count=feasible_count,
         max_assignments=max_assignments,
         time_limit_seconds=time_limit_seconds,
         elapsed_seconds=monotonic() - started,

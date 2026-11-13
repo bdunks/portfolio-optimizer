@@ -8,6 +8,8 @@ This protocol describes a future comparison, not a present production-quality re
 
 The reference uses the owner's `validate_candidate` for feasibility and exact Decimal financial evaluation/objective scoring. This avoids production search reuse, but the validator is shared with production and therefore is not an independent proof that the tax, accounting, or other financial semantics are correct. The reference does not establish an optimum outside its explicit universe. Larger reference searches, if later added, must be labeled best-known unless complete enumeration proves otherwise.
 
+
+If a later production search uses a disclosed convex surrogate for nested soft-allocation terms or fixed fees, record that surrogate and its scope. Such search approximations remain provisional until broader quality results are reviewed; exact owner-validator financial scoring and all final feasibility/tax gates are mandatory for evaluated candidates.
 ## Comparison records
 
 For every later production/reference comparison, retain the case ID and fixture version, input checksum, policy and validator/reference versions, explicit SELL-lot/BUY-ticker bounds, theoretical assignment count, assignments and canonical baskets examined, completion/stop reason, wall-time and assignment limits, and any source-generator seed (or explicitly record that the case is deterministic and has no random seed). Store the production candidate and its independently revalidated common-owner result. Keep synthetic fixtures distinct from captured user inputs; synthetic case frequencies are not estimates of user or market probabilities.

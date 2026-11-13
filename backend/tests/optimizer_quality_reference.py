@@ -197,10 +197,20 @@ def _build_legs(
                 LotAllocation(bound.broker_lot_id, Decimal(quantity))
             )
 
-    sell_tickers = sorted(allocations_by_ticker)
+    half_spread = spread_bps / Decimal(10000)
+    sell_tickers = sorted(
+        allocations_by_ticker,
+        key=lambda ticker: (
+            -_require_quote_mark(inputs, ticker)
+            * (Decimal(1) - half_spread)
+            * sum(
+                (allocation.shares for allocation in allocations_by_ticker[ticker]), Decimal(0)
+            ),
+            ticker,
+        ),
+    )
     sell_ids = tuple(f"sell:{ticker}" for ticker in sell_tickers)
     legs: list[ConsolidatedLeg] = []
-    half_spread = spread_bps / Decimal(10000)
     for sequence, ticker in enumerate(sell_tickers):
         allocations = tuple(
             sorted(allocations_by_ticker[ticker], key=lambda allocation: allocation.broker_lot_id)

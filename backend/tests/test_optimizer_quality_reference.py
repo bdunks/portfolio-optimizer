@@ -218,6 +218,64 @@ def test_tiny_exact_reference_enumerates_no_trade_and_consolidated_multilot_opti
     assert optimum.validation.evaluation.proposed.cash_usd == Decimal(117)
     assert result.exact_optimum is optimum
 
+def test_exact_reference_orders_sells_by_proceeds_for_intermediate_cash_feasibility() -> None:
+    base = _inputs(cash=Decimal(0))
+    policy = replace(
+        base.policy,
+        settings=PolicySettings.from_mapping(
+            dict(base.policy.settings.values)
+            | {"max_sell_tickers_per_batch": 2, "max_total_orders_per_batch": 2}
+        ),
+    )
+    inputs = replace(
+        base,
+        policy=policy,
+        positions=(
+            base.positions[0],
+            replace(base.positions[0], ticker="BBB", asset_type="ETF", market_value_usd=Decimal(10)),
+        ),
+        lots=(
+            replace(
+                base.lots[0],
+                broker_lot_id="aaa-lot",
+                shares=Decimal(1),
+                available_shares=Decimal(1),
+                adjusted_unit_basis_usd=Decimal(1),
+            ),
+            replace(
+                base.lots[1],
+                ticker="BBB",
+                broker_lot_id="bbb-lot",
+                shares=Decimal(1),
+                available_shares=Decimal(1),
+                adjusted_unit_basis_usd=Decimal(10),
+            ),
+        ),
+        quotes=(
+            QuoteInput("AAA", Decimal(1), Decimal(1), None, "SYNTHETIC_TEST", AS_OF, "good", 1),
+            QuoteInput("BBB", Decimal(10), Decimal(10), None, "SYNTHETIC_TEST", AS_OF, "good", 1),
+        ),
+    )
+    universe = CandidateUniverse(
+        sells=(
+            SellLotBound("AAA", "aaa-lot", 1),
+            SellLotBound("BBB", "bbb-lot", 1),
+        )
+    )
+
+    result = enumerate_small_case(inputs, universe, max_assignments=4, time_limit_seconds=10)
+
+    assert result.complete
+    optimum = result.exact_optimum
+    assert optimum is not None
+    assert optimum.feasible
+    assert tuple(leg.ticker for leg in optimum.legs) == ("BBB", "AAA")
+    assert tuple(leg.sequence for leg in optimum.legs) == (0, 1)
+    assert optimum.validation.evaluation is not None
+    assert optimum.validation.evaluation.proposed.cash_usd == Decimal(5)
+    assert optimum.validation.objective_value == Decimal("-0.5")
+
+
 
 def test_assignment_limit_reports_only_best_observed_not_an_exact_optimum() -> None:
     result = enumerate_small_case(_inputs(), _universe(), max_assignments=1, time_limit_seconds=10)

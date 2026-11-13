@@ -322,6 +322,30 @@ def test_owner_applies_order_fee_once_to_tax_and_cash(monkeypatch: pytest.Monkey
     assert result.evaluation.proposed.portfolio_total_usd == Decimal(998)
     assert result.estimated_trading_cost_usd == Decimal(2)
 
+    wash_inputs = replace(
+        inputs,
+        transactions=(
+            TransactionInput(
+                "recent-aapl-buy",
+                "AAPL",
+                "BUY",
+                NOW - timedelta(days=10),
+                TRADE_DATE - timedelta(days=10),
+                Decimal(1),
+                Decimal(100),
+                True,
+                "untracked-recent-lot",
+                "TEST",
+            ),
+        ),
+    )
+    wash_result = validate_candidate(wash_inputs, (sale,))
+
+    assert not wash_result.accepted
+    assert any(
+        reason.startswith("wash_sale_ineligible:AAPL:loss-lot:") for reason in wash_result.reasons
+    )
+
 
 @pytest.mark.parametrize(
     ("equity_value", "cash_value", "side", "shares", "accepted"),

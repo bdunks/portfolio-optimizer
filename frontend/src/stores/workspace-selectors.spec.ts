@@ -8,6 +8,7 @@ import type { PortfolioReadyResponse } from '../types/api';
 import type { WorkspaceResourceFreshness } from '../types/workspace-resources';
 import {
   selectPortfolioLabelContext,
+  selectPortfolioStructureSummary,
   selectResourceFreshnessNotices,
   selectRunPresentation,
   selectWorkspaceReadiness,
@@ -203,5 +204,144 @@ describe('shared workspace lifecycle selectors', () => {
       revisionMismatch: false,
       labels: { us: 'Policy A US', transition_nested: 'Unavailable (active policy label)' },
     });
+  });
+  it('reports configured sleeves separately and withholds unavailable or stale counts', () => {
+    const summary = selectPortfolioStructureSummary({
+      health: null,
+      portfolio: null,
+      activePolicy: null,
+      lots: null,
+      lotFilters: {},
+      freshness: {},
+      pending: false,
+      lotsPending: false,
+    });
+    expect(summary).toMatchObject({
+      configurationAvailable: false,
+      countsCurrent: false,
+      positionCount: null,
+      directStockPositionCount: null,
+      allocationWeights: null,
+      lotsCurrent: false,
+      lotCount: null,
+    });
+
+    const configured = {
+      ...activePolicy,
+      sleeves: [
+        { sleeve_key: 'custom', display_name: 'Custom sleeve', sort_order: 2, enabled: true },
+        { sleeve_key: 'closed', display_name: 'Closed sleeve', sort_order: 1, enabled: false },
+      ],
+    } as unknown as PolicyRevisionResponse;
+    const staleSummary = selectPortfolioStructureSummary({
+      health,
+      portfolio,
+      activePolicy: configured,
+      lots: null,
+      lotFilters: {},
+      freshness: { ...freshResources, portfolio: { status: 'stale', confirmedAt: null } },
+      pending: false,
+      lotsPending: false,
+    });
+    expect(staleSummary.sleeves).toEqual([
+      { key: 'closed', name: 'Closed sleeve', enabled: false },
+      { key: 'custom', name: 'Custom sleeve', enabled: true },
+    ]);
+    expect(staleSummary.configurationAvailable).toBe(true);
+    expect(
+      selectPortfolioStructureSummary({
+        health,
+        portfolio: { ...portfolio, active_policy_revision_id: 'policy-2' },
+        activePolicy: configured,
+        lots: null,
+        lotFilters: {},
+        freshness: freshResources,
+        pending: false,
+        lotsPending: false,
+      }).configurationFresh,
+    ).toBe(false);
+    expect(
+      selectPortfolioStructureSummary({
+        health,
+        portfolio,
+        activePolicy: {
+          ...configured,
+          activation_errors: ['invalid policy'],
+        } as unknown as PolicyRevisionResponse,
+        lots: null,
+        lotFilters: {},
+        freshness: freshResources,
+        pending: false,
+        lotsPending: false,
+      }).configurationFresh,
+    ).toBe(false);
+    expect(staleSummary.configurationFresh).toBe(true);
+    expect(staleSummary.positionCount).toBeNull();
+  });
+
+  it('distinguishes account positions, equity positions, reported allocation and valid unfiltered lot totals', () => {
+    const currentPortfolio = {
+      ...portfolio,
+      positions: [
+        { ticker: 'ONE', asset_type: 'EQUITY' },
+        { ticker: 'TWO', asset_type: 'ETF' },
+        { ticker: 'THREE', asset_type: 'EQUITY' },
+      ],
+      position_count: 3,
+      allocation: { current: { sleeve_weights_pct: { custom: '64.5', cash: '35.5' } } },
+    } as unknown as typeof portfolio;
+    const lots = { items: [], total: 12, offset: 0, limit: 100, source_generation: 3 };
+    const input = {
+      health,
+      portfolio: currentPortfolio,
+      activePolicy,
+      lots,
+      lotFilters: {},
+      freshness: {
+        ...freshResources,
+        lots: { status: 'fresh', confirmedAt: 'now' },
+      } satisfies WorkspaceResourceFreshness,
+      pending: false,
+      lotsPending: false,
+    };
+    expect(selectPortfolioStructureSummary(input)).toMatchObject({
+      countsCurrent: true,
+      positionCount: 3,
+      directStockPositionCount: 2,
+      allocationWeights: [
+        ['custom', '64.5'],
+        ['cash', '35.5'],
+      ],
+      lotsCurrent: true,
+      lotCount: 12,
+    });
+    expect(
+      selectPortfolioStructureSummary({ ...input, lotFilters: { ticker: 'ONE' } }),
+    ).toMatchObject({
+      lotsCurrent: false,
+      lotCount: null,
+    });
+    expect(
+      selectPortfolioStructureSummary({ ...input, lots: { ...lots, source_generation: 2 } }),
+    ).toMatchObject({
+      lotsCurrent: false,
+      lotCount: null,
+    });
+    expect(selectPortfolioStructureSummary({ ...input, lotsPending: true })).toMatchObject({
+      lotsCurrent: false,
+      lotCount: null,
+    });
+    expect(selectPortfolioStructureSummary({ ...input, pending: true })).toMatchObject({
+      countsCurrent: false,
+      positionCount: null,
+      allocationWeights: null,
+      lotsCurrent: false,
+    });
+    expect(
+      selectPortfolioStructureSummary({
+        ...input,
+        activePolicy: { ...activePolicy, id: 'different-revision' },
+      }),
+    ).toMatchObject({ countsCurrent: false, positionCount: null, allocationWeights: null });
   });
 });

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import { useRoute, RouterLink } from 'vue-router';
 import { cn } from 'cn';
 import { Badge } from '@/components/ui/badge';
@@ -17,9 +18,27 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar';
 import { workspaceLinks } from '@/navigation/workspace-navigation';
+import { useWorkspace } from '@/composables/use-workspace';
+import { selectPortfolioStructureSummary } from '@/stores/workspace-selectors';
 
 const route = useRoute();
 const { isMobile, setOpenMobile, mobileCloseFocusTarget } = useSidebar();
+const store = useWorkspace();
+const portfolioStructure = computed(() =>
+  selectPortfolioStructureSummary({
+    health: store.health,
+    portfolio: store.portfolio,
+    activePolicy: store.policy?.active ?? null,
+    lots: store.lots,
+    lotFilters: store.lotFilters,
+    freshness: store.resourceFreshness,
+    pending:
+      store.initialWorkspacePending ||
+      store.workspaceResourceLoadPending ||
+      store.actionState.syncPortfolio.pending,
+    lotsPending: store.actionState.loadLots.pending,
+  }),
+);
 
 function closeOnMobileNavigation(): void {
   if (!isMobile.value) return;
@@ -88,6 +107,66 @@ function closeOnMobileNavigation(): void {
           </SidebarGroupContent>
         </SidebarGroup>
       </nav>
+      <section
+        class="tw:mx-2 tw:mb-3 tw:rounded-md tw:border tw:border-sidebar-border tw:p-3 tw:text-xs"
+        aria-label="Portfolio structure context"
+      >
+        <h2 class="tw:m-0! tw:text-xs tw:font-semibold">Portfolio context</h2>
+        <p class="tw:mb-1 tw:mt-2 tw:font-medium">Configured sleeves</p>
+        <p
+          v-if="!portfolioStructure.configurationAvailable"
+          class="tw:m-0! tw:text-sidebar-foreground/70"
+        >
+          Active configuration unavailable.
+        </p>
+        <template v-else>
+          <p class="tw:m-0! tw:text-sidebar-foreground/70">
+            {{
+              portfolioStructure.configurationFresh
+                ? 'Active configuration'
+                : 'Last confirmed configuration'
+            }}
+            · not holdings coverage
+          </p>
+          <ul class="tw:mb-0 tw:mt-1 tw:list-none tw:space-y-0.5 tw:p-0">
+            <li v-for="sleeve in portfolioStructure.sleeves" :key="sleeve.key">
+              {{ sleeve.name }} · {{ sleeve.enabled ? 'enabled' : 'disabled' }}
+            </li>
+          </ul>
+        </template>
+        <Separator class="tw:my-2" />
+        <p class="tw:m-0! tw:font-medium">Current holdings</p>
+        <template v-if="portfolioStructure.countsCurrent">
+          <p class="tw:mb-0 tw:mt-1">
+            {{ portfolioStructure.positionCount }} account positions ·
+            {{ portfolioStructure.directStockPositionCount }} direct-stock positions
+          </p>
+          <ul
+            v-if="portfolioStructure.allocationWeights?.length"
+            class="tw:mb-0 tw:mt-1 tw:list-none tw:space-y-0.5 tw:p-0"
+          >
+            <li v-for="[key, weight] in portfolioStructure.allocationWeights" :key="key">
+              {{ key }}: {{ weight }}% of portfolio (reported)
+            </li>
+          </ul>
+          <p v-else class="tw:mb-0 tw:mt-1 tw:text-sidebar-foreground/70">
+            Current holdings allocation unavailable.
+          </p>
+        </template>
+        <p v-else class="tw:mb-0 tw:mt-1 tw:text-sidebar-foreground/70">
+          Current position counts and holdings allocation unavailable{{
+            portfolioStructure.pending
+              ? ' while data is pending'
+              : ' while data is stale or unverified'
+          }}.
+        </p>
+        <p class="tw:mb-0 tw:mt-1">
+          <template v-if="portfolioStructure.lotsCurrent"
+            >{{ portfolioStructure.lotCount }} account tax lots</template
+          >
+          <template v-else>Account-wide tax-lot count unavailable</template>
+        </p>
+      </section>
     </SidebarContent>
 
     <SidebarFooter>

@@ -64,6 +64,11 @@ describe('MainLayout', () => {
     expect(notice.text()).toContain('No broker connection, OAuth, live writes, or trading.');
     expect(wrapper.find('[role="alert"]').exists()).toBe(false);
     expect(wrapper.text()).toContain('Local demo mode');
+    const context = wrapper.get('[aria-label="Portfolio structure context"]');
+    expect(context.text()).toContain('Active configuration unavailable.');
+    expect(context.text()).toContain('Current position counts and holdings allocation unavailable');
+    expect(context.text()).toContain('Account-wide tax-lot count unavailable');
+    expect(context.findAll('a, button')).toHaveLength(0);
     expect(wrapper.text()).toContain('No broker connection or order submission');
   });
 

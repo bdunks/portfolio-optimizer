@@ -810,6 +810,53 @@ test('desktop and tablet workspace routes with keyboard access', async ({
     await tabletPage.close();
   }
 });
+test('portfolio context remains readable and noninteractive in the desktop sidebar and mobile drawer', async ({
+  emptyApp,
+  browser,
+}) => {
+  const desktop = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  try {
+    await desktop.goto(new URL('/', emptyApp.baseUrl).toString(), {
+      waitUntil: 'domcontentloaded',
+    });
+    const context = desktop.getByRole('region', { name: 'Portfolio structure context' });
+    await expect(context).toBeVisible();
+    await expect(context).toContainText('Configured sleeves');
+    await expect(context).toContainText('Active configuration unavailable.');
+    await expect(context).toContainText(
+      'Current position counts and holdings allocation unavailable',
+    );
+    await expect(context).toContainText('Account-wide tax-lot count unavailable');
+    await expect(context.locator('a, button')).toHaveCount(0);
+    await expectNoHorizontalOverflow(desktop, 'desktop portfolio context');
+  } finally {
+    await desktop.close();
+  }
+
+  const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  try {
+    await mobile.goto(new URL('/', emptyApp.baseUrl).toString(), { waitUntil: 'domcontentloaded' });
+    const menuButton = mobile.getByRole('button', { name: 'Toggle workspace navigation' });
+    await menuButton.focus();
+    await mobile.keyboard.press('Enter');
+    await expectDrawerSettled(mobile, true);
+    const context = mobile.getByRole('region', { name: 'Portfolio structure context' });
+    await context.scrollIntoViewIfNeeded();
+    await expect(context).toBeVisible();
+    await expect(context).toContainText(
+      'Current position counts and holdings allocation unavailable',
+    );
+    await expectNoHorizontalOverflow(mobile, 'mobile portfolio context');
+    await mobile
+      .getByRole('navigation', { name: 'Primary navigation' })
+      .getByRole('link', { name: /Tax Lots/ })
+      .click();
+    await expectDrawerSettled(mobile, false);
+    await expect(mobile.locator('#main-content')).toBeFocused();
+  } finally {
+    await mobile.close();
+  }
+});
 
 test('workspace navigation contrast is readable on desktop and mobile', async ({
   emptyApp,

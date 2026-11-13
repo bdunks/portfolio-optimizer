@@ -1,5 +1,6 @@
 import type {
   HealthResponse,
+  LotPageResponse,
   OptimizerRecommendationsResponse,
   OptimizerRunResponse,
   PolicyRevisionResponse,
@@ -91,6 +92,71 @@ export function selectPortfolioLabelContext(input: PortfolioLabelContextInput) {
       portfolioRevisionId !== policyRevisionId);
 
   return { labels, revisionsMatch, revisionMismatch, portfolioRevisionId, policyRevisionId };
+}
+
+type PortfolioStructureInput = {
+  health: HealthResponse | null;
+  portfolio: PortfolioResponse | null;
+  activePolicy: PolicyRevisionResponse | null;
+  lots: LotPageResponse | null;
+  lotFilters: Readonly<Record<string, unknown>>;
+  freshness: Partial<WorkspaceResourceFreshness>;
+  pending: boolean;
+  lotsPending: boolean;
+};
+
+export function selectPortfolioStructureSummary(input: PortfolioStructureInput) {
+  const sleeves = [...(input.activePolicy?.sleeves ?? [])]
+    .sort((left, right) => left.sort_order - right.sort_order)
+    .map((sleeve) => ({
+      key: sleeve.sleeve_key,
+      name: sleeve.display_name,
+      enabled: sleeve.enabled,
+    }));
+  const portfolio = input.portfolio;
+  const ready =
+    input.health?.status === 'ok' &&
+    input.health.schema_ready &&
+    portfolio?.status === 'ready' &&
+    portfolio.sync.complete &&
+    input.activePolicy !== null &&
+    portfolio.active_policy_revision_id === input.activePolicy.id &&
+    (input.activePolicy.activation_errors?.length ?? 0) === 0 &&
+    isConfirmed(input.freshness, 'health') &&
+    isConfirmed(input.freshness, 'portfolio') &&
+    isConfirmed(input.freshness, 'policy') &&
+    !input.pending;
+  const countsCurrent = ready && portfolio?.status === 'ready';
+  const currentWeights = countsCurrent ? portfolio.allocation.current?.sleeve_weights_pct : null;
+  const lotsCurrent =
+    countsCurrent &&
+    input.lots !== null &&
+    isConfirmed(input.freshness, 'lots') &&
+    !input.lotsPending &&
+    Object.keys(input.lotFilters).length === 0 &&
+    input.lots.source_generation === portfolio.sync.generation;
+
+  return {
+    sleeves,
+    configurationAvailable: input.activePolicy !== null,
+    configurationFresh:
+      isConfirmed(input.freshness, 'policy') &&
+      !input.pending &&
+      input.activePolicy !== null &&
+      (input.activePolicy.activation_errors?.length ?? 0) === 0 &&
+      (portfolio?.status !== 'ready' ||
+        portfolio.active_policy_revision_id === input.activePolicy.id),
+    countsCurrent,
+    positionCount: countsCurrent && portfolio?.status === 'ready' ? portfolio.position_count : null,
+    directStockPositionCount:
+      countsCurrent && portfolio?.status === 'ready'
+        ? portfolio.positions.filter((position) => position.asset_type === 'EQUITY').length
+        : null,
+    allocationWeights: currentWeights ? Object.entries(currentWeights) : null,
+    lotsCurrent,
+    lotCount: lotsCurrent ? input.lots!.total : null,
+    pending: input.pending || input.lotsPending,
+  };
 }
 
 export function selectWorkspaceReadiness(input: ReadinessInput) {

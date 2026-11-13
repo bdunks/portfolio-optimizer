@@ -3,29 +3,37 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
 import pytest
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, delete, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import (
     Account,
+    ActivityEvent,
     Base,
     OptimizerRun,
     PolicyRevision,
     RecommendationGroup,
+    RecommendationGroupLeg,
     RecommendationLeg,
+    RecommendationSelectedLot,
     Security,
 )
 from app.db.session import create_database_engine
 from app.domain.financial_inputs import PolicySettings
+from app.domain.portfolio_accounting import ConsolidatedLeg, LotAllocation
 from app.optimizer.runtime import WorkerResult, WorkerTimeoutError
-from app.schemas import RecommendationAnnotationInput
+from app.schemas import (
+    OptimizerLotReviewIntentInput,
+    OptimizerSelectionInput,
+    RecommendationAnnotationInput,
+)
 from app.services import optimizer_service
 from app.services.errors import AppError
 
@@ -63,6 +71,20 @@ class Inputs:
     policy: Policy
     source_generation: int = 1
     source_checksum: str = "checksum"
+
+
+@dataclass(frozen=True)
+class ServiceLot:
+    ticker: str
+    broker_lot_id: str
+    available_shares: Decimal = Decimal(1)
+    acquired_date: date = date(2025, 1, 1)
+    adjusted_unit_basis_usd: Decimal = Decimal(10)
+
+
+@dataclass(frozen=True)
+class ServiceInputs:
+    lots: tuple[ServiceLot, ...]
 
 class FakeSupervisor:
     def __init__(self, value: object, *, deadline: float | None = None) -> None:
@@ -188,12 +210,41 @@ async def test_run_validated_candidate_rejects_late_owner_validation(monkeypatch
 _RUN_ID = "service-run"
 _GROUP_ID = "service-group"
 _POLICY_ID = "service-policy"
+_SUBSET_RUN_ID = "subset-service-run"
+_SUBSET_POLICY_ID = "subset-service-policy"
+_GROUP_A_ID = "subset-group-a"
+_GROUP_B_ID = "subset-group-b"
 
 
 @dataclass(frozen=True)
 class PublicationCandidate:
     marker: str
+    legs: tuple[object, ...] = ()
 
+
+
+def _sell_legs_for_ids(inputs: object, broker_lot_ids: tuple[str, ...]) -> tuple[ConsolidatedLeg, ...]:
+    lots_by_id = {lot.broker_lot_id: lot for lot in getattr(inputs, "lots", ())}
+    grouped: dict[str, list[str]] = {}
+    for broker_lot_id in broker_lot_ids:
+        assert broker_lot_id in lots_by_id
+        grouped.setdefault(lots_by_id[broker_lot_id].ticker, []).append(broker_lot_id)
+    legs = []
+    for sequence, (ticker, lot_ids) in enumerate(sorted(grouped.items()), start=1):
+        allocations = tuple(LotAllocation(lot_id, Decimal(1)) for lot_id in lot_ids)
+        legs.append(
+            ConsolidatedLeg(
+                leg_id=f"sell-{ticker.lower()}-{sequence}",
+                side="SELL",
+                ticker=ticker,
+                shares=Decimal(len(allocations)),
+                estimated_unit_price_usd=Decimal(10),
+                selected_lots=allocations,
+                sequence=sequence,
+                group_ids=(f"sale:{ticker.upper()}",),
+            )
+        )
+    return tuple(legs)
 
 def _create_sqlite_optimizer_run(
     tmp_path: Path, *, selected: bool
@@ -262,9 +313,137 @@ def _create_sqlite_optimizer_run(
     return engine, session_factory
 
 
-def _patch_real_run_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
+def _create_sqlite_subset_optimizer_run(
+    tmp_path: Path,
+) -> tuple[Engine, Callable[[], Session]]:
+    engine = create_database_engine(f"sqlite:///{tmp_path / 'optimizer-subset-service.db'}")
+    Base.metadata.create_all(engine)
+    now = datetime.now(UTC)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    initial_lots = {
+        "sale:AAA": ("LOT-A1", "LOT-A2"),
+        "sale:BBB": ("LOT-B1",),
+    }
+    with session_factory.begin() as session:
+        session.add(
+            PolicyRevision(
+                id=_SUBSET_POLICY_ID,
+                revision_number=1,
+                status="ACTIVE",
+                created_at=now,
+            )
+        )
+        session.flush()
+        session.add(
+            Account(
+                id=1,
+                broker_account_id_key="subset-fake-account",
+                display_name="Subset test account",
+                cash_usd=Decimal(0),
+                settled_buying_power_usd=Decimal(0),
+                as_of=now,
+            )
+        )
+        session.add_all(
+            [
+                Security(id=1, ticker="AAA", asset_type="EQUITY"),
+                Security(id=2, ticker="BBB", asset_type="EQUITY"),
+            ]
+        )
+        session.flush()
+        session.add(
+            OptimizerRun(
+                id=_SUBSET_RUN_ID,
+                policy_revision_id=_SUBSET_POLICY_ID,
+                source_generation=1,
+                as_of=now,
+                proposed_trade_date=date(2026, 11, 13),
+                solver_version="test",
+                status="COMPLETE",
+                batch_settings={
+                    "max_sell_tickers_per_batch": 2,
+                    "max_sell_lots_per_batch": 3,
+                    "max_total_orders_per_batch": 3,
+                },
+                metrics={
+                    "basket_revision": 4,
+                    "basket_marker": "initial",
+                    "selection_universe": {key: list(value) for key, value in initial_lots.items()},
+                },
+                warnings=[],
+                input_fingerprint="service-fingerprint",
+                frozen_input_bundle={"mode": "real_optimizer"},
+            )
+        )
+        session.flush()
+        for rank, (core_group_id, group_id, ticker, security_id) in enumerate(
+            (
+                ("sale:AAA", _GROUP_A_ID, "AAA", 1),
+                ("sale:BBB", _GROUP_B_ID, "BBB", 2),
+            ),
+            start=1,
+        ):
+            session.add(
+                RecommendationGroup(
+                    id=group_id,
+                    run_id=_SUBSET_RUN_ID,
+                    rank=rank,
+                    group_type="optimizer_trade",
+                    rationale=f"Test sale for {ticker}",
+                    impact={
+                        "core_group_id": core_group_id,
+                        "candidate_sell_lot_ids": list(initial_lots[core_group_id]),
+                    },
+                    dependencies=[],
+                    selected=True,
+                    rejected=False,
+                )
+            )
+            leg_id = f"initial-leg-{ticker.lower()}"
+            lot_ids = initial_lots[core_group_id]
+            session.add(
+                RecommendationLeg(
+                    id=leg_id,
+                    group_id=group_id,
+                    account_id=1,
+                    security_id=security_id,
+                    side="SELL",
+                    shares=Decimal(len(lot_ids)),
+                    estimated_unit_price_usd=Decimal(10),
+                    net_st_realized_usd=Decimal(0),
+                    net_lt_realized_usd=Decimal(0),
+                    sequence=rank,
+                    details={"core_group_ids": [core_group_id]},
+                )
+            )
+            session.flush()
+            session.add(RecommendationGroupLeg(group_id=group_id, leg_id=leg_id))
+            for lot_id in lot_ids:
+                session.add(
+                    RecommendationSelectedLot(
+                        leg_id=leg_id,
+                        broker_lot_id=lot_id,
+                        shares=Decimal(1),
+                        acquired_date=date(2025, 1, 1),
+                        adjusted_basis_usd=Decimal(10),
+                        st_lt_term="LT",
+                        realized_pl_usd=Decimal(0),
+                        selected=True,
+                    )
+                )
+    return engine, session_factory
+
+
+def _patch_real_run_dependencies(monkeypatch: pytest.MonkeyPatch, *, inputs: object | None = None) -> None:
+    prepared_inputs = inputs if inputs is not None else ServiceInputs(
+        (
+            ServiceLot("ABC", "LOT-1"),
+            ServiceLot("ABC", "LOT-OLDER"),
+            ServiceLot("ABC", "LOT-NEWER"),
+        )
+    )
     prepared = optimizer_service.PreparedOptimizerRun(
-        inputs=object(),
+        inputs=prepared_inputs,
         batch_settings={
             "max_sell_tickers_per_batch": 1,
             "max_sell_lots_per_batch": 1,
@@ -300,9 +479,11 @@ def _patch_real_run_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(optimizer_service, "assert_optimizer_run_current", assert_current)
 
 
-def _capture_real_run_state(session: Session) -> optimizer_service._RunState:
+def _capture_real_run_state(
+    session: Session, run_id: str = _RUN_ID
+) -> optimizer_service._RunState:
     with session.begin():
-        _run, state, _annotations = optimizer_service._run_state(session, _RUN_ID)
+        _run, state, _annotations = optimizer_service._run_state(session, run_id)
     return state
 
 
@@ -349,6 +530,110 @@ def _persist_test_candidate(
     )
 
 
+
+def _persist_subset_candidate(
+    session: Session,
+    run: OptimizerRun,
+    prepared: optimizer_service.PreparedOptimizerRun,
+    outcome: optimizer_service.ValidatedOptimizerCandidate,
+    *,
+    selected_groups: object = None,
+    annotation_overrides: object = None,
+    expected_universe: object = None,
+) -> None:
+    metrics = dict(run.metrics)
+    revision = int(metrics.get("basket_revision", 0)) + 1
+    metrics["basket_revision"] = revision
+    if isinstance(outcome.candidate, PublicationCandidate):
+        metrics["basket_marker"] = outcome.candidate.marker
+    universe = {
+        str(core_id): list(lot_ids)
+        for core_id, lot_ids in metrics.get("selection_universe", {}).items()
+    }
+    if isinstance(expected_universe, dict):
+        for core_id, lot_ids in expected_universe.items():
+            universe[core_id] = list(dict.fromkeys((*universe.get(core_id, ()), *lot_ids)))
+    metrics["selection_universe"] = universe
+    run.metrics = metrics
+
+    groups = session.scalars(
+        select(RecommendationGroup)
+        .where(RecommendationGroup.run_id == run.id)
+        .order_by(RecommendationGroup.rank)
+        .execution_options(populate_existing=True)
+    ).all()
+    groups_by_core = {
+        str(group.impact["core_group_id"]): group
+        for group in groups
+        if isinstance(group.impact, dict) and isinstance(group.impact.get("core_group_id"), str)
+    }
+    active_core_ids = {
+        core_id for leg in outcome.candidate.legs for core_id in leg.group_ids
+    }
+    overrides = annotation_overrides if isinstance(annotation_overrides, dict) else {}
+    for core_id, group in groups_by_core.items():
+        impact = dict(group.impact)
+        impact["candidate_sell_lot_ids"] = universe.get(core_id, [])
+        group.impact = impact
+        if isinstance(selected_groups, dict):
+            group.selected = bool(selected_groups.get(core_id, core_id in active_core_ids))
+        values = overrides.get(core_id)
+        if isinstance(values, dict):
+            for field in ("selected", "rejected", "note", "rejection_reason"):
+                if field in values:
+                    setattr(group, field, values[field])
+
+    group_ids = [group.id for group in groups]
+    leg_ids = session.scalars(
+        select(RecommendationLeg.id).where(RecommendationLeg.group_id.in_(group_ids))
+    ).all()
+    if leg_ids:
+        session.execute(delete(RecommendationSelectedLot).where(RecommendationSelectedLot.leg_id.in_(leg_ids)))
+        session.execute(delete(RecommendationGroupLeg).where(RecommendationGroupLeg.leg_id.in_(leg_ids)))
+        session.execute(delete(RecommendationLeg).where(RecommendationLeg.id.in_(leg_ids)))
+    session.execute(delete(RecommendationGroupLeg).where(RecommendationGroupLeg.group_id.in_(group_ids)))
+
+    lots_by_id = {lot.broker_lot_id: lot for lot in prepared.inputs.lots}
+    for leg in outcome.candidate.legs:
+        core_group_ids = list(leg.group_ids)
+        primary_group = groups_by_core[core_group_ids[0]]
+        security_id = session.scalar(select(Security.id).where(Security.ticker == leg.ticker.upper()))
+        assert security_id is not None
+        leg_id = f"subset-service-leg-{revision}-{leg.sequence}"
+        session.add(
+            RecommendationLeg(
+                id=leg_id,
+                group_id=primary_group.id,
+                account_id=1,
+                security_id=security_id,
+                side=leg.side,
+                shares=leg.shares,
+                estimated_unit_price_usd=leg.estimated_unit_price_usd,
+                net_st_realized_usd=Decimal(0),
+                net_lt_realized_usd=Decimal(0),
+                sequence=leg.sequence,
+                details={"core_group_ids": core_group_ids},
+            )
+        )
+        session.flush()
+        for core_group_id in core_group_ids:
+            session.add(RecommendationGroupLeg(group_id=groups_by_core[core_group_id].id, leg_id=leg_id))
+        for allocation in leg.selected_lots:
+            lot = lots_by_id[allocation.broker_lot_id]
+            session.add(
+                RecommendationSelectedLot(
+                    leg_id=leg_id,
+                    broker_lot_id=allocation.broker_lot_id,
+                    shares=allocation.shares,
+                    acquired_date=lot.acquired_date,
+                    adjusted_basis_usd=lot.adjusted_unit_basis_usd,
+                    st_lt_term="LT",
+                    realized_pl_usd=Decimal(0),
+                    selected=True,
+                )
+            )
+
+
 def _get_run_rows(
     session_factory: Callable[[], Session],
 ) -> tuple[OptimizerRun, RecommendationGroup, int]:
@@ -362,6 +647,53 @@ def _get_run_rows(
         assert group is not None
         return run, group, leg_count
 
+
+
+def _subset_inputs() -> ServiceInputs:
+    return ServiceInputs(
+        (
+            ServiceLot("AAA", "LOT-A1"),
+            ServiceLot("AAA", "LOT-A2"),
+            ServiceLot("BBB", "LOT-B1"),
+        )
+    )
+
+
+def _subset_snapshot(session_factory: Callable[[], Session]) -> tuple[object, ...]:
+    with session_factory() as session:
+        run = session.scalar(select(OptimizerRun).where(OptimizerRun.id == _SUBSET_RUN_ID))
+        assert run is not None
+        groups = session.scalars(
+            select(RecommendationGroup)
+            .where(RecommendationGroup.run_id == _SUBSET_RUN_ID)
+            .order_by(RecommendationGroup.rank)
+        ).all()
+        selected_lot_ids = tuple(
+            session.scalars(
+                select(RecommendationSelectedLot.broker_lot_id)
+                .join(RecommendationLeg, RecommendationLeg.id == RecommendationSelectedLot.leg_id)
+                .join(RecommendationGroupLeg, RecommendationGroupLeg.leg_id == RecommendationLeg.id)
+                .join(RecommendationGroup, RecommendationGroup.id == RecommendationGroupLeg.group_id)
+                .where(RecommendationGroup.run_id == _SUBSET_RUN_ID)
+                .order_by(RecommendationSelectedLot.broker_lot_id)
+            ).all()
+        )
+        legs = tuple(
+            session.execute(
+                select(RecommendationLeg.id, RecommendationLeg.side, RecommendationLeg.shares)
+                .join(RecommendationGroup, RecommendationGroup.id == RecommendationLeg.group_id)
+                .where(RecommendationGroup.run_id == _SUBSET_RUN_ID)
+                .order_by(RecommendationLeg.id)
+            ).all()
+        )
+        event_count = len(session.scalars(select(ActivityEvent.id)).all())
+        return (
+            int(run.metrics["basket_revision"]),
+            tuple((group.id, group.selected, group.rejected) for group in groups),
+            selected_lot_ids,
+            legs,
+            event_count,
+        )
 
 @pytest.mark.asyncio
 async def test_concurrent_subset_publication_cannot_overwrite_newer_basket(
@@ -387,7 +719,7 @@ async def test_concurrent_subset_publication_cannot_overwrite_newer_basket(
         if marker == "older":
             await release_older.wait()
         return optimizer_service.ValidatedOptimizerCandidate(
-            PublicationCandidate(marker), None, time.monotonic() + 60, "ready"
+            PublicationCandidate(marker, _sell_legs_for_ids(_inputs, sell_lot_ids)), None, time.monotonic() + 60, "ready"
         )
 
     monkeypatch.setattr(optimizer_service, "run_validated_candidate", fake_solve)
@@ -465,11 +797,12 @@ async def test_inflight_solve_is_invalidated_by_non_solving_rejection(
         sell_lot_ids: tuple[str, ...] | None = None,
         validation_executor: optimizer_service.BoundedValidationExecutor | None = None,
     ) -> optimizer_service.ValidatedOptimizerCandidate:
-        del sell_lot_ids, validation_executor
+        del validation_executor
+        assert sell_lot_ids is not None
         solve_started.set()
         await release_solve.wait()
         return optimizer_service.ValidatedOptimizerCandidate(
-            PublicationCandidate("stale-solve"), None, time.monotonic() + 60, "ready"
+            PublicationCandidate("stale-solve", _sell_legs_for_ids(_inputs, sell_lot_ids)), None, time.monotonic() + 60, "ready"
         )
 
     monkeypatch.setattr(optimizer_service, "run_validated_candidate", fake_solve)
@@ -551,3 +884,232 @@ async def test_note_only_annotation_does_not_increment_basket_revision(
     finally:
         session.close()
         engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_lot_intent_roundtrip_preserves_actual_selected_lots_and_rejected_groups(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inputs = _subset_inputs()
+    engine, session_factory = _create_sqlite_subset_optimizer_run(tmp_path)
+    _patch_real_run_dependencies(monkeypatch, inputs=inputs)
+    monkeypatch.setattr(optimizer_service, "_persist_candidate", _persist_subset_candidate)
+    solve_lot_sets: list[tuple[str, ...]] = []
+
+    async def fake_solve(
+        _inputs: object,
+        _supervisor: object,
+        *,
+        sell_lot_ids: tuple[str, ...] | None = None,
+        validation_executor: object = None,
+    ) -> optimizer_service.ValidatedOptimizerCandidate:
+        del validation_executor
+        assert sell_lot_ids is not None
+        selected_lots = tuple(sell_lot_ids)
+        solve_lot_sets.append(selected_lots)
+        candidate = PublicationCandidate(
+            f"solve-{len(solve_lot_sets)}", _sell_legs_for_ids(_inputs, selected_lots)
+        )
+        return optimizer_service.ValidatedOptimizerCandidate(
+            candidate, Validation(True), time.monotonic() + 60, "ready"
+        )
+
+    monkeypatch.setattr(optimizer_service, "run_validated_candidate", fake_solve)
+    supervisor = FakeSupervisor(None)
+    initial_snapshot = _subset_snapshot(session_factory)
+    assert initial_snapshot[2] == ("LOT-A1", "LOT-A2", "LOT-B1")
+
+    with session_factory() as session:
+        await optimizer_service.apply_real_lot_review_intent(
+            session,
+            _SUBSET_RUN_ID,
+            OptimizerLotReviewIntentInput(source_generation=1, broker_lot_ids=["LOT-A1", "LOT-B1"]),
+            supervisor,
+            None,
+            correlation_id="narrow-subset",
+        )
+    narrow_snapshot = _subset_snapshot(session_factory)
+    assert solve_lot_sets == [("LOT-A1", "LOT-B1")]
+    assert narrow_snapshot[0] == initial_snapshot[0] + 1
+    assert narrow_snapshot[2] == ("LOT-A1", "LOT-B1")
+
+    with session_factory() as session:
+        await optimizer_service.annotate_real_group(
+            session,
+            _SUBSET_RUN_ID,
+            _GROUP_B_ID,
+            RecommendationAnnotationInput(rejected=True, rejection_reason="reviewed"),
+            supervisor,
+            None,
+            correlation_id="reject-group-b",
+        )
+    rejected_snapshot = _subset_snapshot(session_factory)
+    assert solve_lot_sets[-1] == ("LOT-A1",)
+    assert rejected_snapshot[2] == ("LOT-A1",)
+    assert rejected_snapshot[1] == ((_GROUP_A_ID, True, False), (_GROUP_B_ID, False, True))
+
+    with session_factory() as session:
+        await optimizer_service.apply_real_selection(
+            session,
+            _SUBSET_RUN_ID,
+            OptimizerSelectionInput(selected_group_ids=[_GROUP_A_ID]),
+            supervisor,
+            None,
+            correlation_id="implicit-current-selection",
+        )
+    implicit_snapshot = _subset_snapshot(session_factory)
+    assert solve_lot_sets[-1] == ("LOT-A1",)
+    assert implicit_snapshot[2] == ("LOT-A1",)
+
+    solve_count_before_rejected_intent = len(solve_lot_sets)
+    before_rejected_intent = _subset_snapshot(session_factory)
+    with session_factory() as session, pytest.raises(AppError) as error:
+        await optimizer_service.apply_real_lot_review_intent(
+            session,
+            _SUBSET_RUN_ID,
+            OptimizerLotReviewIntentInput(source_generation=1, broker_lot_ids=["LOT-A1", "LOT-B1"]),
+            supervisor,
+            None,
+            correlation_id="rejected-lot-intent",
+        )
+    assert error.value.code == "rejected_recommendation_group"
+    assert error.value.details["basket_unchanged"] is True
+    assert len(solve_lot_sets) == solve_count_before_rejected_intent
+    assert _subset_snapshot(session_factory) == before_rejected_intent
+
+    with session_factory() as session:
+        await optimizer_service.annotate_real_group(
+            session,
+            _SUBSET_RUN_ID,
+            _GROUP_B_ID,
+            RecommendationAnnotationInput(rejected=False),
+            supervisor,
+            None,
+            correlation_id="explicit-restore-group-b",
+        )
+    restored_snapshot = _subset_snapshot(session_factory)
+    assert restored_snapshot[0] == before_rejected_intent[0] + 1
+    assert restored_snapshot[1] == ((_GROUP_A_ID, True, False), (_GROUP_B_ID, False, False))
+    assert restored_snapshot[2] == ("LOT-A1",)
+    assert len(solve_lot_sets) == solve_count_before_rejected_intent
+
+    with session_factory() as session:
+        await optimizer_service.apply_real_lot_review_intent(
+            session,
+            _SUBSET_RUN_ID,
+            OptimizerLotReviewIntentInput(source_generation=1, broker_lot_ids=["LOT-A1", "LOT-B1"]),
+            supervisor,
+            None,
+            correlation_id="explicit-restored-lot-intent",
+        )
+    final_snapshot = _subset_snapshot(session_factory)
+    assert solve_lot_sets[-1] == ("LOT-A1", "LOT-B1")
+    assert final_snapshot[2] == ("LOT-A1", "LOT-B1")
+    assert final_snapshot[1] == ((_GROUP_A_ID, True, False), (_GROUP_B_ID, True, False))
+    engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "worker_shape",
+    ["missing_sell", "no_trade", "fractional_quantity", "foreign_lot", "exceeds_available", "wrong_ticker"],
+)
+@pytest.mark.asyncio
+async def test_worker_subset_result_must_exactly_match_positive_whole_lot_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, worker_shape: str
+) -> None:
+    inputs = _subset_inputs()
+    engine, session_factory = _create_sqlite_subset_optimizer_run(tmp_path)
+    _patch_real_run_dependencies(monkeypatch, inputs=inputs)
+    monkeypatch.setattr(optimizer_service, "_persist_candidate", _persist_subset_candidate)
+    requested_lots = ("LOT-A1", "LOT-B1")
+    solve_lot_sets: list[tuple[str, ...]] = []
+
+    async def fake_solve(
+        _inputs: object,
+        _supervisor: object,
+        *,
+        sell_lot_ids: tuple[str, ...] | None = None,
+        validation_executor: object = None,
+    ) -> optimizer_service.ValidatedOptimizerCandidate:
+        del validation_executor
+        assert sell_lot_ids is not None
+        solve_lot_sets.append(tuple(sell_lot_ids))
+        candidate_status = "ready"
+        if worker_shape == "no_trade":
+            candidate = Candidate((), status="no_trade")
+            candidate_status = "no_trade"
+        elif worker_shape == "missing_sell":
+            candidate = Candidate(_sell_legs_for_ids(_inputs, ("LOT-A1",)))
+        else:
+            normal_legs = _sell_legs_for_ids(_inputs, requested_lots)
+            if worker_shape == "fractional_quantity":
+                aaa = normal_legs[0]
+                fractional_aaa = ConsolidatedLeg(
+                    leg_id=aaa.leg_id,
+                    side="SELL",
+                    ticker=aaa.ticker,
+                    shares=Decimal("0.5"),
+                    estimated_unit_price_usd=aaa.estimated_unit_price_usd,
+                    selected_lots=(LotAllocation("LOT-A1", Decimal("0.5")),),
+                    sequence=aaa.sequence,
+                    group_ids=aaa.group_ids,
+                )
+                candidate = Candidate((fractional_aaa, *normal_legs[1:]))
+            else:
+                bbb = normal_legs[1]
+                if worker_shape == "foreign_lot":
+                    candidate = Candidate(
+                        (
+                            normal_legs[0],
+                            replace(bbb, selected_lots=(LotAllocation("LOT-FOREIGN", Decimal(1)),)),
+                        )
+                    )
+                elif worker_shape == "exceeds_available":
+                    candidate = Candidate(
+                        (
+                            normal_legs[0],
+                            replace(
+                                bbb,
+                                shares=Decimal(2),
+                                selected_lots=(LotAllocation("LOT-B1", Decimal(2)),),
+                            ),
+                        )
+                    )
+                else:
+                    candidate = Candidate(
+                        (
+                            replace(normal_legs[0], selected_lots=(LotAllocation("LOT-B1", Decimal(1)),)),
+                            replace(bbb, selected_lots=(LotAllocation("LOT-A1", Decimal(1)),)),
+                        )
+                    )
+        return optimizer_service.ValidatedOptimizerCandidate(
+            candidate, Validation(True), time.monotonic() + 60, candidate_status
+        )
+
+    monkeypatch.setattr(optimizer_service, "run_validated_candidate", fake_solve)
+    before = _subset_snapshot(session_factory)
+    with session_factory() as session, pytest.raises(AppError) as error:
+        await optimizer_service.apply_real_lot_review_intent(
+            session,
+            _SUBSET_RUN_ID,
+            OptimizerLotReviewIntentInput(source_generation=1, broker_lot_ids=list(requested_lots)),
+            FakeSupervisor(None),
+            None,
+            correlation_id=f"invalid-worker-{worker_shape}",
+        )
+
+    assert error.value.code == "optimizer_subset_rejected"
+    assert error.value.details["basket_unchanged"] is True
+    assert error.value.details["expected_sell_lot_ids"] == list(requested_lots)
+    assert solve_lot_sets == [requested_lots]
+    if worker_shape == "fractional_quantity":
+        assert "sell_quantity_not_positive_whole_shares" in error.value.details["intent_errors"]
+        assert "sell_lot_quantity_not_positive_whole_shares" in error.value.details["intent_errors"]
+    if worker_shape == "foreign_lot":
+        assert "sell_lot_id_outside_frozen_inputs" in error.value.details["intent_errors"]
+    if worker_shape == "exceeds_available":
+        assert "sell_lot_quantity_exceeds_frozen_available_shares" in error.value.details["intent_errors"]
+    if worker_shape == "wrong_ticker":
+        assert "sell_lot_ticker_mismatch" in error.value.details["intent_errors"]
+    assert _subset_snapshot(session_factory) == before
+    engine.dispose()

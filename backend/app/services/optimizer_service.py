@@ -636,7 +636,7 @@ def _fresh_run(session: Session, run_id: str) -> OptimizerRun:
 
 def _existing_group_state(
     session: Session, run: OptimizerRun
-) -> tuple[dict[str, list[str]], dict[str, dict[str, object]]]:
+) -> tuple[dict[str, list[str]], dict[str, dict[str, object]], dict[str, list[str]]]:
     groups = session.scalars(
         select(RecommendationGroup)
         .where(RecommendationGroup.run_id == run.id)
@@ -645,6 +645,7 @@ def _existing_group_state(
     ).all()
     universe: dict[str, list[str]] = {}
     annotations: dict[str, dict[str, object]] = {}
+    selected_lots_by_core: dict[str, list[str]] = {}
     existing_universe = run.metrics.get("selection_universe", {}) if isinstance(run.metrics, dict) else {}
     if isinstance(existing_universe, dict):
         universe = {str(key): _unique_strings(value) for key, value in existing_universe.items()}
@@ -655,19 +656,25 @@ def _existing_group_state(
         group_leg_ids = session.scalars(
             select(RecommendationGroupLeg.leg_id).where(RecommendationGroupLeg.group_id == group.id)
         ).all()
+        current_selected_lots: list[str] = []
         if group_leg_ids:
-            lots.extend(
+            current_selected_lots = list(
                 session.scalars(
                     select(RecommendationSelectedLot.broker_lot_id)
                     .join(RecommendationLeg, RecommendationLeg.id == RecommendationSelectedLot.leg_id)
                     .where(
                         RecommendationLeg.id.in_(group_leg_ids),
                         RecommendationLeg.side == "SELL",
+                        RecommendationSelectedLot.selected.is_(True),
                     )
+                    .order_by(RecommendationLeg.sequence, RecommendationSelectedLot.id)
                 ).all()
             )
+            lots.extend(current_selected_lots)
         if lots:
             universe[core_id] = list(dict.fromkeys((*universe.get(core_id, ()), *lots)))
+        if current_selected_lots:
+            selected_lots_by_core.setdefault(core_id, []).extend(current_selected_lots)
         annotations[core_id] = {
             "selected": bool(group.selected),
             "rejected": bool(group.rejected),
@@ -680,7 +687,10 @@ def _existing_group_state(
             "impact": impact,
             "dependencies": list(group.dependencies or []),
         }
-    return universe, annotations
+    selected_lots_by_core = {
+        core_id: list(dict.fromkeys(lot_ids)) for core_id, lot_ids in selected_lots_by_core.items()
+    }
+    return universe, annotations, selected_lots_by_core
 
 
 def _clear_run_recommendations(session: Session, run: OptimizerRun) -> None:
@@ -711,7 +721,7 @@ def _persist_candidate(
     candidate = outcome.candidate
     metadata = candidate.metadata
     legs: tuple[ConsolidatedLeg, ...] = candidate.legs
-    old_universe, old_annotations = _existing_group_state(session, run)
+    old_universe, old_annotations, _old_selected_lots = _existing_group_state(session, run)
     universe = {key: list(value) for key, value in old_universe.items()}
     for key, value in (expected_universe or {}).items():
         universe[key] = list(dict.fromkeys((*universe.get(key, ()), *value)))
@@ -1032,7 +1042,7 @@ def _run_state(
             status_code=409,
             details={"basket_unchanged": True},
         )
-    universe, annotations = _existing_group_state(session, run)
+    universe, annotations, current_selected_lots = _existing_group_state(session, run)
     metrics = run.metrics if isinstance(run.metrics, dict) else {}
     state = _RunState(
         run_id=run.id,
@@ -1050,6 +1060,7 @@ def _run_state(
                 "note": row.note,
                 "rejection_reason": row.rejection_reason,
                 "candidate_sell_lot_ids": list(universe.get(str((row.impact or {}).get("core_group_id") or row.id), [])),
+                "selected_sell_lot_ids": list(current_selected_lots.get(str((row.impact or {}).get("core_group_id") or row.id), [])),
                 "impact": row.impact,
             }
             for row in session.scalars(
@@ -1095,6 +1106,14 @@ def _selection_payload_lots(
     if unknown_groups:
         raise AppError("unknown_recommendation_group", "The selection contains an unknown trade group", status_code=422,
                        details={"unknown_group_ids": sorted(unknown_groups), "basket_unchanged": True})
+    unselected_groups = set(request.selected_sell_lots) - set(request.selected_group_ids)
+    if unselected_groups:
+        raise AppError(
+            "invalid_group_lot_selection",
+            "Sell-lot selections may only be supplied for selected trade groups",
+            status_code=422,
+            details={"unselected_group_ids": sorted(unselected_groups), "basket_unchanged": True},
+        )
     selected_core_ids: set[str] = set()
     requested_lots: list[str] = []
     seen_lots: set[str] = set()
@@ -1105,12 +1124,17 @@ def _selection_payload_lots(
             raise AppError("rejected_recommendation_group", "A rejected trade group cannot be selected", status_code=409,
                            details={"group_id": public_id, "basket_unchanged": True})
         allowed = set(state.selection_universe.get(core_id, ()))
-        lot_ids = request.selected_sell_lots.get(public_id, list(allowed))
+        if public_id in request.selected_sell_lots:
+            lot_ids = request.selected_sell_lots[public_id]
+        elif row["selected"]:
+            lot_ids = _unique_strings(row.get("selected_sell_lot_ids"))
+        else:
+            lot_ids = list(allowed)
         invalid = set(lot_ids) - allowed
         if invalid:
             raise AppError("invalid_group_lot_selection", "Selected broker lots do not belong to this saved trade group", status_code=422,
                            details={"group_id": public_id, "unknown_lot_ids": sorted(invalid), "basket_unchanged": True})
-        if not allowed:
+        if not allowed or not lot_ids:
             raise AppError("group_has_no_sell_lots", "A real optimizer trade group must identify exact SELL lots before re-solving", status_code=422,
                            details={"group_id": public_id, "basket_unchanged": True})
         selected_core_ids.add(core_id)
@@ -1146,7 +1170,129 @@ def _validate_intent_lots(state: _RunState, request: OptimizerLotReviewIntentInp
             status_code=422,
             details={"missing_lot_ids": missing, "unavailable_lot_ids": unavailable, "basket_unchanged": True},
         )
+    rejected_groups_by_lot: dict[str, set[str]] = {}
+    rejected_core_ids: set[str] = set()
+    for row in state.group_rows:
+        if row["rejected"]:
+            core_id = str(row["core_group_id"])
+            rejected_core_ids.add(core_id)
+            for lot_id in state.selection_universe.get(core_id, ()):
+                rejected_groups_by_lot.setdefault(lot_id, set()).add(str(row["id"]))
+    rejected_lots = [
+        lot_id
+        for lot_id in request.broker_lot_ids
+        if lot_id in rejected_groups_by_lot
+        or f"sale:{by_id[lot_id].ticker.upper()}" in rejected_core_ids
+    ]
+    if rejected_lots:
+        rejected_group_ids = sorted(
+            {
+                group_id
+                for lot_id in rejected_lots
+                for group_id in rejected_groups_by_lot.get(lot_id, ())
+            }
+            | {
+                str(row["id"])
+                for lot_id in rejected_lots
+                for row in state.group_rows
+                if row["rejected"]
+                and f"sale:{by_id[lot_id].ticker.upper()}" == str(row["core_group_id"])
+            }
+        )
+        raise AppError(
+            "rejected_recommendation_group",
+            "A lot from a rejected trade group cannot be selected until the group is restored",
+            status_code=409,
+            details={"group_ids": rejected_group_ids, "broker_lot_ids": rejected_lots, "basket_unchanged": True},
+        )
     return tuple(request.broker_lot_ids)
+
+
+def _positive_whole_shares(value: object) -> bool:
+    return isinstance(value, Decimal) and value.is_finite() and value > 0 and value == value.to_integral_value()
+
+
+def _sell_lot_intent_errors(
+    prepared: PreparedOptimizerRun,
+    outcome: ValidatedOptimizerCandidate,
+    selected_lot_ids: tuple[str, ...],
+) -> dict[str, object] | None:
+    expected_ids = list(selected_lot_ids)
+    expected = set(expected_ids)
+    frozen_lots: dict[str, object] = {}
+    for lot in getattr(prepared.inputs, "lots", ()):
+        lot_id = getattr(lot, "broker_lot_id", None)
+        if isinstance(lot_id, str):
+            frozen_lots[lot_id] = lot
+    frozen_lot_ids = set(frozen_lots)
+    actual_ids: list[str] = []
+    errors: set[str] = set()
+    if len(expected_ids) != len(expected):
+        errors.add("duplicate_requested_lot_ids")
+    if expected and outcome.status != "ready":
+        errors.add("nonempty_intent_requires_ready_result")
+    legs = getattr(outcome.candidate, "legs", ())
+    if not isinstance(legs, tuple):
+        errors.add("malformed_candidate_legs")
+        legs = ()
+    for leg in legs:
+        side = getattr(leg, "side", None)
+        allocations = getattr(leg, "selected_lots", ())
+        if side == "BUY":
+            if allocations:
+                errors.add("buy_leg_has_sell_lot_attribution")
+            continue
+        if side != "SELL":
+            errors.add("invalid_trade_leg_side")
+            continue
+        leg_shares = getattr(leg, "shares", None)
+        if not _positive_whole_shares(leg_shares):
+            errors.add("sell_quantity_not_positive_whole_shares")
+        if not isinstance(allocations, tuple) or not allocations:
+            errors.add("sell_leg_missing_lot_attribution")
+            continue
+        allocated_shares = Decimal(0)
+        for allocation in allocations:
+            broker_lot_id = getattr(allocation, "broker_lot_id", None)
+            quantity = getattr(allocation, "shares", None)
+            if not isinstance(broker_lot_id, str) or not broker_lot_id:
+                errors.add("sell_lot_id_missing")
+            else:
+                actual_ids.append(broker_lot_id)
+                if broker_lot_id not in frozen_lot_ids:
+                    errors.add("sell_lot_id_outside_frozen_inputs")
+                else:
+                    frozen_ticker = getattr(frozen_lots[broker_lot_id], "ticker", None)
+                    leg_ticker = getattr(leg, "ticker", None)
+                    if (
+                        not isinstance(frozen_ticker, str)
+                        or not isinstance(leg_ticker, str)
+                        or frozen_ticker.upper() != leg_ticker.upper()
+                    ):
+                        errors.add("sell_lot_ticker_mismatch")
+            if not _positive_whole_shares(quantity):
+                errors.add("sell_lot_quantity_not_positive_whole_shares")
+            else:
+                allocated_shares += quantity
+                if isinstance(broker_lot_id, str) and broker_lot_id in frozen_lots:
+                    available_shares = getattr(frozen_lots[broker_lot_id], "available_shares", None)
+                    if (
+                        not isinstance(available_shares, Decimal)
+                        or not available_shares.is_finite()
+                        or quantity > available_shares
+                    ):
+                        errors.add("sell_lot_quantity_exceeds_frozen_available_shares")
+        if _positive_whole_shares(leg_shares) and allocated_shares != leg_shares:
+            errors.add("sell_quantity_does_not_match_lot_attributions")
+    if set(actual_ids) != expected or len(actual_ids) != len(expected):
+        errors.add("sell_lot_ids_do_not_match_intent")
+    if not errors:
+        return None
+    return {
+        "intent_errors": sorted(errors),
+        "expected_sell_lot_ids": expected_ids,
+        "actual_sell_lot_ids": actual_ids,
+    }
 
 
 async def _recompute_real_basket(
@@ -1181,6 +1327,18 @@ async def _recompute_real_basket(
             details={"optimizer_status": outcome.status,
                      "warnings": list(getattr(outcome.candidate.metadata, "warnings", ())),
                      "basket_unchanged": True},
+        )
+    intent_errors = _sell_lot_intent_errors(state.prepared, outcome, selected_lot_ids)
+    if intent_errors is not None:
+        raise AppError(
+            "optimizer_subset_rejected",
+            "The optimizer result did not exactly satisfy the requested SELL-lot intent; the saved basket is unchanged",
+            status_code=422,
+            details={
+                "optimizer_status": outcome.status,
+                **intent_errors,
+                "basket_unchanged": True,
+            },
         )
     with session.begin():
         run = _fresh_run(session, run_id)
@@ -1326,7 +1484,7 @@ async def annotate_real_group(
             lot_id
             for row in state.group_rows
             if str(row["core_group_id"]) != core_id and row["selected"] and not row["rejected"]
-            for lot_id in state.selection_universe.get(str(row["core_group_id"]), ())
+            for lot_id in _unique_strings(row.get("selected_sell_lot_ids"))
         )
         overrides = {
             core_id: {

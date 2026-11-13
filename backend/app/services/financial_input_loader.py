@@ -15,6 +15,7 @@ from app.db.models import (
     CurrentTaxLot,
     PolicyAllowedSecurity,
     PolicyRevision,
+    PolicySectorBand,
     PolicySecurityOverride,
     PolicySleeve,
     Security,
@@ -38,6 +39,7 @@ from app.domain.financial_inputs import (
     LotInput,
     PolicyInput,
     PolicySettings,
+    PolicySectorBandInput,
     PositionInput,
     QuoteInput,
     SecurityInput,
@@ -166,10 +168,19 @@ def load_policy_input(session: Session, revision: PolicyRevision) -> PolicyInput
         field: getattr(revision, field)
         for field in PolicySettingsInput.model_fields
     }
+    sector_rows = session.scalars(
+        select(PolicySectorBand)
+        .where(PolicySectorBand.policy_revision_id == revision.id)
+        .order_by(PolicySectorBand.sector_key)
+    ).all()
     return PolicyInput(
         revision_id=revision.id,
         allocation=allocation,
         settings=PolicySettings.from_mapping(settings),
+        sector_bands=tuple(
+            PolicySectorBandInput(row.sector_key, row.target_weight_pct, row.band_pct)
+            for row in sector_rows
+        ),
         revision_number=revision.revision_number,
         status=revision.status,
         created_at=revision.created_at,

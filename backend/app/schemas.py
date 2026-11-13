@@ -159,6 +159,12 @@ class SleeveInput(StrictModel):
     is_cash_sleeve: bool = False
     enabled: bool = True
 
+class SectorBandInput(StrictModel):
+    sector_key: str = Field(min_length=1, max_length=128)
+    target_weight_pct: ExactDecimal
+    band_pct: ExactDecimal
+
+
 
 class AllowedSecurityInput(StrictModel):
     ticker: str = Field(min_length=1, max_length=32)
@@ -240,12 +246,19 @@ class PolicySettingsInput(StrictModel):
 
 
 class PolicyDraftInput(StrictModel):
+    sector_bands: list[SectorBandInput] = Field(default_factory=list)
     settings: PolicySettingsInput
     sleeves: list[SleeveInput]
     allowed_securities: list[AllowedSecurityInput] = Field(default_factory=list)
     overrides: list[OverrideInput] = Field(default_factory=list)
     reassignments: dict[str, str] = Field(default_factory=dict)
     source_revision_id: str | None = None
+
+
+class PolicySectorBandResponse(StrictModel):
+    sector_key: str
+    target_weight_pct: str
+    band_pct: str
 
 
 
@@ -585,6 +598,7 @@ class PolicyValidationErrorResponse(StrictModel):
 
 
 class PolicyRevisionResponse(StrictModel):
+    sector_bands: list[PolicySectorBandResponse] = Field(default_factory=list)
     id: str
     revision_number: int
     status: Literal["DRAFT", "ACTIVE", "SUPERSEDED"]

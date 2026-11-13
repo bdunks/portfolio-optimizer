@@ -129,6 +129,13 @@ class PolicySettings:
 
 
 @dataclass(frozen=True, slots=True)
+class PolicySectorBandInput:
+    sector_key: str
+    target_weight_pct: Decimal
+    band_pct: Decimal
+
+
+@dataclass(frozen=True, slots=True)
 class PolicyInput:
     revision_id: str
     allocation: AllocationPolicy
@@ -137,15 +144,15 @@ class PolicyInput:
     status: str = ""
     created_at: datetime | None = None
     activated_at: datetime | None = None
-
+    sector_bands: tuple[PolicySectorBandInput, ...] = ()
     def to_provenance(self) -> dict[str, object]:
         return {
             "id": self.revision_id,
+            "settings": self.settings.to_provenance(),
             "revision_number": self.revision_number,
             "status": self.status,
             "created_at": _iso_datetime(self.created_at) if self.created_at else None,
             "activated_at": _iso_datetime(self.activated_at) if self.activated_at else None,
-            "settings": self.settings.to_provenance(),
             "sleeves": [
                 {
                     "sleeve_key": row.key,
@@ -161,6 +168,14 @@ class PolicyInput:
                     "is_cash_sleeve": row.cash_sleeve,
                 }
                 for row in self.allocation.sleeves
+            ],
+            "sector_bands": [
+                {
+                    "sector_key": row.sector_key,
+                    "target_weight_pct": str(row.target_weight_pct),
+                    "band_pct": str(row.band_pct),
+                }
+                for row in self.sector_bands
             ],
             "allowed_securities": [
                 {
@@ -479,6 +494,20 @@ def financial_inputs_from_provenance(
     sleeve_data = policy_data.get("sleeves")
     allowed_data = policy_data.get("allowed_securities")
     override_data = policy_data.get("overrides")
+    sector_band_data = policy_data.get("sector_bands", [])
+    if not isinstance(sector_band_data, list):
+        raise ValueError("frozen sector band policy data is malformed")
+    sector_bands = tuple(
+        PolicySectorBandInput(
+            sector_key=str(row["sector_key"]),
+            target_weight_pct=Decimal(str(row["target_weight_pct"])),
+            band_pct=Decimal(str(row["band_pct"])),
+        )
+        for row in sector_band_data
+        if isinstance(row, dict)
+    )
+    if len(sector_bands) != len(sector_band_data):
+        raise ValueError("frozen sector band policy data is malformed")
     if not all(isinstance(value, (dict, list)) for value in (settings_data, sleeve_data, allowed_data, override_data)):
         raise ValueError("frozen financial provenance contains malformed policy data")
     sleeves = tuple(
@@ -526,6 +555,7 @@ def financial_inputs_from_provenance(
         revision_id=str(policy_data.get("id", "")),
         allocation=AllocationPolicy(sleeves, allowed, overrides),
         settings=PolicySettings.from_mapping(settings_data),
+        sector_bands=sector_bands,
         revision_number=int(policy_data.get("revision_number", 0)),
         status=str(policy_data.get("status", "")),
         created_at=_parse_datetime(policy_data["created_at"]) if policy_data.get("created_at") else None,

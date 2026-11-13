@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.db.models import (
     CurrentPosition,
     PolicyAllowedSecurity,
+    PolicySectorBand,
     PolicyRevision,
     PolicySecurityOverride,
     PolicySleeve,
@@ -22,6 +23,7 @@ from app.domain.allocation import (
 )
 from app.domain.decimal_math import exact_sum
 from app.schemas import PolicyDraftInput, PolicySettingsInput, SleeveInput
+
 from app.services.errors import AppError
 from app.services.financial_input_loader import load_allocation_policy
 
@@ -113,6 +115,17 @@ def create_policy_draft(session: Session, payload: PolicyDraftInput) -> PolicyRe
                 status_code=422,
                 details={"source_sleeve_key": source_key, "target_sleeve_key": target_key},
             )
+    sector_keys = [item.sector_key for item in payload.sector_bands]
+    if len(set(sector_keys)) != len(sector_keys):
+        raise AppError("duplicate_sector_band", "Sector keys must be unique", status_code=422)
+    if any(
+        not item.target_weight_pct.is_finite()
+        or not item.band_pct.is_finite()
+        or not Decimal(0) <= item.target_weight_pct <= ONE_HUNDRED
+        or not Decimal(0) <= item.band_pct <= ONE_HUNDRED
+        for item in payload.sector_bands
+    ):
+        raise AppError("invalid_sector_band", "Sector targets and bands must be finite values from 0 to 100", status_code=422)
 
     # Cache current holdings and their source-policy resolution to enforce explicit reassignment.
     positions = session.scalars(
@@ -146,6 +159,15 @@ def create_policy_draft(session: Session, payload: PolicyDraftInput) -> PolicyRe
     )
     session.add(revision)
     session.flush()
+    for item in payload.sector_bands:
+        session.add(
+            PolicySectorBand(
+                policy_revision_id=revision_id,
+                sector_key=item.sector_key,
+                target_weight_pct=item.target_weight_pct,
+                band_pct=item.band_pct,
+            )
+        )
 
     for item in ordered_sleeves:
         session.add(
@@ -289,6 +311,23 @@ def create_policy_draft(session: Session, payload: PolicyDraftInput) -> PolicyRe
 
 def validate_policy_revision(session: Session, revision: PolicyRevision) -> list[dict[str, str]]:
     errors: list[dict[str, str]] = []
+    sector_bands = session.scalars(
+        select(PolicySectorBand).where(PolicySectorBand.policy_revision_id == revision.id)
+    ).all()
+    sector_keys = [row.sector_key for row in sector_bands]
+    if len(set(sector_keys)) != len(sector_keys):
+        errors.append({"code": "duplicate_sector_band", "message": "Sector keys must be unique"})
+    if sector_bands:
+        if any(
+            not row.target_weight_pct.is_finite()
+            or not row.band_pct.is_finite()
+            or not Decimal(0) <= row.target_weight_pct <= ONE_HUNDRED
+            or not Decimal(0) <= row.band_pct <= ONE_HUNDRED
+            for row in sector_bands
+        ):
+            errors.append({"code": "invalid_sector_band", "message": "Sector targets and bands must be finite values from 0 to 100"})
+        if exact_sum(row.target_weight_pct for row in sector_bands) != ONE_HUNDRED:
+            errors.append({"code": "sector_target_sum", "message": "Configured sector targets must sum exactly to 100% of invested security exposure"})
     sleeves = session.scalars(
         select(PolicySleeve).where(PolicySleeve.policy_revision_id == revision.id)
     ).all()
@@ -448,6 +487,11 @@ def policy_to_dict(session: Session, revision: PolicyRevision) -> dict[str, obje
         .where(PolicySecurityOverride.policy_revision_id == revision.id)
         .order_by(PolicySecurityOverride.security_id)
     ).all()
+    sector_bands = session.scalars(
+        select(PolicySectorBand)
+        .where(PolicySectorBand.policy_revision_id == revision.id)
+        .order_by(PolicySectorBand.sector_key)
+    ).all()
     return {
         "id": revision.id,
         "revision_number": revision.revision_number,
@@ -455,6 +499,14 @@ def policy_to_dict(session: Session, revision: PolicyRevision) -> dict[str, obje
         "created_at": revision.created_at,
         "activated_at": revision.activated_at,
         "settings": _policy_settings(revision),
+        "sector_bands": [
+            {
+                "sector_key": row.sector_key,
+                "target_weight_pct": str(row.target_weight_pct),
+                "band_pct": str(row.band_pct),
+            }
+            for row in sector_bands
+        ],
         "sleeves": [
             {
                 "sleeve_key": s.sleeve_key,

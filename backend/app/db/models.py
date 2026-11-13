@@ -322,6 +322,24 @@ class PolicySleeve(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
+
+class PolicySectorBand(Base):
+    __tablename__ = "policy_sector_band"
+    __table_args__ = (
+        UniqueConstraint("policy_revision_id", "sector_key", name="uq_policy_sector_band_key"),
+        CheckConstraint("target_weight_pct NOT LIKE '-%'", name="ck_sector_band_target_nonnegative"),
+        CheckConstraint("band_pct NOT LIKE '-%'", name="ck_sector_band_band_nonnegative"),
+        Index("ix_policy_sector_band_revision", "policy_revision_id", "sector_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    policy_revision_id: Mapped[str] = mapped_column(
+        ForeignKey("policy_revision.id", ondelete="CASCADE"), nullable=False
+    )
+    sector_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    target_weight_pct: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
+    band_pct: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
+
 class PolicyAllowedSecurity(Base):
     __tablename__ = "policy_allowed_security"
     __table_args__ = (

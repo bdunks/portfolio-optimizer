@@ -9,12 +9,12 @@ independent validation and publication.
 from __future__ import annotations
 
 import asyncio
+import math
 import multiprocessing
-import pickle
 import time
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
 from typing import TypeVar
@@ -75,6 +75,17 @@ def _child_entry[InputT, ResultT](
         connection.close()
 
 
+@dataclass(slots=True)
+class _WorkerHandle:
+    process: BaseProcess
+    parent_connection: Connection
+    child_connection: Connection
+    setup_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    startup_task: asyncio.Task[None] | None = None
+    receiver_task: asyncio.Task[object] | None = None
+    cleanup_task: asyncio.Task[None] | None = None
+
+
 class ProcessSupervisor:
     """Run a bounded number of computations in independently killable processes."""
 
@@ -82,12 +93,12 @@ class ProcessSupervisor:
         if max_workers < 1:
             raise ValueError("max_workers must be at least 1")
         self._max_workers = max_workers
-        self._active: set[BaseProcess] = set()
+        self._active: dict[BaseProcess, _WorkerHandle] = {}
         self._closed = False
 
     @property
     def active_workers(self) -> int:
-        """Number of currently supervised child processes."""
+        """Number of jobs still holding a worker capacity slot."""
 
         return len(self._active)
 
@@ -99,25 +110,32 @@ class ProcessSupervisor:
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         validation_reserve_seconds: float = DEFAULT_VALIDATION_RESERVE_SECONDS,
     ) -> WorkerResult[ResultT]:
-        """Run one worker, reserving parent time for validation before the overall deadline.
-
-        Raises ``WorkerCapacityError`` without queueing, ``WorkerTimeoutError``
-        on overrun, or ``WorkerExecutionError`` on child failure.
-        """
+        """Run one worker and reserve time before the overall deadline for validation."""
 
         if self._closed:
             raise RuntimeError("ProcessSupervisor is closed")
-        if timeout_seconds <= 0 or validation_reserve_seconds < 0:
-            raise ValueError("timeout must be positive and validation reserve nonnegative")
-        if validation_reserve_seconds >= timeout_seconds:
-            raise ValueError("validation reserve must be less than timeout")
+        try:
+            valid_timeout = (
+                math.isfinite(timeout_seconds) and 0 < timeout_seconds <= DEFAULT_TIMEOUT_SECONDS
+            )
+            valid_reserve = (
+                math.isfinite(validation_reserve_seconds) and validation_reserve_seconds >= 0
+            )
+        except TypeError as error:
+            raise ValueError("timeout and validation reserve must be finite numbers") from error
+        if not valid_timeout:
+            raise ValueError(
+                f"timeout must be finite and between 0 and {DEFAULT_TIMEOUT_SECONDS} seconds"
+            )
+        if not valid_reserve or validation_reserve_seconds >= timeout_seconds:
+            raise ValueError(
+                "validation reserve must be finite, nonnegative, and less than timeout"
+            )
         if len(self._active) >= self._max_workers:
             raise WorkerCapacityError("optimizer worker capacity is full")
-        try:
-            pickle.dumps((worker_input, worker))
-        except (pickle.PickleError, TypeError, AttributeError) as error:
-            raise TypeError("worker input and callable must be pickleable") from error
 
+        # Start the budget before process setup/argument serialization. Startup and
+        # connection decoding run off-loop but remain owned by this bounded job.
         overall_deadline = time.monotonic() + timeout_seconds
         computation_deadline = overall_deadline - validation_reserve_seconds
         context = multiprocessing.get_context("spawn")
@@ -127,44 +145,92 @@ class ProcessSupervisor:
             args=(child_connection, worker, worker_input, computation_deadline),
             daemon=True,
         )
-        self._active.add(process)
+        handle = _WorkerHandle(process, parent_connection, child_connection)
+        self._active[process] = handle
         try:
-            process.start()
-            child_connection.close()
-            while remaining_seconds(computation_deadline) > 0:
-                if parent_connection.poll():
-                    try:
-                        status, payload = parent_connection.recv()
-                    except EOFError as error:
-                        raise WorkerExecutionError("worker exited without a result") from error
-                    if status != "ok":
-                        raise WorkerExecutionError(str(payload))
-                    return WorkerResult(payload, computation_deadline, overall_deadline)
-                if not process.is_alive():
-                    if parent_connection.poll():
-                        continue
-                    raise WorkerExecutionError(
-                        f"worker exited without a result (exit code {process.exitcode})"
-                    )
-                await asyncio.sleep(min(0.01, remaining_seconds(computation_deadline)))
-            raise WorkerTimeoutError("optimizer computation deadline exceeded")
+            async with handle.setup_lock:
+                handle.startup_task = asyncio.create_task(asyncio.to_thread(process.start))
+                await self._wait_task_until(handle.startup_task, computation_deadline)
+                child_connection.close()
+
+                # recv() may block on a partial frame or spend time reconstructing a
+                # result. Its single reader is bounded by active job slots and owned
+                # through cleanup; it never blocks the event loop.
+                handle.receiver_task = asyncio.create_task(
+                    asyncio.to_thread(parent_connection.recv)
+                )
+            try:
+                message = await self._wait_task_until(handle.receiver_task, computation_deadline)
+            except EOFError as error:
+                raise WorkerExecutionError("worker exited without a result") from error
+            if time.monotonic() >= computation_deadline:
+                raise WorkerTimeoutError("optimizer computation deadline exceeded")
+            if (
+                not isinstance(message, tuple)
+                or len(message) != 2
+                or not isinstance(message[0], str)
+            ):
+                raise WorkerExecutionError("worker returned a malformed result")
+            status, payload = message
+            if status != "ok":
+                raise WorkerExecutionError(str(payload))
+            return WorkerResult(payload, computation_deadline, overall_deadline)
         finally:
-            parent_connection.close()
-            child_connection.close()
-            await asyncio.to_thread(self._stop_and_reap, process, True)
-            self._active.discard(process)
+            await self._await_cleanup(handle)
 
     async def aclose(self) -> None:
-        """Stop and reap any active workers and prevent subsequent submissions."""
+        """Stop new work and await the same per-job cleanup used by run()."""
 
         self._closed = True
-        processes = tuple(self._active)
-        for process in processes:
-            await asyncio.to_thread(self._stop_and_reap, process, False)
-            self._active.discard(process)
+        handles = tuple(self._active.values())
+        await asyncio.gather(*(self._await_cleanup(handle) for handle in handles))
+
+    async def _wait_task_until(self, task: asyncio.Task[ResultT], deadline: float) -> ResultT:
+        remaining = remaining_seconds(deadline)
+        if remaining <= 0:
+            raise WorkerTimeoutError("optimizer computation deadline exceeded")
+        done, _ = await asyncio.wait((task,), timeout=remaining)
+        if not done:
+            raise WorkerTimeoutError("optimizer computation deadline exceeded")
+        return task.result()
+
+    async def _await_cleanup(self, handle: _WorkerHandle) -> None:
+        if handle.cleanup_task is None:
+            handle.cleanup_task = asyncio.create_task(self._cleanup(handle))
+        cleanup_task = handle.cleanup_task
+        cancelled = False
+        while not cleanup_task.done():
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                cancelled = True
+        cleanup_task.result()
+        if cancelled:
+            raise asyncio.CancelledError
+
+    async def _cleanup(self, handle: _WorkerHandle) -> None:
+        process = handle.process
+        try:
+            async with handle.setup_lock:
+                if handle.startup_task is not None:
+                    await asyncio.gather(handle.startup_task, return_exceptions=True)
+                if process.pid is not None:
+                    await asyncio.to_thread(self._stop_and_reap, process)
+                if handle.receiver_task is not None:
+                    await asyncio.gather(handle.receiver_task, return_exceptions=True)
+        finally:
+            try:
+                handle.parent_connection.close()
+                handle.child_connection.close()
+            finally:
+                try:
+                    if process.pid is not None:
+                        process.close()
+                finally:
+                    self._active.pop(process, None)
 
     @staticmethod
-    def _stop_and_reap(process: BaseProcess, close: bool) -> None:
+    def _stop_and_reap(process: BaseProcess) -> None:
         if process.pid is None:
             return
         if process.is_alive():
@@ -172,8 +238,6 @@ class ProcessSupervisor:
         process.join(timeout=0.25)
         if process.is_alive():
             process.kill()
-            process.join(timeout=0.25)
+            process.join()
         else:
             process.join()
-        if close:
-            process.close()

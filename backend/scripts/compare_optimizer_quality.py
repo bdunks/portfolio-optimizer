@@ -527,7 +527,6 @@ async def _compare_case(
         and (
             not production_internal["domain"].get("check_completed")
             or production_internal["domain"]["in_domain"]
-            or production_internal.get("malformed_output")
         )
     )
     production_candidate = denominator_eligible and production_internal["candidate"]
@@ -583,7 +582,7 @@ async def _compare_case(
         "submitted_request_input_checksum": case.inputs.source_checksum,
         "comparison": {
             "submitted_request_identity_known": True,
-            "returned_result_provenance_matches_request": (
+            "returned_checksum_absent_or_matches_request": (
                 production.get("reported_input_checksum") in (None, case.inputs.source_checksum)
             ),
             "frozen_inputs_match": (

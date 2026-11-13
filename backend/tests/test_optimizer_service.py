@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from types import SimpleNamespace
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
@@ -1112,4 +1113,90 @@ async def test_worker_subset_result_must_exactly_match_positive_whole_lot_intent
     if worker_shape == "wrong_ticker":
         assert "sell_lot_ticker_mismatch" in error.value.details["intent_errors"]
     assert _subset_snapshot(session_factory) == before
+    engine.dispose()
+
+
+@pytest.mark.parametrize("subset", [False, True])
+def test_published_financial_metrics_use_owner_validation_and_survive_summary_readback(
+    tmp_path: Path, subset: bool
+) -> None:
+    if subset:
+        engine, session_factory = _create_sqlite_subset_optimizer_run(tmp_path)
+        run_id = _SUBSET_RUN_ID
+    else:
+        engine, session_factory = _create_sqlite_optimizer_run(tmp_path, selected=True)
+        run_id = _RUN_ID
+
+    metadata = SimpleNamespace(
+        solver="fake-solver",
+        implementation_version="fake-worker",
+        solver_versions={},
+        solver_statuses=(),
+        elapsed_seconds=0.1,
+        screening_seconds=0.02,
+        solve_seconds=0.03,
+        tax_regions_considered=1,
+        tax_regions_solved=1,
+        tax_region_search_complete=True,
+        integer_search_complete=True,
+        screened_lot_count=0,
+        selected_lot_ids=(),
+        candidate_types=(),
+        objective_value=Decimal("999999"),
+        baseline_objective_value=Decimal("888888"),
+        estimated_tax_benefit_usd=Decimal("777777"),
+        estimated_trading_cost_usd=Decimal("666666"),
+        exposure_coverage_complete=True,
+        rounding_attempts=0,
+        warnings=(),
+        trade_group_priorities=(),
+    )
+    candidate = Candidate((), status="no_trade", metadata=metadata)  # type: ignore[arg-type]
+    validation = SimpleNamespace(
+        accepted=True,
+        objective_value=Decimal("12.34"),
+        objective_components=(("tax", Decimal("2.34")),),
+        estimated_tax_benefit_usd=None,
+        estimated_trading_cost_usd=Decimal("1.23"),
+        evaluation=None,
+        tax=None,
+        wash_assessments=(),
+        buy_wash_assessments=(),
+        exposure_coverage=None,
+    )
+    prepared = optimizer_service.PreparedOptimizerRun(
+        inputs=SimpleNamespace(
+            lots=(), account=SimpleNamespace(cash_usd=Decimal("10.00"))
+        ),  # type: ignore[arg-type]
+        batch_settings={},
+        frozen_input_bundle={"mode": "real_optimizer", "source_checksum": "test"},
+        input_fingerprint="test-fingerprint",
+        policy_revision_id=_SUBSET_POLICY_ID if subset else _POLICY_ID,
+        source_generation=1,
+        as_of=datetime(2026, 11, 13, tzinfo=UTC),
+        proposed_trade_date=date(2026, 11, 13),
+    )
+    outcome = optimizer_service.ValidatedOptimizerCandidate(
+        candidate, validation, time.monotonic() + 60, "no_trade"
+    )
+
+    with session_factory.begin() as session:
+        run = session.get(OptimizerRun, run_id)
+        assert run is not None
+        optimizer_service._persist_candidate(session, run, prepared, outcome)
+
+    with session_factory() as session:
+        run = session.get(OptimizerRun, run_id)
+        assert run is not None
+        assert run.metrics["objective_value"] == "12.34"
+        assert run.metrics["baseline_objective_value"] is None
+        assert run.metrics["objective_components"] == {"tax": "2.34"}
+        assert run.metrics["estimated_tax_benefit_usd"] is None
+        assert run.metrics["estimated_trading_cost_usd"] == "1.23"
+        summary = optimizer_service.real_run_summary(run, session)
+        assert summary["estimated_tax_benefit_usd"] is None
+        assert summary["optimizer_metrics"]["objective_value"] == "12.34"
+        assert summary["optimizer_metrics"]["baseline_objective_value"] is None
+        assert summary["optimizer_metrics"]["estimated_tax_benefit_usd"] is None
+        assert summary["optimizer_metrics"]["estimated_trading_cost_usd"] == "1.23"
     engine.dispose()

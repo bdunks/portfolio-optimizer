@@ -550,10 +550,13 @@ def _optimizer_metrics(prepared: PreparedOptimizerRun, result: ValidatedOptimize
         "screened_lot_count": metadata.screened_lot_count,
         "selected_lot_ids": list(metadata.selected_lot_ids),
         "candidate_types": list(metadata.candidate_types),
-        "objective_value": _jsonable(metadata.objective_value),
-        "baseline_objective_value": _jsonable(metadata.baseline_objective_value),
-        "estimated_tax_benefit_usd": _jsonable(metadata.estimated_tax_benefit_usd),
-        "estimated_trading_cost_usd": _jsonable(metadata.estimated_trading_cost_usd),
+        "objective_value": _jsonable(getattr(validation, "objective_value", None)),
+        "baseline_objective_value": None,
+        "estimated_tax_benefit_usd": _jsonable(getattr(validation, "estimated_tax_benefit_usd", None)),
+        "estimated_trading_cost_usd": _jsonable(getattr(validation, "estimated_trading_cost_usd", None)),
+        "objective_components": {
+            key: str(value) for key, value in getattr(validation, "objective_components", ())
+        },
         "exposure_coverage_complete": metadata.exposure_coverage_complete,
         "rounding_attempts": metadata.rounding_attempts,
         "warnings": list(metadata.warnings),

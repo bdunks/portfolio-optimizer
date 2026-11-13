@@ -287,6 +287,42 @@ def test_policy_settings_get_provides_typed_objective_decimals() -> None:
     assert config.estimated_spread_bps == Decimal(0)
 
 
+def test_owner_applies_order_fee_once_to_tax_and_cash(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _inputs()
+    settings = dict(inputs.policy.settings.values)
+    settings["estimated_fee_per_order_usd"] = Decimal(2)
+    settings["cash_reserve_usd"] = Decimal(97)
+    inputs = replace(
+        inputs,
+        lots=(replace(inputs.lots[0], adjusted_unit_basis_usd=Decimal(99)),),
+        policy=replace(
+            inputs.policy,
+            settings=PolicySettings(tuple(sorted(settings.items()))),
+        ),
+    )
+    sale = ConsolidatedLeg(
+        "sell:AAPL",
+        "SELL",
+        "AAPL",
+        Decimal(1),
+        Decimal(100),
+        (LotAllocation("loss-lot", Decimal(1)),),
+        (),
+        0,
+        ("sale:AAPL",),
+    )
+
+    result = validate_candidate(inputs, (sale,))
+
+    assert result.accepted, result.reasons
+    assert result.evaluation is not None
+    assert result.evaluation.realized_st_usd == Decimal(-1)
+    assert result.evaluation.proposed.cash_usd == Decimal(98)
+    assert result.evaluation.proposed.portfolio_total_usd == Decimal(998)
+    assert result.estimated_trading_cost_usd == Decimal(2)
+
+
 @pytest.mark.parametrize(
     ("equity_value", "cash_value", "side", "shares", "accepted"),
     [

@@ -277,7 +277,7 @@ def _cash_and_limits(
         reasons.append("max_total_orders_exceeded")
 
     fee_total = exact_product(config.estimated_fee_per_order_usd, Decimal(len(legs)))
-    net_cash = exact_difference(evaluation.proposed.cash_usd, fee_total)
+    net_cash = evaluation.proposed.cash_usd
     cash_reserve = _setting_decimal(inputs, "cash_reserve_usd", _ZERO)
     if cash_reserve is None or cash_reserve < 0:
         reasons.append("invalid_cash_reserve")
@@ -689,7 +689,11 @@ def validate_candidate(
             False, tuple(errors), tuple(warnings), None, None, (), None, None, None, None
         )
     try:
-        evaluation = evaluate_portfolio(inputs, normalized_legs)
+        evaluation = evaluate_portfolio(
+            inputs,
+            normalized_legs,
+            estimated_fee_per_order_usd=config.estimated_fee_per_order_usd,
+        )
     except BasketValidationError as error:
         return CandidateValidation(
             False,

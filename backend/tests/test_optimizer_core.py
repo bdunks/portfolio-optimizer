@@ -33,8 +33,21 @@ from app.domain.financial_inputs import (
     TransactionInput,
 )
 from app.domain.portfolio_accounting import ConsolidatedLeg, LotAllocation
-from app.optimizer.core import OptimizerRequest, _decimal_solution, optimize_worker, resolve_subset
-from app.optimizer.validation import read_objective_policy, validate_candidate
+from app.domain.tax import TaxAffineRegion, TaxProfile
+from app.optimizer.core import (
+    OptimizerRequest,
+    TradeGroupPriority,
+    _decimal_solution,
+    _Screen,
+    optimize_worker,
+    resolve_subset,
+)
+from app.optimizer.validation import (
+    CandidateValidation,
+    ObjectivePolicy,
+    read_objective_policy,
+    validate_candidate,
+)
 
 TRADE_DATE = date(2026, 11, 13)
 NOW = datetime(2026, 11, 13, 16, 0, tzinfo=UTC)
@@ -325,6 +338,81 @@ def test_worker_owner_rechecks_deadline_after_group_priorities(monkeypatch: pyte
     assert result.status == "deadline_exceeded"
     assert result.legs == ()
     assert "computation_deadline_exceeded" in result.metadata.warnings
+
+
+def test_worker_metadata_separates_solve_and_repair_rank_timings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [0.0]
+    fake_time = SimpleNamespace(monotonic=lambda: clock[0])
+    monkeypatch.setattr(core_module, "time", fake_time)
+    monkeypatch.setattr(validation_module, "time", fake_time)
+    _install_objective_accessor(monkeypatch)
+    calls = {"model": 0, "solve": 0, "repair": 0, "rank": 0}
+    original_model = core_module._model_region
+    original_solve = core_module._solve_problem
+    original_repair = core_module._repair_and_validate
+    original_rank = core_module._group_priorities
+
+    def timed_model(
+        request: OptimizerRequest,
+        screen: _Screen,
+        config: ObjectivePolicy,
+        limits: tuple[int, int, int, Decimal, Decimal, Decimal],
+        profile: TaxProfile,
+        region: TaxAffineRegion | None,
+    ) -> tuple[cp.Problem, tuple[cp.Variable, ...], tuple[cp.Variable, ...]]:
+        result = original_model(request, screen, config, limits, profile, region)
+        calls["model"] += 1
+        clock[0] += 2
+        return result
+
+    def timed_solve(
+        problem: cp.Problem, deadline: float, regions_remaining: int
+    ) -> tuple[str | None, str]:
+        result = original_solve(problem, deadline, regions_remaining)
+        calls["solve"] += 1
+        clock[0] += 3
+        return result
+
+    def timed_repair(
+        inputs: FinancialInputs,
+        legs: tuple[ConsolidatedLeg, ...],
+        deadline: float,
+    ) -> tuple[tuple[ConsolidatedLeg, ...] | None, CandidateValidation | None, int]:
+        result = original_repair(inputs, legs, deadline)
+        calls["repair"] += 1
+        clock[0] += 4
+        return result
+
+    def timed_rank(
+        inputs: FinancialInputs,
+        screen: _Screen,
+        baseline: CandidateValidation,
+        legs: tuple[ConsolidatedLeg, ...],
+        deadline: float,
+    ) -> tuple[tuple[TradeGroupPriority, ...], tuple[str, ...]]:
+        result = original_rank(inputs, screen, baseline, legs, deadline)
+        calls["rank"] += 1
+        clock[0] += 5
+        return result
+
+    monkeypatch.setattr(core_module, "_model_region", timed_model)
+    monkeypatch.setattr(core_module, "_solve_problem", timed_solve)
+    monkeypatch.setattr(core_module, "_repair_and_validate", timed_repair)
+    monkeypatch.setattr(core_module, "_group_priorities", timed_rank)
+
+    result = optimize_worker(OptimizerRequest(_inputs()), 100.0)
+
+    assert result.status == "ready"
+    assert calls["model"] == calls["solve"] > 0
+    assert calls["repair"] > 0
+    assert calls["rank"] == 1
+    assert result.metadata.solve_seconds == float(5 * calls["solve"])
+    assert result.metadata.repair_validate_rank_seconds == float(4 * calls["repair"] + 5)
+    assert result.metadata.elapsed_seconds == (
+        result.metadata.solve_seconds + result.metadata.repair_validate_rank_seconds
+    )
 
 
 

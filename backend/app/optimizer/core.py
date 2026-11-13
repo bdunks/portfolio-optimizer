@@ -92,6 +92,7 @@ class OptimizerMetadata:
     implementation_version: str = OPTIMIZER_IMPLEMENTATION_VERSION
     solver_versions: tuple[tuple[str, str], ...] = ()
     trade_group_priorities: tuple[TradeGroupPriority, ...] = ()
+    repair_validate_rank_seconds: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -942,6 +943,8 @@ def _metadata(
     rounding_attempts: int,
     warnings: tuple[str, ...],
     group_priorities: tuple[TradeGroupPriority, ...] = (),
+    solve_seconds: float = 0.0,
+    repair_validate_rank_seconds: float = 0.0,
 ) -> OptimizerMetadata:
     return OptimizerMetadata(
         input_generation=inputs.source_generation,
@@ -951,7 +954,7 @@ def _metadata(
         solver_statuses=solver_statuses,
         elapsed_seconds=max(0.0, time.monotonic() - started),
         screening_seconds=max(0.0, solve_started - screen_started),
-        solve_seconds=max(0.0, time.monotonic() - solve_started),
+        solve_seconds=max(0.0, solve_seconds),
         tax_regions_considered=regions_considered,
         tax_regions_solved=regions_solved,
         tax_region_search_complete=region_complete,
@@ -969,6 +972,7 @@ def _metadata(
         implementation_version=OPTIMIZER_IMPLEMENTATION_VERSION,
         solver_versions=_package_versions(),
         trade_group_priorities=group_priorities,
+        repair_validate_rank_seconds=max(0.0, repair_validate_rank_seconds),
     )
 def _group_priorities(
     inputs: FinancialInputs,
@@ -1103,7 +1107,9 @@ def optimize_worker(request: OptimizerRequest, computation_deadline: float) -> O
         status = "deadline_exceeded" if any("deadline" in error for error in screen_errors) else "infeasible"
         meta = _metadata(inputs, status, None, (), started, screen_started, solve_started, 0, 0, False, 0, (), (), None, None, None, None, None, 0, screen_errors)
         return OptimizerResult(status, (), meta)
+    baseline_validation_started = time.monotonic()
     baseline_result = validate_candidate(inputs, (), computation_deadline)
+    repair_validate_rank_seconds = max(0.0, time.monotonic() - baseline_validation_started)
     baseline_reserve_repairable = (
         not baseline_result.accepted
         and baseline_result.reasons == ("cash_reserve_breached_after_fees",)
@@ -1134,6 +1140,7 @@ def optimize_worker(request: OptimizerRequest, computation_deadline: float) -> O
             None,
             0,
             (*screen.warnings, *baseline_result.reasons),
+            repair_validate_rank_seconds=repair_validate_rank_seconds,
         )
         return OptimizerResult(meta.status, (), meta)
     baseline_objective = baseline_result.objective_value
@@ -1154,18 +1161,22 @@ def optimize_worker(request: OptimizerRequest, computation_deadline: float) -> O
     best_score = baseline_objective
     best_selected: tuple[str, ...] = ()
     rounding_attempts = 0
+    solve_seconds = 0.0
     for index, region in enumerate(region_list):
         if time.monotonic() >= computation_deadline:
             region_complete = False
             solver_statuses.append("deadline_exceeded")
             break
+        continuous_stage_started = time.monotonic()
         try:
             problem, sell_vars, buy_vars = _model_region(request, screen, config, limits, profile, region)
         except (ValueError, TypeError, ArithmeticError, cp.error.DCPError) as error:
             region_complete = False
             solver_statuses.append(f"model_error:{type(error).__name__}")
+            solve_seconds += max(0.0, time.monotonic() - continuous_stage_started)
             continue
         solver, solver_status = _solve_problem(problem, computation_deadline, len(region_list) - index)
+        solve_seconds += max(0.0, time.monotonic() - continuous_stage_started)
         solver_statuses.append(f"{solver or 'none'}:{solver_status}")
         if solver is None and "deadline" in solver_status:
             region_complete = False
@@ -1179,10 +1190,12 @@ def optimize_worker(request: OptimizerRequest, computation_deadline: float) -> O
                 solved_regions += 1
             continue
         solved_regions += 1
+        repair_started = time.monotonic()
         sale_values = tuple(_decimal_solution(variable.value, candidate.maximum_shares) for variable, candidate in zip(sell_vars, screen.sales, strict=True))
         buy_values = tuple(_decimal_solution(variable.value, candidate.maximum_shares) for variable, candidate in zip(buy_vars, screen.buys, strict=True))
         proposed = _canonical_legs(screen, sale_values, buy_values)
         repaired, validation, attempts = _repair_and_validate(inputs, proposed, computation_deadline)
+        repair_validate_rank_seconds += max(0.0, time.monotonic() - repair_started)
         rounding_attempts += attempts
         if repaired is None or validation is None or not validation.accepted or validation.objective_value is None:
             continue
@@ -1240,11 +1253,15 @@ def optimize_worker(request: OptimizerRequest, computation_deadline: float) -> O
             best_validation.exposure_coverage.complete if best_validation.exposure_coverage else None,
             rounding_attempts,
             tuple(warnings),
+            solve_seconds=solve_seconds,
+            repair_validate_rank_seconds=repair_validate_rank_seconds,
         )
         return OptimizerResult(status, (), meta)
+    group_priority_started = time.monotonic()
     group_priorities, group_priority_warnings = _group_priorities(
         inputs, screen, baseline_result, best_legs, computation_deadline
     )
+    repair_validate_rank_seconds += max(0.0, time.monotonic() - group_priority_started)
     warnings.extend(group_priority_warnings)
 
     if time.monotonic() >= computation_deadline:
@@ -1271,6 +1288,8 @@ def optimize_worker(request: OptimizerRequest, computation_deadline: float) -> O
             rounding_attempts,
             tuple(warnings),
             group_priorities,
+            solve_seconds=solve_seconds,
+            repair_validate_rank_seconds=repair_validate_rank_seconds,
         )
         return OptimizerResult("deadline_exceeded", (), meta)
 
@@ -1297,6 +1316,8 @@ def optimize_worker(request: OptimizerRequest, computation_deadline: float) -> O
         rounding_attempts,
         (*warnings, *best_validation.warnings),
         group_priorities,
+        solve_seconds=solve_seconds,
+        repair_validate_rank_seconds=repair_validate_rank_seconds,
     )
     return OptimizerResult(status, best_legs, meta)
 

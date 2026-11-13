@@ -899,8 +899,9 @@ def test_worker_metadata_separates_solve_and_repair_rank_timings(
         inputs: FinancialInputs,
         legs: tuple[ConsolidatedLeg, ...],
         deadline: float,
+        mandatory_clearance_shares: tuple[tuple[str, Decimal], ...] = (),
     ) -> tuple[tuple[ConsolidatedLeg, ...] | None, CandidateValidation | None, int]:
-        result = original_repair(inputs, legs, deadline)
+        result = original_repair(inputs, legs, deadline, mandatory_clearance_shares)
         calls["repair"] += 1
         clock[0] += 4
         return result
@@ -1159,6 +1160,7 @@ def test_subset_rejects_repair_that_drops_a_requested_lot(
         _inputs: FinancialInputs,
         _legs: tuple[ConsolidatedLeg, ...],
         _deadline: float,
+        _mandatory_clearance_shares: tuple[tuple[str, Decimal], ...] = (),
     ) -> tuple[tuple[ConsolidatedLeg, ...] | None, CandidateValidation | None, int]:
         return (), empty_validation, 0
 

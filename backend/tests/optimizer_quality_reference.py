@@ -203,9 +203,7 @@ def _build_legs(
         key=lambda ticker: (
             -_require_quote_mark(inputs, ticker)
             * (Decimal(1) - half_spread)
-            * sum(
-                (allocation.shares for allocation in allocations_by_ticker[ticker]), Decimal(0)
-            ),
+            * sum((allocation.shares for allocation in allocations_by_ticker[ticker]), Decimal(0)),
             ticker,
         ),
     )

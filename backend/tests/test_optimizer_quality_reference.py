@@ -218,21 +218,23 @@ def test_tiny_exact_reference_enumerates_no_trade_and_consolidated_multilot_opti
     assert optimum.validation.evaluation.proposed.cash_usd == Decimal(117)
     assert result.exact_optimum is optimum
 
+
 def test_exact_reference_orders_sells_by_proceeds_for_intermediate_cash_feasibility() -> None:
     base = _inputs(cash=Decimal(0))
-    policy = replace(
-        base.policy,
-        settings=PolicySettings.from_mapping(
-            dict(base.policy.settings.values)
-            | {"max_sell_tickers_per_batch": 2, "max_total_orders_per_batch": 2}
-        ),
-    )
+    settings: dict[str, object] = dict(base.policy.settings.values)
+    settings.update({"max_sell_tickers_per_batch": 2, "max_total_orders_per_batch": 2})
+    policy = replace(base.policy, settings=PolicySettings.from_mapping(settings))
     inputs = replace(
         base,
         policy=policy,
         positions=(
             base.positions[0],
-            replace(base.positions[0], ticker="BBB", asset_type="ETF", market_value_usd=Decimal(10)),
+            replace(
+                base.positions[0],
+                ticker="BBB",
+                asset_type="ETF",
+                market_value_usd=Decimal(10),
+            ),
         ),
         lots=(
             replace(
@@ -274,7 +276,6 @@ def test_exact_reference_orders_sells_by_proceeds_for_intermediate_cash_feasibil
     assert optimum.validation.evaluation is not None
     assert optimum.validation.evaluation.proposed.cash_usd == Decimal(5)
     assert optimum.validation.objective_value == Decimal("-0.5")
-
 
 
 def test_assignment_limit_reports_only_best_observed_not_an_exact_optimum() -> None:

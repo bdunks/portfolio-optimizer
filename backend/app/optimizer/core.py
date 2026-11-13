@@ -544,34 +544,75 @@ def _screen(
     for candidate in candidates:
         candidates_by_ticker[candidate.lot.ticker.upper()].append(candidate)
     wash_blocked: set[str] = set()
+    wash_dependency_bundles: list[set[str]] = []
     requested_lots = set(request.sell_lot_ids) if request.sell_lot_ids is not None else None
+
+    def proposed_sale(candidate: _SaleCandidate) -> ProposedLotSale:
+        ticker = candidate.lot.ticker.upper()
+        return ProposedLotSale(
+            ticker,
+            candidate.lot.broker_lot_id,
+            candidate.maximum_shares,
+            candidate.gain_per_share * candidate.maximum_shares,
+            f"sale:{ticker}",
+            inputs.proposed_trade_date,
+        )
+
     for ticker, ticker_candidates in candidates_by_ticker.items():
         if time.monotonic() >= deadline:
             return None, ("deadline_during_sell_wash_screening",)
-        possible_group = tuple(
+        eligible_group = tuple(
             candidate
             for candidate in ticker_candidates
             if requested_lots is None or candidate.lot.broker_lot_id in requested_lots
         )
-        proposed_sales = tuple(
-            ProposedLotSale(
-                ticker,
-                candidate.lot.broker_lot_id,
-                candidate.maximum_shares,
-                candidate.gain_per_share * candidate.maximum_shares,
-                f"sale:{ticker}",
-                inputs.proposed_trade_date,
+        while eligible_group:
+            assessments = assess_wash_sales(
+                inputs, tuple(proposed_sale(candidate) for candidate in eligible_group)
             )
-            for candidate in possible_group
-        )
-        assessments = assess_wash_sales(inputs, proposed_sales)
-        for assessment in assessments:
-            if not assessment.eligible:
+            blocked_now = {
+                assessment.broker_lot_id for assessment in assessments if not assessment.eligible
+            }
+            if not blocked_now:
+                break
+            for assessment in assessments:
+                if assessment.eligible:
+                    continue
                 wash_blocked.add(assessment.broker_lot_id)
                 warnings.extend(
                     f"sell_wash_sale_ineligible:{ticker}:{assessment.broker_lot_id}:{reason}"
                     for reason in assessment.reasons
                 )
+            eligible_group = tuple(
+                candidate
+                for candidate in eligible_group
+                if candidate.lot.broker_lot_id not in blocked_now
+            )
+
+        for candidate in eligible_group:
+            if candidate.gain_per_share * candidate.maximum_shares >= _ZERO:
+                continue
+            individual = assess_wash_sales(inputs, (proposed_sale(candidate),))[0]
+            if individual.eligible:
+                continue
+            required = list(eligible_group)
+            for other in tuple(required):
+                if other is candidate:
+                    continue
+                trial = [row for row in required if row is not other]
+                trial_assessment = assess_wash_sales(
+                    inputs,
+                    tuple(proposed_sale(row) for row in trial),
+                )
+                if next(
+                    assessment
+                    for assessment in trial_assessment
+                    if assessment.broker_lot_id == candidate.lot.broker_lot_id
+                ).eligible:
+                    required = trial
+            if len(required) > 1:
+                wash_dependency_bundles.append({row.lot.broker_lot_id for row in required})
+
     if wash_blocked:
         candidates = [
             candidate for candidate in candidates if candidate.lot.broker_lot_id not in wash_blocked
@@ -604,17 +645,71 @@ def _screen(
             return None, ("selected_subset_exceeds_max_sell_lots_per_batch",)
         if len({candidate.lot.ticker.upper() for candidate in candidates}) > sell_order_capacity:
             return None, ("selected_subset_exceeds_max_sell_tickers_per_batch",)
-    selected_sales: list[_SaleCandidate] = []
-    selected_tickers: set[str] = set()
-    for candidate in candidates:
-        ticker = candidate.lot.ticker.upper()
-        if len(selected_sales) >= sell_lot_limit:
-            break
-        if ticker not in selected_tickers and len(selected_tickers) >= sell_order_capacity:
-            continue
-        selected_sales.append(candidate)
-        selected_tickers.add(ticker)
+    candidate_by_id = {candidate.lot.broker_lot_id: candidate for candidate in candidates}
+    merged_bundles: list[set[str]] = []
+    for dependency in wash_dependency_bundles:
+        merged = set(dependency)
+        remaining: list[set[str]] = []
+        for existing in merged_bundles:
+            if merged & existing:
+                merged.update(existing)
+            else:
+                remaining.append(existing)
+        merged_bundles = [*remaining, merged]
 
+    bundled_ids: set[str] = set()
+    sale_units: list[tuple[Decimal, tuple[_SaleCandidate, ...]]] = []
+    for bundle in merged_bundles:
+        members = tuple(
+            sorted(
+                (candidate_by_id[lot_id] for lot_id in bundle if lot_id in candidate_by_id),
+                key=lambda candidate: (
+                    -candidate.rank,
+                    candidate.lot.ticker.upper(),
+                    candidate.lot.broker_lot_id,
+                ),
+            )
+        )
+        if members:
+            sale_units.append((max(candidate.rank for candidate in members), members))
+            bundled_ids.update(candidate.lot.broker_lot_id for candidate in members)
+    sale_units.extend(
+        (candidate.rank, (candidate,))
+        for candidate in candidates
+        if candidate.lot.broker_lot_id not in bundled_ids
+    )
+    sale_units.sort(
+        key=lambda unit: (
+            -unit[0],
+            unit[1][0].lot.ticker.upper(),
+            unit[1][0].lot.broker_lot_id,
+        )
+    )
+
+    def select_sales(order_capacity: int) -> tuple[list[_SaleCandidate], set[str]]:
+        if request.sell_lot_ids is not None:
+            selected = list(candidates)
+            return selected, {candidate.lot.ticker.upper() for candidate in selected}
+        selected: list[_SaleCandidate] = []
+        selected_ids: set[str] = set()
+        selected_tickers: set[str] = set()
+        for _, unit in sale_units:
+            new_members = [
+                candidate for candidate in unit if candidate.lot.broker_lot_id not in selected_ids
+            ]
+            if not new_members:
+                continue
+            unit_tickers = {candidate.lot.ticker.upper() for candidate in new_members}
+            if len(selected) + len(new_members) > sell_lot_limit:
+                continue
+            if len(selected_tickers | unit_tickers) > order_capacity:
+                continue
+            selected.extend(new_members)
+            selected_ids.update(candidate.lot.broker_lot_id for candidate in new_members)
+            selected_tickers.update(unit_tickers)
+        return selected, selected_tickers
+
+    selected_sales, selected_tickers = select_sales(sell_order_capacity)
     enabled_allowed = _enabled_allowed(inputs)
     buy_candidates: list[_BuyCandidate] = []
     exposure_buy_cache: dict[str, bool] = {}
@@ -697,6 +792,76 @@ def _screen(
         buy_candidates.append(
             _BuyCandidate(ticker, max_shares, mark, buy_price, path, priority, replacement_set)
         )
+    # Reserve a BUY order only when an eligible same-sleeve replacement exists and a
+    # one-share sale-only candidate violates a hard sleeve boundary. This leaves
+    # feasible sale-only cleanup available when a replacement is unnecessary.
+    if request.sell_lot_ids is None and order_limit > 1 and len(selected_tickers) >= order_limit:
+        reserve_buy = False
+        potential_buys = [
+            candidate for candidate in buy_candidates if candidate.ticker not in selected_tickers
+        ]
+
+        def screened_sale_path(ticker: str) -> tuple[str, ...] | None:
+            security = security_by_ticker.get(ticker.upper())
+            if security is None:
+                return None
+            position = position_by_ticker.get(ticker.upper())
+            assignment = (
+                position.assignment
+                if position is not None and position.assignment is not None
+                else resolve_holding(inputs.policy.allocation, security.identity).assignment
+            )
+            if assignment is None:
+                return None
+            return assignment_path(
+                inputs.policy.allocation,
+                assignment.sleeve_key,
+                assignment.sub_sleeve_key,
+            )
+
+        def sale_capacity_for_path(path: tuple[str, ...]) -> Decimal:
+            matching_sales = [
+                sale for sale in selected_sales if screened_sale_path(sale.lot.ticker) == path
+            ]
+            return exact_sum(
+                sale.execution_price * sale.maximum_shares for sale in matching_sales
+            ) - config.estimated_fee_per_order_usd * len(
+                {sale.lot.ticker.upper() for sale in matching_sales}
+            )
+
+        for candidate in selected_sales:
+            if time.monotonic() >= deadline:
+                return None, ("deadline_during_sell_buy_capacity_screening",)
+            if candidate.maximum_shares < _ONE:
+                continue
+            sale_path = screened_sale_path(candidate.lot.ticker)
+            if sale_path is None or not any(
+                buy.assignment_path == sale_path and buy.ticker != candidate.lot.ticker.upper()
+                for buy in potential_buys
+            ):
+                continue
+            sale_leg = ConsolidatedLeg(
+                f"sell:{candidate.lot.ticker.upper()}",
+                "SELL",
+                candidate.lot.ticker.upper(),
+                _ONE,
+                candidate.execution_price,
+                (LotAllocation(candidate.lot.broker_lot_id, _ONE),),
+                (),
+                0,
+                (f"sale:{candidate.lot.ticker.upper()}",),
+            )
+            validation = validate_candidate(inputs, (sale_leg,), deadline)
+            if validation.reasons and all(
+                reason.startswith("sleeve_drift_worsened:") for reason in validation.reasons
+            ):
+                sale_capacity = sale_capacity_for_path(sale_path)
+                if sale_capacity >= buy_minimum:
+                    reserve_buy = True
+                    break
+        if reserve_buy:
+            selected_sales, selected_tickers = select_sales(min(sell_ticker_limit, order_limit - 1))
+
     # A replacement BUY must be distinct from every source ticker in this basket.
     buy_candidates = [
         candidate for candidate in buy_candidates if candidate.ticker not in selected_tickers

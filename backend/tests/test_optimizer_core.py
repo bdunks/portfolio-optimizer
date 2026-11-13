@@ -1079,6 +1079,170 @@ def test_total_order_cap_keeps_feasible_single_sell(monkeypatch: pytest.MonkeyPa
     assert validate_candidate(inputs, result.legs).accepted
 
 
+def test_total_order_budget_keeps_replacement_buy_when_hard_sleeve_requires_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _add_msft_loss_candidate(_inputs())
+    settings = tuple(
+        (key, 2 if key == "max_sell_tickers_per_batch" else value)
+        for key, value in inputs.policy.settings.values
+    )
+    equity, cash = inputs.policy.allocation.sleeves
+    allocation = replace(
+        inputs.policy.allocation,
+        sleeves=(
+            replace(equity, target_pct=Decimal(100), drift_band_pp=Decimal(0)),
+            replace(cash, target_pct=Decimal(0), drift_band_pp=Decimal(0)),
+        ),
+    )
+    inputs = replace(
+        inputs,
+        policy=replace(
+            inputs.policy,
+            allocation=allocation,
+            settings=PolicySettings(settings),
+        ),
+    )
+
+    result = optimize_worker(OptimizerRequest(inputs), time.monotonic() + 10)
+
+    assert result.status == "ready"
+    assert len(result.legs) == 2
+    assert [leg.side for leg in result.legs].count("SELL") == 1
+    assert [leg.side for leg in result.legs].count("BUY") == 1
+    assert next(leg for leg in result.legs if leg.side == "BUY").ticker == "NEWETF"
+    assert validate_candidate(inputs, result.legs).accepted
+
+
+def test_total_order_budget_keeps_sale_only_candidates_when_buy_is_unneeded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _add_msft_loss_candidate(_inputs())
+    settings = tuple(
+        (key, 2 if key == "max_sell_tickers_per_batch" else value)
+        for key, value in inputs.policy.settings.values
+    )
+    inputs = replace(
+        inputs,
+        policy=replace(inputs.policy, settings=PolicySettings(settings)),
+    )
+    config, config_errors = read_objective_policy(inputs)
+    assert config is not None
+    assert config_errors == ()
+
+    screen, screen_errors = core_module._screen(
+        OptimizerRequest(inputs), config, time.monotonic() + 10
+    )
+
+    assert screen_errors == ()
+    assert screen is not None
+    assert {candidate.lot.ticker for candidate in screen.sales} == {"AAPL", "MSFT"}
+    assert screen.buys == ()
+
+
+def test_wash_clearance_bundle_is_atomic_under_lot_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _add_msft_loss_candidate(_inputs())
+    recent_date = TRADE_DATE - timedelta(days=10)
+    recent_lot = replace(
+        inputs.lots[0],
+        broker_lot_id="recent-aapl-clearance-lot",
+        acquired_date=recent_date,
+        shares=Decimal(1),
+        available_shares=Decimal(1),
+        adjusted_unit_basis_usd=Decimal(95),
+    )
+    base_settings = tuple(
+        (
+            key,
+            True
+            if key == "allow_gain_sales"
+            else Decimal(100)
+            if key
+            in {
+                "gain_budget_usd",
+                "max_incremental_tax_cost_usd",
+                "st_gain_limit_usd",
+                "lt_gain_limit_usd",
+            }
+            else 2
+            if key == "max_sell_tickers_per_batch"
+            else value,
+        )
+        for key, value in inputs.policy.settings.values
+    )
+    inputs = replace(
+        inputs,
+        positions=(
+            replace(inputs.positions[0], shares=Decimal(11), market_value_usd=Decimal(1100)),
+            inputs.positions[1],
+        ),
+        lots=(*inputs.lots, recent_lot),
+        transactions=(
+            TransactionInput(
+                "recent-aapl-buy",
+                "AAPL",
+                "BUY",
+                NOW - timedelta(days=10),
+                recent_date,
+                Decimal(1),
+                Decimal(95),
+                True,
+                "recent-aapl-clearance-lot",
+                "TEST",
+                None,
+            ),
+        ),
+        policy=replace(inputs.policy, settings=PolicySettings(base_settings)),
+    )
+
+    clearance_sale = ConsolidatedLeg(
+        "sell:AAPL",
+        "SELL",
+        "AAPL",
+        Decimal(2),
+        Decimal(100),
+        (
+            LotAllocation("loss-lot", Decimal(1)),
+            LotAllocation("recent-aapl-clearance-lot", Decimal(1)),
+        ),
+        (),
+        0,
+        ("sale:AAPL",),
+    )
+    assert validate_candidate(inputs, (clearance_sale,)).accepted
+
+    for lot_limit, expected_lots in (
+        (1, {"msft-loss-lot"}),
+        (2, {"loss-lot", "recent-aapl-clearance-lot"}),
+    ):
+        settings = tuple(
+            (key, lot_limit if key == "max_sell_lots_per_batch" else value)
+            for key, value in base_settings
+        )
+        case_inputs = replace(
+            inputs,
+            policy=replace(
+                inputs.policy,
+                settings=PolicySettings(settings),
+            ),
+        )
+        config, config_errors = read_objective_policy(case_inputs)
+        assert config is not None
+        assert config_errors == ()
+        screen, screen_errors = core_module._screen(
+            OptimizerRequest(case_inputs), config, time.monotonic() + 10
+        )
+
+        assert screen_errors == ()
+        assert screen is not None
+        assert {candidate.lot.broker_lot_id for candidate in screen.sales} == expected_lots
+
+
 def test_wash_blocked_sell_does_not_consume_sell_screen_slot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

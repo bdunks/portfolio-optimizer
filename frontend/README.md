@@ -6,6 +6,12 @@
 npm install
 ```
 
+### Dependency compatibility
+
+Dependencies were checked against npm on 2026-11-12. TypeScript stays on `6.0.3`: the latest `vue-tsc`/Volar and TypeScript ESLint packages do not support TypeScript 7 yet; `7.0.2` fails both type checking and Vue compilation. Upgrade when those tools support it.
+
+`npm audit --omit=dev` reports no vulnerabilities. The full audit still reports 14 moderate development-tool findings through `glob`/`minimatch`; npm's proposed fixes downgrade ESLint and Vue Test Utils. No forced downgrades or incompatible transitive overrides are applied.
+
 ### Start the app in development mode (HMR, error reporting, etc.)
 
 ```bash

@@ -9,8 +9,7 @@
   >
     <AlertTitle>{{ title }}</AlertTitle>
     <AlertDescription>
-      <code class="tw:font-bold">{{ error.code }}</code
-      >: {{ error.message }}
+      <code class="tw:font-bold">{{ error.code }}</code>: {{ error.message }}
       <small v-if="error.correlationId" class="tw:block">
         Correlation ID: {{ error.correlationId }}
       </small>

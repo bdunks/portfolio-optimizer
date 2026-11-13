@@ -2,6 +2,10 @@
 
 This backend is local-only and currently uses a deterministic, read-only `FakeBroker`. It has no E*TRADE HTTP/OAuth integration, order preview, order submission, or live trading path. Fake holdings and policy seed data are explicitly labeled `DEMO`; they are not account data or investment guidance.
 
+## Dependency compatibility
+
+Dependencies were checked against PyPI on 2026-11-12 and refreshed with `uv lock --upgrade`. `sparsediffpy` remains at `0.6.1` rather than `0.8.0` because the latest CVXPY (`1.9.3`) requires `sparsediffpy>=0.6.0,<0.7.0`. Upgrade when CVXPY relaxes that constraint.
+
 ## Run locally
 
 From `backend/`:

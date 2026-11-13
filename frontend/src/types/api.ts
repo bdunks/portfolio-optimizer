@@ -315,6 +315,14 @@ export type PolicySettingsInput = {
   "allow_gain_sales"?: boolean;
   "permit_etf_harvest"?: boolean;
   "permit_muni_exit"?: boolean;
+  "objective_band_weight"?: string | null;
+  "objective_allocation_weight"?: string | null;
+  "objective_tax_weight"?: string | null;
+  "objective_trading_cost_weight"?: string | null;
+  "objective_turnover_weight"?: string | null;
+  "objective_cleanup_weight"?: string | null;
+  "estimated_spread_bps"?: string | null;
+  "estimated_fee_per_order_usd"?: string | null;
 };
 
 export type PolicySettingsResponse = {
@@ -343,6 +351,14 @@ export type PolicySettingsResponse = {
   "prefer_etf_buys": boolean;
   "allow_gain_sales": boolean;
   "permit_etf_harvest": boolean;
+  "objective_band_weight": string | null;
+  "objective_allocation_weight": string | null;
+  "objective_tax_weight": string | null;
+  "objective_trading_cost_weight": string | null;
+  "objective_turnover_weight": string | null;
+  "objective_cleanup_weight": string | null;
+  "estimated_spread_bps": string | null;
+  "estimated_fee_per_order_usd": string | null;
   "permit_muni_exit": boolean;
 };
 

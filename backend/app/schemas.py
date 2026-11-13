@@ -210,6 +210,30 @@ class PolicySettingsInput(StrictModel):
     allow_gain_sales: bool = False
     permit_etf_harvest: bool = False
     permit_muni_exit: bool = False
+    objective_band_weight: ExactDecimal | None = None
+    objective_allocation_weight: ExactDecimal | None = None
+    objective_tax_weight: ExactDecimal | None = None
+    objective_trading_cost_weight: ExactDecimal | None = None
+    objective_turnover_weight: ExactDecimal | None = None
+    objective_cleanup_weight: ExactDecimal | None = None
+    estimated_spread_bps: ExactDecimal | None = None
+    estimated_fee_per_order_usd: ExactDecimal | None = None
+
+    @field_validator(
+        "objective_band_weight",
+        "objective_allocation_weight",
+        "objective_tax_weight",
+        "objective_trading_cost_weight",
+        "objective_turnover_weight",
+        "objective_cleanup_weight",
+        "estimated_spread_bps",
+        "estimated_fee_per_order_usd",
+    )
+    @classmethod
+    def nonnegative_objective_parameters(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and value < 0:
+            raise ValueError("objective weights and estimated costs must be nonnegative")
+        return value
 
 
 class PolicyDraftInput(StrictModel):
@@ -509,6 +533,14 @@ class PolicySettingsResponse(StrictModel):
     prefer_etf_buys: bool
     allow_gain_sales: bool
     permit_etf_harvest: bool
+    objective_band_weight: str | None
+    objective_allocation_weight: str | None
+    objective_tax_weight: str | None
+    objective_trading_cost_weight: str | None
+    objective_turnover_weight: str | None
+    objective_cleanup_weight: str | None
+    estimated_spread_bps: str | None
+    estimated_fee_per_order_usd: str | None
     permit_muni_exit: bool
 
 

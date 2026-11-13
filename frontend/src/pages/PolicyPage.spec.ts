@@ -119,6 +119,14 @@ const settings: PolicySettingsResponse = {
   allow_gain_sales: false,
   permit_etf_harvest: true,
   permit_muni_exit: false,
+  objective_band_weight: null,
+  objective_allocation_weight: null,
+  objective_tax_weight: null,
+  objective_trading_cost_weight: null,
+  objective_turnover_weight: null,
+  objective_cleanup_weight: null,
+  estimated_spread_bps: null,
+  estimated_fee_per_order_usd: null,
 };
 
 const activeRevision: PolicyRevisionResponse = {

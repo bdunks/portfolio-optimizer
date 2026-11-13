@@ -61,6 +61,14 @@ const nullableDecimalFields = [
   ['maximum tax cost', 'max_incremental_tax_cost_usd'],
   ['ST gain limit', 'st_gain_limit_usd'],
   ['LT gain limit', 'lt_gain_limit_usd'],
+  ['band objective weight', 'objective_band_weight'],
+  ['allocation objective weight', 'objective_allocation_weight'],
+  ['tax objective weight', 'objective_tax_weight'],
+  ['trading-cost objective weight', 'objective_trading_cost_weight'],
+  ['turnover objective weight', 'objective_turnover_weight'],
+  ['cleanup objective weight', 'objective_cleanup_weight'],
+  ['estimated spread (bps)', 'estimated_spread_bps'],
+  ['estimated fee per order (USD)', 'estimated_fee_per_order_usd'],
 ] as const satisfies ReadonlyArray<[string, keyof EditablePolicySettings]>;
 const decimalSettingKeys = new Set<keyof EditablePolicySettings>([
   ...requiredDecimalFields.map(([, key]) => key),
@@ -134,6 +142,14 @@ export function createEmptyPolicySettings(): EditablePolicySettings {
     allow_gain_sales: null,
     permit_etf_harvest: null,
     permit_muni_exit: null,
+    objective_band_weight: '',
+    objective_allocation_weight: '',
+    objective_tax_weight: '',
+    objective_trading_cost_weight: '',
+    objective_turnover_weight: '',
+    objective_cleanup_weight: '',
+    estimated_spread_bps: '',
+    estimated_fee_per_order_usd: '',
   };
 }
 
@@ -417,7 +433,11 @@ export function policySettingsValidationIssues(settings: EditablePolicySettings)
   }
   for (const [label, key] of nullableDecimalFields) {
     const value = settings[key];
-    if (typeof value === 'string' && value.trim() && !decimalPattern.test(value.trim())) {
+    if (
+      typeof value === 'string' &&
+      value.trim() &&
+      (!decimalPattern.test(value.trim()) || value.trim().startsWith('-'))
+    ) {
       issues.push(`${label} must be an exact decimal string or blank (null).`);
     }
   }
@@ -483,6 +503,14 @@ export function policySettingsToInput(settings: EditablePolicySettings): {
     allow_gain_sales: settings.allow_gain_sales as boolean,
     permit_etf_harvest: settings.permit_etf_harvest as boolean,
     permit_muni_exit: settings.permit_muni_exit as boolean,
+    objective_band_weight: nullable(settings.objective_band_weight),
+    objective_allocation_weight: nullable(settings.objective_allocation_weight),
+    objective_tax_weight: nullable(settings.objective_tax_weight),
+    objective_trading_cost_weight: nullable(settings.objective_trading_cost_weight),
+    objective_turnover_weight: nullable(settings.objective_turnover_weight),
+    objective_cleanup_weight: nullable(settings.objective_cleanup_weight),
+    estimated_spread_bps: nullable(settings.estimated_spread_bps),
+    estimated_fee_per_order_usd: nullable(settings.estimated_fee_per_order_usd),
   };
   return { value, issues: [] };
 }

@@ -59,7 +59,7 @@ def test_fresh_upgrade_reupgrade_restart_demo_and_no_order_tables(tmp_path: Path
             demo_sleeves = client.get("/api/v1/policy").json()["active"]["sleeves"]
             assert next(row for row in demo_sleeves if row["sleeve_key"] == "us_etf")["is_transition_destination"] is True
             assert "settings" not in columns
-            assert {"short_term_tax_rate", "max_sell_lots_per_batch", "allow_gain_sales"} <= columns
+            assert {"short_term_tax_rate", "max_sell_lots_per_batch", "allow_gain_sales", "objective_band_weight", "estimated_spread_bps"} <= columns
             tables = set(inspect(app.state.engine).get_table_names())
             assert not {"order_record", "order_fill"} & tables
     assert observed_generation == 1
@@ -84,6 +84,14 @@ def test_policy_settings_are_typed_lossless_and_nested_api_shape_persists(seeded
             "max_total_orders_per_batch": 5,
             "prefer_etf_buys": False,
             "allow_gain_sales": True,
+            "objective_band_weight": "1.2500000000000000000000000000001",
+            "objective_allocation_weight": None,
+            "objective_tax_weight": "0.75",
+            "objective_trading_cost_weight": "1.0",
+            "objective_turnover_weight": "0.5",
+            "objective_cleanup_weight": "2.0",
+            "estimated_spread_bps": "5.00",
+            "estimated_fee_per_order_usd": "1.00",
         }
     )
     response = client.post("/api/v1/policy/drafts", json=payload)
@@ -93,6 +101,9 @@ def test_policy_settings_are_typed_lossless_and_nested_api_shape_persists(seeded
     assert revision["settings"]["target_retained_net_loss_usd"] == settings["target_retained_net_loss_usd"]
     assert revision["settings"]["max_sell_lots_per_batch"] == 7
     assert revision["settings"]["allow_gain_sales"] is True
+    assert revision["settings"]["objective_band_weight"] == settings["objective_band_weight"]
+    assert revision["settings"]["objective_allocation_weight"] is None
+    assert revision["settings"]["estimated_spread_bps"] == "5.00"
     with app.state.session_factory() as session:
         persisted = session.get(PolicyRevision, revision["id"])
         assert persisted is not None
@@ -101,6 +112,10 @@ def test_policy_settings_are_typed_lossless_and_nested_api_shape_persists(seeded
         assert persisted.ytd_as_of == date(2026, 11, 5)
         assert persisted.max_sell_lots_per_batch == 7
         assert persisted.allow_gain_sales is True
+        assert persisted.objective_band_weight == Decimal(settings["objective_band_weight"])
+        assert persisted.objective_allocation_weight is None
+        assert persisted.estimated_spread_bps == Decimal("5.00")
+        assert persisted.estimated_fee_per_order_usd == Decimal("1.00")
         assert not hasattr(persisted, "settings")
 
     defaults_payload = _draft_payload(client)
@@ -112,6 +127,27 @@ def test_policy_settings_are_typed_lossless_and_nested_api_shape_persists(seeded
     assert defaults["max_sell_tickers_per_batch"] == 10
     assert defaults["max_sell_lots_per_batch"] == 20
     assert defaults["max_total_orders_per_batch"] == 12
+    assert all(
+        defaults[name] is None
+        for name in (
+            "objective_band_weight",
+            "objective_allocation_weight",
+            "objective_tax_weight",
+            "objective_trading_cost_weight",
+            "objective_turnover_weight",
+            "objective_cleanup_weight",
+            "estimated_spread_bps",
+            "estimated_fee_per_order_usd",
+        )
+    )
+
+
+def test_negative_objective_parameters_are_rejected(seeded_client: tuple[FastAPI, TestClient]) -> None:
+    _, client = seeded_client
+    payload = _draft_payload(client)
+    payload["settings"]["objective_tax_weight"] = "-0.01"
+    response = client.post("/api/v1/policy/drafts", json=payload)
+    assert response.status_code == 422
 
 
 def test_exact_top_and_nested_sums_beyond_default_decimal_precision_activate(seeded_client: tuple[FastAPI, TestClient]) -> None:

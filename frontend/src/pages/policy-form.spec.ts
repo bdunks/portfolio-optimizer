@@ -295,6 +295,14 @@ describe('central policy conversion boundary', () => {
     allow_gain_sales: true,
     permit_etf_harvest: false,
     permit_muni_exit: true,
+    objective_band_weight: '1.00000000000000000001',
+    objective_allocation_weight: null,
+    objective_tax_weight: '0.75',
+    objective_trading_cost_weight: '0.5',
+    objective_turnover_weight: '0.25',
+    objective_cleanup_weight: '2.0',
+    estimated_spread_bps: '5.00',
+    estimated_fee_per_order_usd: '1.00',
   };
 
   function validSettings(): EditablePolicySettings {
@@ -321,7 +329,7 @@ describe('central policy conversion boundary', () => {
       activation_errors: [],
     };
     expect(revisionToDraft(revision).settings).toEqual(editable);
-    expect(Object.keys(apiSettings)).toHaveLength(26);
+    expect(Object.keys(apiSettings)).toHaveLength(34);
   });
   it('normalizes bounded API exponent decimals losslessly without expanding hostile exponents', () => {
     const sourceSettings: PolicySettingsResponse = {

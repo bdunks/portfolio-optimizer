@@ -25,6 +25,14 @@
     "prefer_etf_buys": true,
     "allow_gain_sales": false,
     "permit_etf_harvest": false,
+    "objective_band_weight": "1.0",
+    "objective_allocation_weight": "1.0",
+    "objective_tax_weight": "1.0",
+    "objective_trading_cost_weight": "1.0",
+    "objective_turnover_weight": "1.0",
+    "objective_cleanup_weight": "1.0",
+    "estimated_spread_bps": "5.0",
+    "estimated_fee_per_order_usd": "1.00",
     "permit_muni_exit": false
   },
   "sleeves": [

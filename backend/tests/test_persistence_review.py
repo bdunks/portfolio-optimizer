@@ -301,9 +301,13 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
         sell_security = Security(ticker="ABC", asset_type="EQUITY")
         buy_security = Security(ticker="ETF", asset_type="ETF")
         sell_security_b = Security(ticker="XYZ", asset_type="EQUITY")
-        policy = PolicyRevision(id="legacy-policy", revision_number=1, status="ACTIVE", created_at=timestamp)
-        session.add_all([sell_security, sell_security_b, buy_security, policy])
+        session.add_all([sell_security, sell_security_b, buy_security])
         session.flush()
+        policy_id = "legacy-policy"
+        session.execute(
+            text("INSERT INTO policy_revision (id, revision_number, status, created_at) VALUES (:id, 1, 'ACTIVE', :created_at)"),
+            {"id": policy_id, "created_at": timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")},
+        )
         run_id = "legacy-run"
         session.execute(
             text(
@@ -315,7 +319,7 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
             ),
             {
                 "id": run_id,
-                "policy": policy.id,
+                "policy": policy_id,
                 "generation": 7,
                 "as_of": timestamp.strftime("%Y-%m-%d %H:%M:%S.%f"),
                 "solver": "DEMO",
@@ -334,7 +338,7 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
                 "metrics, warnings, frozen_input_bundle) "
                 "VALUES ('legacy-no-date', :policy, 7, :as_of, 'COMPLETE', '{}', '{}', '[]', :bundle)"
             ),
-            {"policy": policy.id, "as_of": timestamp.strftime("%Y-%m-%d %H:%M:%S.%f"), "bundle": json.dumps({"legacy": True})},
+            {"policy": policy_id, "as_of": timestamp.strftime("%Y-%m-%d %H:%M:%S.%f"), "bundle": json.dumps({"legacy": True})},
         )
         session.execute(
             text(
@@ -344,7 +348,7 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
                 "VALUES ('legacy-explicit-date', :policy, 7, :as_of, 'COMPLETE', '{}', '{}', '[]', :bundle)"
             ),
             {
-                "policy": policy.id,
+                "policy": policy_id,
                 "as_of": timestamp.strftime("%Y-%m-%d %H:%M:%S.%f"),
                 "bundle": json.dumps({"proposed_trade_date": "2026-11-07"}),
             },
@@ -479,6 +483,12 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
     with factory.begin() as session:
         run = session.get(OptimizerRun, "legacy-run")
         assert run is not None
+        policy = session.get(PolicyRevision, "legacy-policy")
+        assert policy is not None
+        assert policy.objective_band_weight is None
+        assert policy.objective_cleanup_weight is None
+        assert policy.estimated_spread_bps is None
+        assert policy.estimated_fee_per_order_usd is None
         assert run.proposed_trade_date == date(2026, 11, 5)
         missing_date_run = session.get(OptimizerRun, "legacy-no-date")
         assert missing_date_run is not None
@@ -540,7 +550,7 @@ def test_alembic_cli_uses_private_protected_engine_and_environment_url(tmp_path:
             assert connection.scalar(text("PRAGMA journal_mode")).lower() == "wal"
             assert connection.scalar(text("PRAGMA busy_timeout")) == 5000
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-                "0008_transition_destination"
+                "0009_objective_policy_parameters"
             )
     finally:
         engine.dispose()

@@ -21,12 +21,16 @@ function requiredDecimal(label: string) {
   });
 }
 
-function nullableDecimal(label: string) {
+function nullableDecimal(label: string, nonnegative = false) {
   return z
     .string()
     .nullable()
     .superRefine((value, context) => {
-      if (value !== null && value.trim() && !decimalPattern.test(value.trim())) {
+      if (
+        value !== null &&
+        value.trim() &&
+        (!decimalPattern.test(value.trim()) || (nonnegative && value.trim().startsWith('-')))
+      ) {
         context.addIssue({
           code: 'custom',
           message: `${label} must be an exact decimal string or blank (null).`,
@@ -98,4 +102,12 @@ export const policyTaxSettingsSchema = z.object({
   allow_gain_sales: requiredToggle(),
   permit_etf_harvest: requiredToggle(),
   permit_muni_exit: requiredToggle(),
+  objective_band_weight: nullableDecimal('band objective weight', true),
+  objective_allocation_weight: nullableDecimal('allocation objective weight', true),
+  objective_tax_weight: nullableDecimal('tax objective weight', true),
+  objective_trading_cost_weight: nullableDecimal('trading-cost objective weight', true),
+  objective_turnover_weight: nullableDecimal('turnover objective weight', true),
+  objective_cleanup_weight: nullableDecimal('cleanup objective weight', true),
+  estimated_spread_bps: nullableDecimal('estimated spread', true),
+  estimated_fee_per_order_usd: nullableDecimal('estimated fee per order', true),
 }) satisfies z.ZodType<EditablePolicySettings>;

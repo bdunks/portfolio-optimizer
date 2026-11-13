@@ -434,6 +434,48 @@
           </div>
 
           <div class="tax-settings-group tw:flex tw:flex-col tw:gap-3">
+            <h3 class="tax-group-title tw:m-0">Optimizer objective and estimated trading costs</h3>
+            <FieldDescription class="tax-help tw:m-0">
+              Optional nonnegative relative objective weights; blank values remain null and are not
+              assigned numerical defaults. Spread is basis points (1 bp = 0.01%); fee is USD per
+              order. DEMO seed values are illustrative assumptions, not optimal portfolio advice.
+            </FieldDescription>
+            <FieldGroup
+              class="tax-fields tw:grid tw:grid-cols-1 tw:gap-4 tw:md:grid-cols-2 tw:xl:grid-cols-3"
+            >
+              <settingsForm.Field
+                v-for="parameter in objectiveParameters"
+                :key="parameter.name"
+                :name="parameter.name"
+              >
+                <template #default="{ field }">
+                  <UiField :data-invalid="hasVisibleError(field) ? 'true' : undefined">
+                    <FieldLabel :for="`${sectionId}-${parameter.name}`">
+                      {{ parameter.label }}
+                    </FieldLabel>
+                    <Input
+                      :id="`${sectionId}-${parameter.name}`"
+                      :model-value="field.state.value ?? ''"
+                      inputmode="decimal"
+                      placeholder="Optional; leave blank for null"
+                      :aria-invalid="hasVisibleError(field) ? 'true' : undefined"
+                      :aria-describedby="
+                        fieldErrorId(field, `${sectionId}-${parameter.name}-error`)
+                      "
+                      @update:model-value="field.handleChange(String($event ?? ''))"
+                      @blur="field.handleBlur"
+                    />
+                    <FieldError
+                      v-if="field.state.meta.isTouched && field.state.meta.errors.length"
+                      :id="`${sectionId}-${parameter.name}-error`"
+                      :errors="field.state.meta.errors"
+                    />
+                  </UiField>
+                </template>
+              </settingsForm.Field>
+            </FieldGroup>
+          </div>
+          <div class="tax-settings-group tw:flex tw:flex-col tw:gap-3">
             <h3 class="tax-group-title tw:m-0">Small-batch limits and trading preferences</h3>
             <FieldGroup
               class="tax-fields tw:grid tw:grid-cols-1 tw:gap-4 tw:md:grid-cols-2 tw:xl:grid-cols-3"
@@ -804,6 +846,16 @@ const emit = defineEmits<{
   'update:settings': [settings: EditablePolicySettings];
 }>();
 const sectionId = useId();
+const objectiveParameters = [
+  { name: 'objective_band_weight', label: 'Band objective weight (nullable)' },
+  { name: 'objective_allocation_weight', label: 'Allocation objective weight (nullable)' },
+  { name: 'objective_tax_weight', label: 'Tax objective weight (nullable)' },
+  { name: 'objective_trading_cost_weight', label: 'Trading-cost objective weight (nullable)' },
+  { name: 'objective_turnover_weight', label: 'Turnover objective weight (nullable)' },
+  { name: 'objective_cleanup_weight', label: 'Cleanup objective weight (nullable)' },
+  { name: 'estimated_spread_bps', label: 'Estimated spread (basis points, nullable)' },
+  { name: 'estimated_fee_per_order_usd', label: 'Estimated fee per order (USD, nullable)' },
+] as const;
 const settingsForm = useForm({
   formId: `${sectionId}-form`,
   defaultValues: { ...props.settings },

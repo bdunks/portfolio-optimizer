@@ -283,6 +283,14 @@ class PolicyRevision(Base):
     allow_gain_sales: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     permit_etf_harvest: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     permit_muni_exit: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    objective_band_weight: Mapped[Decimal | None] = mapped_column(DecimalText())
+    objective_allocation_weight: Mapped[Decimal | None] = mapped_column(DecimalText())
+    objective_tax_weight: Mapped[Decimal | None] = mapped_column(DecimalText())
+    objective_trading_cost_weight: Mapped[Decimal | None] = mapped_column(DecimalText())
+    objective_turnover_weight: Mapped[Decimal | None] = mapped_column(DecimalText())
+    objective_cleanup_weight: Mapped[Decimal | None] = mapped_column(DecimalText())
+    estimated_spread_bps: Mapped[Decimal | None] = mapped_column(DecimalText())
+    estimated_fee_per_order_usd: Mapped[Decimal | None] = mapped_column(DecimalText())
 
 class PolicySleeve(Base):
     __tablename__ = "policy_sleeve"

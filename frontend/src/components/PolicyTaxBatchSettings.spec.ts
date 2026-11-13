@@ -19,7 +19,7 @@ describe('PolicyTaxBatchSettings form', () => {
 
     const inputs = wrapper.findAll('input[data-slot="input"]');
     const selectors = wrapper.findAll('button[role="combobox"]');
-    expect(inputs).toHaveLength(22);
+    expect(inputs).toHaveLength(30);
     expect(selectors).toHaveLength(4);
     for (const control of [...inputs, ...selectors]) {
       const id = control.attributes('id');
@@ -39,6 +39,9 @@ describe('PolicyTaxBatchSettings form', () => {
     expect(settings.ytd_source).toBe('');
     expect(wrapper.text()).toContain('No minimum SELL notional is configured here.');
 
+    await field('Band objective weight').setValue('1.25');
+    expect(settings.objective_band_weight).toBe('1.25');
+    expect(wrapper.text()).toContain('1 bp = 0.01%');
     wrapper.unmount();
   });
 

@@ -140,6 +140,8 @@ Maintain **one latest complete broker state** for the single managed account, re
 | `activity_event`            | Append-only sync, policy, run, approval, order and reconciliation events; redacted metadata and correlation ID                                                                                                                                                                                                                                                                                                     |
 
 **Holding-to-sleeve resolution precedence (`domain/allocation.py`):**
+
+Objective-policy fields on `policy_revision` are nullable exact `Decimal` inputs: `objective_band_weight`, `objective_allocation_weight`, `objective_tax_weight`, `objective_trading_cost_weight`, `objective_turnover_weight`, `objective_cleanup_weight`, `estimated_spread_bps`, and `estimated_fee_per_order_usd`. Null is a valid legacy/unconfigured state; never silently substitute numeric values. Weights are relative objective coefficients, spread is in basis points (1 bp = 0.01%), and the fee is USD per order. DEMO seed assumptions (all six weights `1.0`, spread `5.0` bps, fee `$1.00`) are illustrative only and are not recommendations or live market estimates.
 Every held security in `current_position` resolves to a single `policy_sleeve` in the active `policy_revision` via:
 1. Explicit row in `policy_security_override(policy_revision_id, security_id)`.
 2. Membership in `policy_allowed_security(policy_revision_id, security_id)` (e.g., `VTI`/`ITOT` -> `us` (`etf` sub-sleeve), `VIG`/`DGRO`/`SCHD` -> `div`, etc.).

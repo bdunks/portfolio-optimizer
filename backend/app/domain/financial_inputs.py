@@ -34,6 +34,14 @@ _DECIMAL_SETTINGS = frozenset(
         "max_batch_turnover_pct",
         "min_buy_order_notional_usd",
         "cash_reserve_usd",
+        "objective_band_weight",
+        "objective_allocation_weight",
+        "objective_tax_weight",
+        "objective_trading_cost_weight",
+        "objective_turnover_weight",
+        "objective_cleanup_weight",
+        "estimated_spread_bps",
+        "estimated_fee_per_order_usd",
     }
 )
 _INT_SETTINGS = frozenset(

@@ -1809,6 +1809,28 @@
             "title": "Cash Reserve Usd",
             "type": "string"
           },
+          "estimated_fee_per_order_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Fee Per Order Usd"
+          },
+          "estimated_spread_bps": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Spread Bps"
+          },
           "gain_budget_usd": {
             "anyOf": [
               {
@@ -1882,6 +1904,72 @@
             "default": "500.00",
             "title": "Min Buy Order Notional Usd",
             "type": "string"
+          },
+          "objective_allocation_weight": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective Allocation Weight"
+          },
+          "objective_band_weight": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective Band Weight"
+          },
+          "objective_cleanup_weight": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective Cleanup Weight"
+          },
+          "objective_tax_weight": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective Tax Weight"
+          },
+          "objective_trading_cost_weight": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective Trading Cost Weight"
+          },
+          "objective_turnover_weight": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective Turnover Weight"
           },
           "ordinary_income_deduction_limit_usd": {
             "default": "3000",
@@ -1991,6 +2079,28 @@
             "title": "Cash Reserve Usd",
             "type": "string"
           },
+          "estimated_fee_per_order_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Fee Per Order Usd"
+          },
+          "estimated_spread_bps": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Spread Bps"
+          },
           "gain_budget_usd": {
             "anyOf": [
               {
@@ -2058,6 +2168,72 @@
           "min_buy_order_notional_usd": {
             "title": "Min Buy Order Notional Usd",
             "type": "string"
+          },
+          "objective_allocation_weight": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective Allocation Weight"
+          },
+          "objective_band_weight": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective Band Weight"
+          },
+          "objective_cleanup_weight": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective Cleanup Weight"
+          },
+          "objective_tax_weight": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective Tax Weight"
+          },
+          "objective_trading_cost_weight": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective Trading Cost Weight"
+          },
+          "objective_turnover_weight": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective Turnover Weight"
           },
           "ordinary_income_deduction_limit_usd": {
             "title": "Ordinary Income Deduction Limit Usd",
@@ -2163,6 +2339,14 @@
           "prefer_etf_buys",
           "allow_gain_sales",
           "permit_etf_harvest",
+          "objective_band_weight",
+          "objective_allocation_weight",
+          "objective_tax_weight",
+          "objective_trading_cost_weight",
+          "objective_turnover_weight",
+          "objective_cleanup_weight",
+          "estimated_spread_bps",
+          "estimated_fee_per_order_usd",
           "permit_muni_exit"
         ],
         "title": "PolicySettingsResponse",

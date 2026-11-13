@@ -1139,6 +1139,14 @@ _RUN_DISPLAY_POLICY_SETTINGS = (
     "allow_gain_sales",
     "permit_etf_harvest",
     "permit_muni_exit",
+    "objective_band_weight",
+    "objective_allocation_weight",
+    "objective_tax_weight",
+    "objective_trading_cost_weight",
+    "objective_turnover_weight",
+    "objective_cleanup_weight",
+    "estimated_spread_bps",
+    "estimated_fee_per_order_usd",
 )
 
 _RUN_DISPLAY_SLEEVE_FIELDS = (

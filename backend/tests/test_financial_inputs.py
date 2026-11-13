@@ -334,6 +334,13 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
         )
         assert restored == inputs
         frozen_sleeves = inputs.to_provenance()["policy"]["sleeves"]
+        frozen_settings = inputs.to_provenance()["policy"]["settings"]
+        assert isinstance(frozen_settings, dict)
+        assert Decimal(frozen_settings["objective_band_weight"]) == Decimal("1.0")
+        assert Decimal(frozen_settings["estimated_spread_bps"]) == Decimal("5.0")
+        assert Decimal(frozen_settings["estimated_fee_per_order_usd"]) == Decimal("1.00")
+        restored_settings = dict(restored.policy.settings.values)
+        assert restored_settings["objective_band_weight"] == Decimal("1.0")
         assert isinstance(frozen_sleeves, list)
         assert any(row.get("is_transition_destination") is True for row in frozen_sleeves if isinstance(row, dict))
         assert isinstance(restored.account.cash_usd, Decimal)

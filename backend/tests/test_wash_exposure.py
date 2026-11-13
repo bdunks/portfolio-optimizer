@@ -566,6 +566,76 @@ def test_direct_equity_exposure_does_not_require_lookthrough_metadata() -> None:
     assert aggregate.values[0].value_usd == Decimal(100)
 
 
+def test_sector_coverage_requires_exact_unit_weight_per_ticker() -> None:
+    holdings = (_position("A", "50"), _position("B", "50"), _position("C", "50"))
+    exposures = (
+        _exposure("A", "Technology", "0.4", dimension="sector"),
+        _exposure("A", "Health", "0.4", dimension="sector"),
+        _exposure("B", "Technology", "0.6", dimension="sector"),
+        _exposure("B", "Health", "0.6", dimension="sector"),
+        _exposure("C", "Technology", "0.3", dimension="sector"),
+        _exposure("C", "Health", "0.7", dimension="sector"),
+    )
+    inputs = _inputs(positions=holdings, exposures=exposures)
+
+    portfolio = aggregate_lookthrough_exposure(inputs, dimension="sector")
+    traded = aggregate_lookthrough_exposure(inputs, tickers=("C",), dimension="sector")
+
+    assert portfolio.coverage.complete is False
+    assert portfolio.coverage.invalid_tickers == ("A", "B")
+    assert traded.coverage.complete is True
+
+
+def test_sector_coverage_accepts_exact_decimal_unit_weight_without_normalizing() -> None:
+    inputs = _inputs(
+        positions=(_position("FUND", "100"),),
+        exposures=(
+            _exposure("FUND", "Technology", "0.1", dimension="sector"),
+            _exposure("FUND", "Health", "0.2", dimension="sector"),
+            _exposure("FUND", "Utilities", "0.7", dimension="sector"),
+        ),
+    )
+
+    aggregate = aggregate_lookthrough_exposure(inputs, dimension="sector")
+
+    assert aggregate.coverage.complete is True
+    assert aggregate.coverage.invalid_tickers == ()
+    assert sum(row.value_usd for row in aggregate.values) == Decimal("100.0")
+
+
+@pytest.mark.parametrize(
+    ("first_weight", "second_weight"),
+    [("0.4", "0.4"), ("0.6", "0.6")],
+)
+def test_sector_coverage_rejects_under_and_overallocated_ticker(
+    first_weight: str, second_weight: str
+) -> None:
+    inputs = _inputs(
+        positions=(_position("FUND", "100"),),
+        exposures=(
+            _exposure("FUND", "Technology", first_weight, dimension="sector"),
+            _exposure("FUND", "Health", second_weight, dimension="sector"),
+        ),
+    )
+
+    aggregate = aggregate_lookthrough_exposure(inputs, dimension="sector")
+
+    assert aggregate.coverage.complete is False
+    assert aggregate.coverage.invalid_tickers == ("FUND",)
+
+
+@pytest.mark.parametrize("dimension", ["security", "region"])
+def test_non_sector_coverage_does_not_gain_unit_sum_assumption(dimension: str) -> None:
+    inputs = _inputs(
+        positions=(_position("FUND", "100"),),
+        exposures=(_exposure("FUND", "A", "0.6", dimension=dimension),),
+    )
+
+    aggregate = aggregate_lookthrough_exposure(inputs, dimension=dimension)
+
+    assert aggregate.coverage.complete is True
+
+
 def test_exposure_and_known_source_metadata_round_trip_and_legacy_absence_stays_unknown() -> None:
     inputs = _inputs(
         exposures=(_exposure("VTI", "AAA", "0.4", as_of_date=TRADE_DATE - timedelta(days=1)),),

@@ -199,12 +199,16 @@ def aggregate_lookthrough_exposure(
             row.as_of_date < stale_before or row.as_of_date > evaluation_date for row in ticker_rows
         ):
             stale_tickers.add(ticker)
+        ticker_weights: list[Decimal] = []
         for row in ticker_rows:
             if not row.weight.is_finite() or row.weight < 0 or row.weight > 1:
                 invalid_tickers.add(ticker)
                 continue
+            ticker_weights.append(row.weight)
             exposure_key = _normalise_key(row.dimension, row.exposure_key)
             values[(normalized_dimension, exposure_key)].append(market_value * row.weight)
+        if normalized_dimension == "sector" and exact_sum(ticker_weights) != Decimal(1):
+            invalid_tickers.add(ticker)
 
     as_of_date = max((row.as_of_date for row in selected_rows.values()), default=None)
     source_dates: dict[str, date] = {}

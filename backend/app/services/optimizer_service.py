@@ -1389,7 +1389,8 @@ async def _recompute_real_basket(
     except (WorkerCapacityError, WorkerTimeoutError) as exc:
         raise _app_error_for_worker_error(exc, basket_unchanged=True) from exc
     if outcome.status not in {"ready", "no_trade"}:
-        warnings = list(getattr(outcome.candidate.metadata, "warnings", ()))
+        candidate_metadata = getattr(outcome.candidate, "metadata", None)
+        warnings = list(getattr(candidate_metadata, "warnings", ()))
         if outcome.status == "search_incomplete":
             warnings.append("search_incomplete_no_feasibility_claim")
         details: dict[str, object] = {
@@ -1398,7 +1399,7 @@ async def _recompute_real_basket(
             "basket_unchanged": True,
         }
         if outcome.status == "search_incomplete":
-            details["search_evidence"] = _search_evidence(outcome.candidate.metadata)
+            details["search_evidence"] = _search_evidence(candidate_metadata)
         raise AppError(
             "optimizer_subset_rejected",
             "The requested subset could not produce an independently validated recommendation; the saved basket is unchanged",

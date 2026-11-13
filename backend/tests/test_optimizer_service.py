@@ -1446,6 +1446,20 @@ def _search_incomplete_candidate() -> SimpleNamespace:
     )
     return SimpleNamespace(status="search_incomplete", legs=(), metadata=metadata)
 
+def _test_core_contract(
+    candidate: object,
+) -> tuple[type[Request], Callable[..., object], Callable[..., Validation]]:
+    def worker(request: Request, deadline: float) -> object:
+        del request, deadline
+        return candidate
+
+    def validator(*args: object, **kwargs: object) -> Validation:
+        del args, kwargs
+        return Validation(True)
+
+    return Request, worker, validator
+
+
 
 def _assert_initial_timeout_persisted(
     session_factory: Callable[[], Session], error: AppError
@@ -1499,7 +1513,7 @@ async def test_initial_native_worker_timeout_persists_original_terminal_run(
     monkeypatch.setattr(
         optimizer_service,
         "_core_contract",
-        lambda: (Request, lambda _request, _deadline: candidate, lambda *args, **kwargs: Validation(True)),
+        lambda: _test_core_contract(candidate),
     )
     try:
         with session_factory() as session, pytest.raises(AppError) as error:
@@ -1523,7 +1537,7 @@ async def test_initial_owner_validation_timeout_persists_terminal_run(
     monkeypatch.setattr(
         optimizer_service,
         "_core_contract",
-        lambda: (Request, lambda _request, _deadline: candidate, lambda *args, **kwargs: Validation(True)),
+        lambda: _test_core_contract(candidate),
     )
     try:
         with session_factory() as session, pytest.raises(AppError) as error:
@@ -1573,10 +1587,11 @@ async def test_capacity_rejection_is_not_persisted_as_timeout(
 ) -> None:
     engine, session_factory = _create_sqlite_optimizer_run(tmp_path, selected=True)
     _patch_real_run_dependencies(monkeypatch, inputs=_batch_inputs())
+    candidate = Candidate((), status="no_trade")
     monkeypatch.setattr(
         optimizer_service,
         "_core_contract",
-        lambda: (Request, lambda _request, _deadline: Candidate((), status="no_trade"), lambda *args, **kwargs: Validation(True)),
+        lambda: _test_core_contract(candidate),
     )
     try:
         with session_factory() as session, pytest.raises(AppError) as error:
@@ -1587,7 +1602,7 @@ async def test_capacity_rejection_is_not_persisted_as_timeout(
             )
         assert error.value.code == "optimizer_capacity_exceeded"
         assert error.value.status_code == 503
-        assert "run_id" not in error.value.details
+        assert "run_id" not in cast(dict[str, object], error.value.details)
         with session_factory() as session:
             assert session.scalar(select(func.count()).select_from(OptimizerRun)) == 1
     finally:
@@ -1647,15 +1662,17 @@ async def test_initial_search_incomplete_is_truthful_nonactionable_terminal_resu
     try:
         with session_factory() as session:
             run = await _create_test_real_run(session, object(), object())
+            metrics = cast(dict[str, object], run.metrics)
+            search_evidence = cast(dict[str, object], metrics["search_evidence"])
             assert run.status == "FAILED"
-            assert run.metrics["optimizer_status"] == "search_incomplete"
-            assert run.metrics["search_evidence"]["search_state"] == "incomplete"
-            assert run.metrics["search_evidence"]["feasibility_proven"] is False
-            assert run.metrics["search_evidence"]["tax_region_search_complete"] is False
+            assert metrics["optimizer_status"] == "search_incomplete"
+            assert search_evidence["search_state"] == "incomplete"
+            assert search_evidence["feasibility_proven"] is False
+            assert search_evidence["tax_region_search_complete"] is False
             assert "search_incomplete_no_feasibility_claim" in run.warnings
             recommendations = optimizer_service.real_run_recommendations(session, run)
             assert recommendations["status"] == "failed"
-            assert recommendations["optimizer_metrics"]["optimizer_status"] == "search_incomplete"
+            assert cast(dict[str, object], recommendations["optimizer_metrics"])["optimizer_status"] == "search_incomplete"
             assert recommendations["groups"] == []
             assert recommendations["consolidated_legs"] == []
         with session_factory() as session:
@@ -1697,17 +1714,19 @@ async def test_subset_search_incomplete_reports_evidence_and_preserves_saved_bas
                     state,
                     ("LOT-A1",),
                     {"sale:AAA": True},
-                    object(),
-                    object(),
+                    cast(optimizer_service.ProcessSupervisor, object()),
+                    cast(optimizer_service.BoundedValidationExecutor, object()),
                     correlation_id="subset-incomplete",
                     event_type="test_subset_incomplete",
                     event_details={},
                 )
         assert error.value.code == "optimizer_subset_rejected"
         assert error.value.status_code == 422
-        assert error.value.details["optimizer_status"] == "search_incomplete"
-        assert error.value.details["search_evidence"]["feasibility_proven"] is False
-        assert error.value.details["basket_unchanged"] is True
+        details = cast(dict[str, object], error.value.details)
+        search_evidence = cast(dict[str, object], details["search_evidence"])
+        assert details["optimizer_status"] == "search_incomplete"
+        assert search_evidence["feasibility_proven"] is False
+        assert details["basket_unchanged"] is True
         assert _subset_snapshot(session_factory) == before
     finally:
         engine.dispose()
@@ -1754,15 +1773,15 @@ async def test_subset_timeout_preserves_prior_recommendations_and_annotations(
                     state,
                     selected_lots,
                     {"sale:AAA": True},
-                    object(),
-                    object(),
+                    cast(optimizer_service.ProcessSupervisor, object()),
+                    cast(optimizer_service.BoundedValidationExecutor, object()),
                     correlation_id=f"subset-{timeout_stage}-timeout",
                     event_type="test_subset_timeout",
                     event_details={},
                 )
         assert error.value.code == "optimizer_timeout"
         assert error.value.status_code == 504
-        assert error.value.details["basket_unchanged"] is True
+        assert cast(dict[str, object], error.value.details)["basket_unchanged"] is True
         assert _subset_snapshot(session_factory) == before
     finally:
         engine.dispose()

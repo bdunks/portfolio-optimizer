@@ -316,7 +316,17 @@ def _persist_test_candidate(
     annotation_overrides: object = None,
     expected_universe: object = None,
 ) -> None:
-    del selected_groups, annotation_overrides, expected_universe
+    del selected_groups, expected_universe
+    if isinstance(annotation_overrides, dict):
+        group = session.scalar(
+            select(RecommendationGroup)
+            .where(RecommendationGroup.id == _GROUP_ID)
+            .execution_options(populate_existing=True)
+        )
+        values = annotation_overrides.get("sale:ABC")
+        note = values.get("note") if isinstance(values, dict) else None
+        if group is not None and isinstance(note, str):
+            group.note = note
     marker = cast(PublicationCandidate, outcome.candidate).marker
     metrics = dict(run.metrics)
     metrics["basket_revision"] = int(metrics["basket_revision"]) + 1
@@ -400,6 +410,7 @@ async def test_concurrent_subset_publication_cannot_overwrite_newer_basket(
                 correlation_id="older-request",
                 event_type="test_publication",
                 event_details={},
+                annotation_overrides={"sale:ABC": {"note": "older stale annotation"}},
             )
         )
         newer_task = asyncio.create_task(
@@ -414,6 +425,7 @@ async def test_concurrent_subset_publication_cannot_overwrite_newer_basket(
                 correlation_id="newer-request",
                 event_type="test_publication",
                 event_details={},
+                annotation_overrides={"sale:ABC": {"note": "newer annotation"}},
             )
         )
         await newer_task
@@ -426,7 +438,7 @@ async def test_concurrent_subset_publication_cannot_overwrite_newer_basket(
         run, group, leg_count = _get_run_rows(session_factory)
         assert run.metrics["basket_revision"] == 1
         assert run.metrics["basket_marker"] == "newer"
-        assert group.note == "initial note"
+        assert group.note == "newer annotation"
         assert leg_count == 1
     finally:
         release_older.set()

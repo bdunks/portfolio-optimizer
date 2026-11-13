@@ -131,7 +131,7 @@ function currentRunFixture(realizedSt = '-5.00', allocationWeight = '70.0000') {
   };
 }
 
-function selectedOverviewRunFixture() {
+function selectedOverviewRunFixture(withUnavailableGroupDetails = false) {
   return {
     ...currentRunFixture(),
     frozen_display_context: {
@@ -195,12 +195,14 @@ function selectedOverviewRunFixture() {
       {
         group_id: 'group-lower-priority',
         rank: 4,
-        sleeve_key: 'legacy',
+        sleeve_key: withUnavailableGroupDetails ? null : 'legacy',
         rationale: 'Reduce AAPL legacy exposure.',
         selected: true,
         rejected: false,
         leg_ids: ['sell-aapl', 'buy-shared'],
-        impact: { realized_st_usd: '-5.00', realized_lt_usd: '0.00' },
+        impact: withUnavailableGroupDetails
+          ? null
+          : { realized_st_usd: '-5.00', realized_lt_usd: '0.00' },
       },
       {
         group_id: 'group-top-priority',
@@ -601,6 +603,14 @@ describe('IndexPage', () => {
       expect.stringContaining('COLLISION-ONE'),
     ]);
     expect(policy.find('a[href="/policy#replacement-sets"]').exists()).toBe(true);
+    seedCurrentRunForTest(store, selectedOverviewRunFixture(true));
+    store.currentRunView = 'current';
+    await flushPromises();
+    const unavailablePreview = wrapper.get('.run-card');
+    expect(unavailablePreview.text()).toContain('Sleeve unavailable (not returned by API)');
+    expect(unavailablePreview.text()).toContain(
+      'Signed group P/L · ST Unavailable (not returned by API)',
+    );
     wrapper.unmount();
   });
 

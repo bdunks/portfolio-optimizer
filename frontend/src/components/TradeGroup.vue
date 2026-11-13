@@ -39,10 +39,21 @@
                   :id="groupImpactId"
                   class="tw:m-0 tw:mt-1 tw:!text-xs tw:!leading-relaxed tw:!text-muted-foreground"
                 >
-                  API realized ST / LT: {{ formatUsd(group.impact.realized_st_usd) }} /
-                  {{ formatUsd(group.impact.realized_lt_usd) }} ·
+                  API realized ST / LT:
+                  {{
+                    formatUsd(group.impact?.realized_st_usd, 'Unavailable (not returned by API)')
+                  }}
+                  /
+                  {{
+                    formatUsd(group.impact?.realized_lt_usd, 'Unavailable (not returned by API)')
+                  }}
+                  ·
                   {{ group.selected ? 'Selected in returned run' : 'Not selected in returned run' }}
-                  · {{ group.impact.selected_sell_lots_count }} sell lots
+                  ·
+                  {{
+                    group.impact?.selected_sell_lots_count ?? 'Unavailable (not returned by API)'
+                  }}
+                  sell lots
                 </p>
                 <span :id="groupIdentityId" class="tw:sr-only">Group ID {{ group.group_id }}</span>
               </div>
@@ -119,7 +130,7 @@
               <dd
                 class="tw:m-0 tw:mt-1 tw:break-words tw:!text-sm tw:!font-semibold tw:!text-foreground"
               >
-                {{ group.impact.selected_sell_lots_count }}
+                {{ group.impact?.selected_sell_lots_count ?? 'Unavailable (not returned by API)' }}
               </dd>
             </div>
             <div class="tw:min-w-0 tw:rounded-md tw:border tw:border-border tw:p-3">
@@ -129,7 +140,9 @@
               <dd
                 class="tw:m-0 tw:mt-1 tw:break-words tw:!text-sm tw:!font-semibold tw:!text-foreground"
               >
-                {{ formatUsd(group.impact.sell_proceeds_usd) }}
+                {{
+                  formatUsd(group.impact?.sell_proceeds_usd, 'Unavailable (not returned by API)')
+                }}
               </dd>
             </div>
             <div class="tw:min-w-0 tw:rounded-md tw:border tw:border-border tw:p-3">
@@ -139,8 +152,9 @@
               <dd
                 class="tw:m-0 tw:mt-1 tw:break-words tw:!text-sm tw:!font-semibold tw:!text-foreground"
               >
-                {{ formatUsd(group.impact.realized_st_usd) }} /
-                {{ formatUsd(group.impact.realized_lt_usd) }}
+                {{ formatUsd(group.impact?.realized_st_usd, 'Unavailable (not returned by API)') }}
+                /
+                {{ formatUsd(group.impact?.realized_lt_usd, 'Unavailable (not returned by API)') }}
               </dd>
             </div>
             <div class="tw:min-w-0 tw:rounded-md tw:border tw:border-border tw:p-3">
@@ -150,8 +164,13 @@
               <dd
                 class="tw:m-0 tw:mt-1 tw:break-words tw:!text-sm tw:!font-semibold tw:!text-foreground"
               >
-                {{ group.impact.replacement_buy_shares }} /
-                {{ formatUsd(group.impact.replacement_buy_cost_usd) }}
+                {{ group.impact?.replacement_buy_shares ?? 'Unavailable (not returned by API)' }} /
+                {{
+                  formatUsd(
+                    group.impact?.replacement_buy_cost_usd,
+                    'Unavailable (not returned by API)',
+                  )
+                }}
               </dd>
             </div>
             <div class="tw:min-w-0 tw:rounded-md tw:border tw:border-border tw:p-3">
@@ -159,7 +178,7 @@
               <dd
                 class="tw:m-0 tw:mt-1 tw:break-words tw:!text-sm tw:!font-semibold tw:!text-foreground"
               >
-                {{ formatUsd(group.impact.cash_after_usd) }}
+                {{ formatUsd(group.impact?.cash_after_usd, 'Unavailable (not returned by API)') }}
               </dd>
             </div>
             <div class="tw:min-w-0 tw:rounded-md tw:border tw:border-border tw:p-3">
@@ -169,7 +188,7 @@
               <dd
                 class="tw:m-0 tw:mt-1 tw:break-words tw:!text-sm tw:!font-semibold tw:!text-foreground"
               >
-                {{ group.impact.risk_tracking_score ?? 'Unavailable (not returned by API)' }}
+                {{ group.impact?.risk_tracking_score ?? 'Unavailable (not returned by API)' }}
               </dd>
             </div>
             <div class="tw:min-w-0 tw:rounded-md tw:border tw:border-border tw:p-3">
@@ -177,7 +196,7 @@
               <dd
                 class="tw:m-0 tw:mt-1 tw:break-words tw:!text-sm tw:!font-semibold tw:!text-foreground"
               >
-                {{ group.impact.wash_status }}
+                {{ group.impact?.wash_status ?? 'Unavailable (not returned by API)' }}
               </dd>
             </div>
           </dl>

@@ -191,6 +191,25 @@ describe('TradeGroup', () => {
     expect(wrapper.find('form').exists()).toBe(false);
   });
 
+  it('renders unavailable API impacts without substituting zeroes', async () => {
+    const wrapper = mountGroup({ group: group({ impact: null }) });
+    const trigger = wrapper.get('button[data-group-id="group-a"]');
+    expect(trigger.text()).toContain(
+      'API realized ST / LT: Unavailable (not returned by API) / Unavailable (not returned by API)',
+    );
+
+    await openGroup(wrapper);
+    const facts = wrapper.get('.group-facts');
+    expect(facts.text()).toContain('Selected sell-lot count Unavailable (not returned by API)');
+    expect(facts.text()).toContain('API sell proceeds Unavailable (not returned by API)');
+    expect(facts.text()).toContain(
+      'API replacement BUY shares / cost Unavailable (not returned by API) / Unavailable (not returned by API)',
+    );
+    expect(facts.text()).toContain('API cash afterUnavailable (not returned by API)');
+    expect(facts.text()).toContain('Wash statusUnavailable (not returned by API)');
+    expect(facts.text()).not.toContain('0.00 USD');
+  });
+
   it('emits controlled group, lot, raw note, and raw rejection intents only', async () => {
     const wrapper = mountGroup();
     await openGroup(wrapper);

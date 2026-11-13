@@ -373,13 +373,15 @@ function makeMultiLotRun(
         ? {
             ...group,
             selected: totals.selectedLotCount > 0,
-            impact: {
-              ...group.impact,
-              selected_sell_lots_count: totals.selectedLotCount,
-              sell_proceeds_usd: totals.notional,
-              realized_st_usd: totals.realizedSt,
-              cash_after_usd: totals.notional,
-            },
+            impact: group.impact
+              ? {
+                  ...group.impact,
+                  selected_sell_lots_count: totals.selectedLotCount,
+                  sell_proceeds_usd: totals.notional,
+                  realized_st_usd: totals.realizedSt,
+                  cash_after_usd: totals.notional,
+                }
+              : null,
           }
         : group,
     ),
@@ -565,6 +567,25 @@ describe('RecommendationsPage', () => {
     expect(warning?.text()).toContain('Unlinked API legs — not executable');
     expect(warning?.text()).toContain('API group references are missing or inconsistent.');
     expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('keeps nullable recommendation details visibly unavailable', async () => {
+    const base = makeRun();
+    const runWithUnavailableDetails = {
+      ...base,
+      groups: base.groups.map((group) => ({ ...group, sleeve_key: null, impact: null })),
+    };
+    const { pinia } = setup(runWithUnavailableDetails);
+    const wrapper = mountRecommendationsPage(pinia);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('Sleeve unavailable (not returned by API)');
+    expect(wrapper.text()).toContain('Unavailable (not returned by API)');
+    await openRecommendationGroup(wrapper, 'group-a');
+    expect(wrapper.get('.group-facts').text()).toContain(
+      'API replacement BUY shares / cost Unavailable (not returned by API)',
+    );
     wrapper.unmount();
   });
 

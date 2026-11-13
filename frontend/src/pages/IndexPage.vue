@@ -288,7 +288,9 @@
                     <strong
                       >SELL ·
                       {{
-                        effectLabels[preview.group.sleeve_key] ?? preview.group.sleeve_key
+                        preview.group.sleeve_key !== null
+                          ? (effectLabels[preview.group.sleeve_key] ?? preview.group.sleeve_key)
+                          : 'Sleeve unavailable (not returned by API)'
                       }}</strong
                     >
                   </div>
@@ -321,8 +323,20 @@
                     No selected SELL leg was returned for this group.
                   </p>
                   <p class="tw:m-0! tw:text-sm tw:text-muted-foreground">
-                    Signed group P/L · ST {{ formatUsd(preview.group.impact.realized_st_usd) }} · LT
-                    {{ formatUsd(preview.group.impact.realized_lt_usd) }}
+                    Signed group P/L · ST
+                    {{
+                      formatUsd(
+                        preview.group.impact?.realized_st_usd,
+                        'Unavailable (not returned by API)',
+                      )
+                    }}
+                    · LT
+                    {{
+                      formatUsd(
+                        preview.group.impact?.realized_lt_usd,
+                        'Unavailable (not returned by API)',
+                      )
+                    }}
                   </p>
                 </article>
               </li>
@@ -900,7 +914,9 @@ const runContextLabels = computed(() => {
   const allocation = run?.portfolio_effects?.allocation;
   const transition = run?.portfolio_effects?.us_transition;
   const sleeveKeys = [
-    ...(run?.groups.map((group) => group.sleeve_key) ?? []),
+    ...(run?.groups
+      .map((group) => group.sleeve_key)
+      .filter((sleeveKey): sleeveKey is string => sleeveKey !== null) ?? []),
     ...Object.keys(allocation?.current?.sleeve_weights_pct ?? {}),
     ...Object.keys(allocation?.proposed?.sleeve_weights_pct ?? {}),
     ...Object.keys(allocation?.target?.sleeve_weights_pct ?? {}),

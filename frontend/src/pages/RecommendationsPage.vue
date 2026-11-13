@@ -572,7 +572,11 @@
                 :group="group"
                 :legs="groupDetailLegs(group)"
                 :leg-references="groupLegReferences(group)"
-                :sleeve-label="sleeveLabel(group.sleeve_key)"
+                :sleeve-label="
+                  group.sleeve_key !== null
+                    ? sleeveLabel(group.sleeve_key)
+                    : 'Sleeve unavailable (not returned by API)'
+                "
                 :has-sell-lots="groupSellLotIdsFor(group).length > 0"
                 :has-shared-leg="group.leg_ids.some(isSharedLeg)"
                 :note-draft="noteDrafts[group.group_id] ?? ''"
@@ -871,7 +875,9 @@ const runSleeveLabels = computed(() => {
   const allocation = run?.portfolio_effects?.allocation;
   const transition = run?.portfolio_effects?.us_transition;
   return completeFrozenRunSleeveLabels(runDisplayContext.value, [
-    ...(run?.groups.map((group) => group.sleeve_key) ?? []),
+    ...(run?.groups
+      .map((group) => group.sleeve_key)
+      .filter((sleeveKey): sleeveKey is string => sleeveKey !== null) ?? []),
     ...Object.keys(allocation?.current?.sleeve_weights_pct ?? {}),
     ...Object.keys(allocation?.proposed?.sleeve_weights_pct ?? {}),
     ...Object.keys(allocation?.target?.sleeve_weights_pct ?? {}),
@@ -1005,7 +1011,11 @@ const transitionRoleIdentity = computed(() => {
 });
 const effectsDescription = computed(() => runPresentation.value.effectsDescription);
 const sleeveOptions = computed(() => {
-  const keys = new Set<string>(currentRun.value?.groups.map((group) => group.sleeve_key) ?? []);
+  const keys = new Set<string>(
+    currentRun.value?.groups.flatMap((group) =>
+      group.sleeve_key === null ? [] : [group.sleeve_key],
+    ) ?? [],
+  );
   if (filters.value.sleeve) keys.add(filters.value.sleeve);
   return [...keys].sort();
 });

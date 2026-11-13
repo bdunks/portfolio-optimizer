@@ -1810,3 +1810,219 @@ def test_worker_does_not_select_sector_band_violating_replacement(
     assert result.status == "ready"
     assert not any(leg.side == "BUY" and leg.ticker == "NEWETF" for leg in result.legs)
     assert validate_candidate(inputs, result.legs).accepted
+
+
+def _wash_clearance_inputs(
+    *,
+    recent_shares: Decimal = Decimal(1),
+    recent_available_shares: Decimal | None = None,
+    add_second_loss: bool = False,
+    lot_limit: int = 2,
+) -> FinancialInputs:
+    inputs = _inputs()
+    recent_date = TRADE_DATE - timedelta(days=10)
+    recent_lot = replace(
+        inputs.lots[0],
+        broker_lot_id="recent-aapl-clearance-lot",
+        acquired_date=recent_date,
+        shares=recent_shares,
+        available_shares=(
+            recent_shares if recent_available_shares is None else recent_available_shares
+        ),
+        adjusted_unit_basis_usd=Decimal(95),
+    )
+    settings = dict(inputs.policy.settings.values)
+    settings.update(
+        {
+            "allow_gain_sales": True,
+            "gain_budget_usd": Decimal(100),
+            "max_incremental_tax_cost_usd": Decimal(100),
+            "st_gain_limit_usd": Decimal(100),
+            "lt_gain_limit_usd": Decimal(100),
+            "max_sell_lots_per_batch": lot_limit,
+            "max_sell_tickers_per_batch": 1,
+            "max_total_orders_per_batch": 2,
+        }
+    )
+    extra_lots = (recent_lot,)
+    extra_shares = recent_shares
+    if add_second_loss:
+        extra_lots = (
+            *extra_lots,
+            replace(
+                inputs.lots[0],
+                broker_lot_id="older-aapl-loss-b",
+                shares=Decimal(1),
+                available_shares=Decimal(1),
+                adjusted_unit_basis_usd=Decimal(101),
+            ),
+        )
+        extra_shares += Decimal(1)
+    return replace(
+        inputs,
+        positions=(
+            replace(
+                inputs.positions[0],
+                shares=Decimal(10) + extra_shares,
+                market_value_usd=Decimal(1000) + extra_shares * Decimal(100),
+            ),
+        ),
+        lots=(*inputs.lots, *extra_lots),
+        transactions=(
+            TransactionInput(
+                "recent-aapl-buy",
+                "AAPL",
+                "BUY",
+                NOW - timedelta(days=10),
+                recent_date,
+                recent_shares,
+                Decimal(95),
+                True,
+                recent_lot.broker_lot_id,
+                "TEST",
+                None,
+            ),
+        ),
+        policy=replace(
+            inputs.policy,
+            settings=PolicySettings(tuple(sorted(settings.items()))),
+        ),
+    )
+
+
+def test_worker_sells_full_recent_wash_clearance_quantity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _wash_clearance_inputs()
+
+    result = optimize_worker(OptimizerRequest(inputs), time.monotonic() + 10)
+
+    assert result.status == "ready"
+    sold_lots = {
+        allocation.broker_lot_id: allocation.shares
+        for leg in result.legs
+        if leg.side == "SELL"
+        for allocation in leg.selected_lots
+    }
+    assert sold_lots["loss-lot"] > 0
+    assert sold_lots["recent-aapl-clearance-lot"] == Decimal(1)
+    assert validate_candidate(inputs, result.legs).accepted
+
+
+def test_shared_wash_clearance_does_not_merge_independent_losses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _wash_clearance_inputs(add_second_loss=True, lot_limit=2)
+    config, config_errors = read_objective_policy(inputs)
+    assert config is not None
+    assert config_errors == ()
+
+    screen, screen_errors = core_module._screen(
+        OptimizerRequest(inputs), config, time.monotonic() + 10
+    )
+
+    assert screen_errors == ()
+    assert screen is not None
+    selected_ids = {candidate.lot.broker_lot_id for candidate in screen.sales}
+    assert "recent-aapl-clearance-lot" in selected_ids
+    assert len(selected_ids) == 2
+    assert selected_ids & {"loss-lot", "older-aapl-loss-b"}
+
+
+def test_wash_dependency_owner_assessment_call_count_is_bounded_for_2500_lots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _inputs()
+    lots = tuple(
+        replace(
+            inputs.lots[0],
+            broker_lot_id=f"loss-{index}",
+            shares=Decimal(1),
+            available_shares=Decimal(1),
+            adjusted_unit_basis_usd=Decimal(101),
+        )
+        for index in range(2500)
+    )
+    inputs = replace(
+        inputs,
+        positions=(
+            replace(
+                inputs.positions[0],
+                shares=Decimal(2500),
+                market_value_usd=Decimal(250000),
+            ),
+        ),
+        lots=lots,
+    )
+    calls: list[int] = []
+
+    def counted_assessment(
+        _inputs: FinancialInputs, proposed_sales: tuple[object, ...]
+    ) -> tuple[SimpleNamespace, ...]:
+        calls.append(len(proposed_sales))
+        return tuple(
+            SimpleNamespace(broker_lot_id=sale.broker_lot_id, eligible=True, reasons=())
+            for sale in proposed_sales
+        )
+
+    monkeypatch.setattr(core_module, "assess_wash_sales", counted_assessment)
+    config, config_errors = read_objective_policy(inputs)
+    assert config is not None
+    assert config_errors == ()
+
+    screen, screen_errors = core_module._screen(
+        OptimizerRequest(inputs), config, time.monotonic() + 10
+    )
+
+    assert screen_errors == ()
+    assert screen is not None
+    assert sum(calls) <= 2
+
+
+def test_wash_dependency_checks_deadline_after_owner_assessment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    clock = [0.0]
+    deadline = 5.0
+    monkeypatch.setattr(core_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    def expire_during_assessment(
+        _inputs: FinancialInputs, proposed_sales: tuple[object, ...]
+    ) -> tuple[SimpleNamespace, ...]:
+        clock[0] = deadline
+        return tuple(
+            SimpleNamespace(broker_lot_id=sale.broker_lot_id, eligible=True, reasons=())
+            for sale in proposed_sales
+        )
+
+    monkeypatch.setattr(core_module, "assess_wash_sales", expire_during_assessment)
+    config, config_errors = read_objective_policy(_inputs())
+    assert config is not None
+    assert config_errors == ()
+
+    screen, errors = core_module._screen(OptimizerRequest(_inputs()), config, deadline)
+
+    assert screen is None
+    assert any("deadline" in error for error in errors)
+
+
+def test_fractional_recent_lot_cannot_clear_an_older_loss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _wash_clearance_inputs(recent_shares=Decimal("1.5"), lot_limit=2)
+    config, config_errors = read_objective_policy(inputs)
+    assert config is not None
+    assert config_errors == ()
+
+    screen, screen_errors = core_module._screen(
+        OptimizerRequest(inputs), config, time.monotonic() + 10
+    )
+
+    assert screen_errors == ()
+    assert screen is not None
+    assert "loss-lot" not in {candidate.lot.broker_lot_id for candidate in screen.sales}

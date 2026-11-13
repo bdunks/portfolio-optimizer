@@ -242,7 +242,6 @@ def assess_proposed_buys(
             if (
                 transaction.ticker.upper() != ticker
                 or transaction.transaction_kind.upper() != "SELL"
-                or transaction.is_acquisition
                 or not lookback_start <= transaction.trade_date <= buy.buy_date
             ):
                 continue
@@ -252,6 +251,11 @@ def assess_proposed_buys(
                 restriction_end = transaction.trade_date + timedelta(days=30)
             elif transaction.realized_pl_usd < 0:
                 reasons.add("executed_loss_restriction")
+                transaction_keys.add(transaction.broker_transaction_key)
+                restriction_end = transaction.trade_date + timedelta(days=30)
+            elif transaction.broker_lot_id is None:
+                # A consolidated order-level gain can conceal loss-making lots.
+                reasons.add("executed_loss_attribution_unknown")
                 transaction_keys.add(transaction.broker_transaction_key)
                 restriction_end = transaction.trade_date + timedelta(days=30)
             else:

@@ -267,7 +267,7 @@ def test_executed_loss_buy_check_requires_explicit_attribution_and_complete_hist
     gain_sale = _transaction(
         "known-gain",
         trade_date=TRADE_DATE - timedelta(days=3),
-        lot_id=None,
+        lot_id="known-gain-lot",
         kind="SELL",
         is_acquisition=False,
         realized_pl_usd="10",
@@ -279,6 +279,45 @@ def test_executed_loss_buy_check_requires_explicit_attribution_and_complete_hist
     incomplete = assess_proposed_buys(_inputs(metadata=InputSourceMetadata()), (buy,))[0]
     assert not incomplete.eligible
     assert incomplete.reasons == ("incomplete_executed_loss_history",)
+
+
+@pytest.mark.parametrize("order_level_pl", ["10", "0"])
+def test_unattributed_nonnegative_sell_pl_does_not_clear_buy(
+    order_level_pl: str,
+) -> None:
+    buy = ProposedBuy("XYZ", Decimal(1), "replacement", TRADE_DATE)
+    consolidated_sale = _transaction(
+        f"consolidated-{order_level_pl}",
+        trade_date=TRADE_DATE - timedelta(days=3),
+        lot_id=None,
+        kind="SELL",
+        is_acquisition=False,
+        realized_pl_usd=order_level_pl,
+    )
+
+    assessment = assess_proposed_buys(_inputs(transactions=(consolidated_sale,)), (buy,))[0]
+
+    assert not assessment.eligible
+    assert assessment.reasons == ("executed_loss_attribution_unknown",)
+    assert assessment.conflicting_transaction_keys == (consolidated_sale.broker_transaction_key,)
+
+
+def test_executed_loss_sell_is_checked_even_when_flagged_as_acquisition() -> None:
+    buy = ProposedBuy("XYZ", Decimal(1), "replacement", TRADE_DATE)
+    contradictory_loss = _transaction(
+        "loss-flagged-acquisition",
+        trade_date=TRADE_DATE - timedelta(days=3),
+        lot_id=None,
+        kind="SELL",
+        is_acquisition=True,
+        realized_pl_usd="-5",
+    )
+
+    assessment = assess_proposed_buys(_inputs(transactions=(contradictory_loss,)), (buy,))[0]
+
+    assert not assessment.eligible
+    assert assessment.reasons == ("executed_loss_restriction",)
+    assert assessment.conflicting_transaction_keys == ("loss-flagged-acquisition",)
 
 
 def test_wash_action_dates_must_match_frozen_trade_date_and_proposed_losses_gate_buys() -> None:

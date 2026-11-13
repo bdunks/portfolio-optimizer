@@ -658,9 +658,20 @@ def test_no_trade_preserves_baseline_objective(monkeypatch: pytest.MonkeyPatch) 
 def test_worker_can_sell_to_repair_unfunded_cash_reserve(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_objective_accessor(monkeypatch)
     inputs = _inputs()
+    inputs = replace(inputs, lots=(replace(inputs.lots[0], adjusted_unit_basis_usd=Decimal(10)),))
+    overrides: dict[str, Decimal | bool] = {
+        key: Decimal(100)
+        for key in (
+            "cash_reserve_usd",
+            "gain_budget_usd",
+            "max_incremental_tax_cost_usd",
+            "st_gain_limit_usd",
+            "lt_gain_limit_usd",
+        )
+    }
+    overrides["allow_gain_sales"] = True
     settings = tuple(
-        (key, Decimal(1) if key == "cash_reserve_usd" else value)
-        for key, value in inputs.policy.settings.values
+        (key, overrides.get(key, value)) for key, value in inputs.policy.settings.values
     )
     inputs = replace(inputs, policy=replace(inputs.policy, settings=PolicySettings(settings)))
 
@@ -672,7 +683,10 @@ def test_worker_can_sell_to_repair_unfunded_cash_reserve(monkeypatch: pytest.Mon
     validation = validate_candidate(inputs, result.legs)
     assert validation.accepted
     assert validation.evaluation is not None
-    assert validation.evaluation.proposed.cash_usd >= Decimal(1)
+    assert validation.evaluation.proposed.cash_usd >= Decimal(100)
+    assert result.metadata.objective_value is not None
+    assert result.metadata.baseline_objective_value is not None
+    assert result.metadata.objective_value > result.metadata.baseline_objective_value
 
 
 def test_worker_never_publishes_no_trade_when_reserve_is_unmet(
@@ -692,6 +706,10 @@ def test_worker_never_publishes_no_trade_when_reserve_is_unmet(
     assert result.status == "infeasible"
     assert result.legs == ()
     assert "cash_reserve_breached_after_fees" in result.metadata.warnings
+
+    assert result.metadata.tax_region_search_complete
+    assert result.metadata.solver_statuses
+    assert all(status.endswith(f":{cp.INFEASIBLE}") for status in result.metadata.solver_statuses)
 
 
 def test_joint_loss_harvest_is_independently_validated_and_prioritized(
@@ -1078,6 +1096,47 @@ def test_unproven_infeasible_status_remains_incomplete(monkeypatch: pytest.Monke
     assert result.legs == ()
     assert not result.metadata.tax_region_search_complete
     assert any("infeasible_inaccurate" in status for status in result.metadata.solver_statuses)
+
+
+def test_invalid_baseline_with_inaccurate_solvers_is_search_incomplete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _inputs()
+    inputs = replace(inputs, lots=(replace(inputs.lots[0], adjusted_unit_basis_usd=Decimal(10)),))
+    overrides: dict[str, Decimal | bool] = {
+        key: Decimal(100)
+        for key in (
+            "cash_reserve_usd",
+            "gain_budget_usd",
+            "max_incremental_tax_cost_usd",
+            "st_gain_limit_usd",
+            "lt_gain_limit_usd",
+        )
+    }
+    overrides["allow_gain_sales"] = True
+    settings = tuple(
+        (key, overrides.get(key, value)) for key, value in inputs.policy.settings.values
+    )
+    inputs = replace(inputs, policy=replace(inputs.policy, settings=PolicySettings(settings)))
+
+    def both_solvers_inaccurate(
+        problem: cp.Problem, deadline: float, regions_remaining: int
+    ) -> tuple[str | None, str]:
+        del problem, deadline, regions_remaining
+        return f"{cp.OSQP}+{cp.CLARABEL}", cp.INFEASIBLE_INACCURATE
+
+    monkeypatch.setattr(core_module, "_solve_problem", both_solvers_inaccurate)
+
+    result = optimize_worker(OptimizerRequest(inputs), time.monotonic() + 10)
+
+    assert result.status == "search_incomplete"
+    assert result.legs == ()
+    assert not result.metadata.tax_region_search_complete
+    assert all(
+        "infeasible_inaccurate" in solver_status
+        for solver_status in result.metadata.solver_statuses
+    )
 
 
 def test_expired_deadline_returns_no_legs(monkeypatch: pytest.MonkeyPatch) -> None:

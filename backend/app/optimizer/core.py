@@ -1609,7 +1609,7 @@ def optimize_worker(request: OptimizerRequest, computation_deadline: float) -> O
     region_complete = True
     best_legs: tuple[ConsolidatedLeg, ...] = ()
     best_validation = baseline_result
-    best_score = baseline_objective
+    best_score = baseline_objective if baseline_result.accepted else None
     best_selected: tuple[str, ...] = ()
     rounding_attempts = 0
     solve_seconds = 0.0
@@ -1683,7 +1683,7 @@ def optimize_worker(request: OptimizerRequest, computation_deadline: float) -> O
             or validation.objective_value is None
         ):
             continue
-        if validation.objective_value < best_score - Decimal("0.0000000001"):
+        if best_score is None or validation.objective_value < best_score - Decimal("0.0000000001"):
             best_legs = repaired
             best_validation = validation
             best_score = validation.objective_value
@@ -1710,14 +1710,14 @@ def optimize_worker(request: OptimizerRequest, computation_deadline: float) -> O
         observed_statuses = tuple(status.rsplit(":", 1)[-1] for status in solver_statuses)
         if time.monotonic() >= computation_deadline:
             status = "deadline_exceeded"
-        elif not baseline_result.accepted or (
-            observed_statuses and all(value in {cp.INFEASIBLE} for value in observed_statuses)
-        ):
-            status = "infeasible"
         elif not region_complete:
             status = "search_incomplete"
-        else:
+        elif observed_statuses and all(value == cp.INFEASIBLE for value in observed_statuses):
+            status = "infeasible"
+        elif baseline_result.accepted:
             status = "no_trade"
+        else:
+            status = "search_incomplete"
         meta = _metadata(
             inputs,
             status,

@@ -251,6 +251,87 @@ class TransactionInput:
 
 
 @dataclass(frozen=True, slots=True)
+class LookThroughExposureInput:
+    ticker: str
+    dimension: str
+    exposure_key: str
+    weight: Decimal
+    provider: str
+    as_of_date: date
+
+
+@dataclass(frozen=True, slots=True)
+class InputSourceMetadata:
+    sync_complete: bool | None = None
+    sync_started_at: datetime | None = None
+    sync_completed_at: datetime | None = None
+    transaction_history_complete: bool | None = None
+    transaction_history_start_date: date | None = None
+    transaction_history_end_date: date | None = None
+    lookthrough_complete: bool | None = None
+
+    def to_provenance(self) -> dict[str, object]:
+        return {
+            "sync_complete": self.sync_complete,
+            "sync_started_at": _iso_datetime(self.sync_started_at)
+            if self.sync_started_at
+            else None,
+            "sync_completed_at": _iso_datetime(self.sync_completed_at)
+            if self.sync_completed_at
+            else None,
+            "transaction_history_complete": self.transaction_history_complete,
+            "transaction_history_start_date": (
+                self.transaction_history_start_date.isoformat()
+                if self.transaction_history_start_date
+                else None
+            ),
+            "transaction_history_end_date": (
+                self.transaction_history_end_date.isoformat()
+                if self.transaction_history_end_date
+                else None
+            ),
+            "lookthrough_complete": self.lookthrough_complete,
+        }
+
+    @classmethod
+    def from_provenance(cls, value: object) -> InputSourceMetadata:
+        if not isinstance(value, dict):
+            return cls()
+
+        def optional_bool(name: str) -> bool | None:
+            result = value.get(name)
+            return result if isinstance(result, bool) else None
+
+        def optional_date(name: str) -> date | None:
+            raw = value.get(name)
+            if not isinstance(raw, str):
+                return None
+            try:
+                return date.fromisoformat(raw)
+            except ValueError:
+                return None
+
+        def optional_datetime(name: str) -> datetime | None:
+            raw = value.get(name)
+            if not isinstance(raw, str):
+                return None
+            try:
+                return datetime.fromisoformat(raw)
+            except ValueError:
+                return None
+
+        return cls(
+            sync_complete=optional_bool("sync_complete"),
+            sync_started_at=optional_datetime("sync_started_at"),
+            sync_completed_at=optional_datetime("sync_completed_at"),
+            transaction_history_complete=optional_bool("transaction_history_complete"),
+            transaction_history_start_date=optional_date("transaction_history_start_date"),
+            transaction_history_end_date=optional_date("transaction_history_end_date"),
+            lookthrough_complete=optional_bool("lookthrough_complete"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class FinancialInputs:
     account: AccountInput
     source_generation: int
@@ -262,6 +343,8 @@ class FinancialInputs:
     quotes: tuple[QuoteInput, ...]
     transactions: tuple[TransactionInput, ...]
     source_checksum: str | None = None
+    exposures: tuple[LookThroughExposureInput, ...] = ()
+    source_metadata: InputSourceMetadata = InputSourceMetadata()
 
     def quote_for(self, ticker: str) -> QuoteInput | None:
         return next((row for row in self.quotes if row.ticker == ticker), None)
@@ -358,6 +441,18 @@ class FinancialInputs:
                 }
                 for row in self.transactions
             ],
+            "exposures": [
+                {
+                    "ticker": row.ticker,
+                    "dimension": row.dimension,
+                    "exposure_key": row.exposure_key,
+                    "weight": str(row.weight),
+                    "provider": row.provider,
+                    "as_of_date": row.as_of_date.isoformat(),
+                }
+                for row in self.exposures
+            ],
+            "source_metadata": self.source_metadata.to_provenance(),
             "source_checksum": self.source_checksum,
         }
 
@@ -496,6 +591,22 @@ def financial_inputs_from_provenance(
     )
     raw_lots = bundle.get("lots")
     raw_transactions = bundle.get("transactions", [])
+    raw_exposures = bundle.get("exposures", [])
+    if not isinstance(raw_exposures, list):
+        raise TypeError("frozen exposure data is malformed")
+    exposures = tuple(
+        LookThroughExposureInput(
+            ticker=str(row["ticker"]),
+            dimension=str(row["dimension"]),
+            exposure_key=str(row["exposure_key"]),
+            weight=Decimal(str(row["weight"])),
+            provider=str(row["provider"]),
+            as_of_date=_parse_date(row["as_of_date"]),
+        )
+        for row in raw_exposures
+        if isinstance(row, dict)
+    )
+    source_metadata = InputSourceMetadata.from_provenance(bundle.get("source_metadata"))
     if not isinstance(raw_lots, list) or not isinstance(raw_transactions, list):
         raise TypeError("frozen lot or transaction data is malformed")
     lots = tuple(
@@ -567,5 +678,7 @@ def financial_inputs_from_provenance(
         lots=lots,
         quotes=quotes,
         transactions=transactions,
+        exposures=exposures,
+        source_metadata=source_metadata,
         source_checksum=str(bundle["source_checksum"]) if bundle.get("source_checksum") else None,
     )

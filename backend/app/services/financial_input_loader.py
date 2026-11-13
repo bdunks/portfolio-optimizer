@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import date
+from datetime import date, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -18,6 +18,7 @@ from app.db.models import (
     PolicySecurityOverride,
     PolicySleeve,
     Security,
+    SecurityExposure,
     SyncState,
 )
 from app.domain.allocation import (
@@ -32,6 +33,8 @@ from app.domain.allocation import (
 from app.domain.financial_inputs import (
     AccountInput,
     FinancialInputs,
+    InputSourceMetadata,
+    LookThroughExposureInput,
     LotInput,
     PolicyInput,
     PolicySettings,
@@ -47,6 +50,50 @@ from app.services.errors import AppError
 def _fingerprint(value: object) -> str:
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+
+def _coverage_date(value: object) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        try:
+            return datetime.fromisoformat(value).date()
+        except ValueError:
+            return None
+
+
+def _source_metadata(sync_state: SyncState | None) -> InputSourceMetadata:
+    if sync_state is None:
+        return InputSourceMetadata()
+    coverage = sync_state.coverage if isinstance(sync_state.coverage, dict) else {}
+
+    def coverage_flag(name: str) -> bool | None:
+        value = coverage.get(name)
+        return value if isinstance(value, bool) else None
+
+    transactions_complete = coverage_flag("transactions")
+    lookthrough_complete = coverage_flag("lookthrough")
+    if not sync_state.complete:
+        transactions_complete = False if transactions_complete is not None else None
+        lookthrough_complete = False if lookthrough_complete is not None else None
+    return InputSourceMetadata(
+        sync_complete=sync_state.complete,
+        sync_started_at=sync_state.started_at,
+        sync_completed_at=sync_state.completed_at,
+        transaction_history_complete=transactions_complete,
+        transaction_history_start_date=_coverage_date(
+            coverage.get("transaction_history_start_date")
+        ),
+        transaction_history_end_date=_coverage_date(coverage.get("transaction_history_end_date")),
+        lookthrough_complete=lookthrough_complete,
+    )
 
 
 def load_allocation_policy(session: Session, revision_id: str) -> AllocationPolicy:
@@ -160,6 +207,28 @@ def load_financial_inputs(
         ).all()
         if include_transactions
         else []
+    )
+    exposures = session.execute(
+        select(SecurityExposure, Security.ticker)
+        .join(Security, Security.id == SecurityExposure.security_id)
+        .order_by(
+            Security.ticker,
+            SecurityExposure.dimension,
+            SecurityExposure.exposure_key,
+            SecurityExposure.provider,
+            SecurityExposure.as_of_date,
+        )
+    ).all()
+    exposure_inputs = tuple(
+        LookThroughExposureInput(
+            ticker=ticker,
+            dimension=row.dimension,
+            exposure_key=row.exposure_key,
+            weight=row.weight,
+            provider=row.provider,
+            as_of_date=row.as_of_date,
+        )
+        for row, ticker in exposures
     )
     policy = (
         load_policy_input(session, revision)
@@ -278,4 +347,6 @@ def load_financial_inputs(
         lots=lot_inputs,
         quotes=quote_inputs,
         transactions=transaction_inputs,
+        exposures=exposure_inputs,
+        source_metadata=_source_metadata(sync_state),
     )

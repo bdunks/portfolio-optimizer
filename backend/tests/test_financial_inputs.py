@@ -10,7 +10,14 @@ from query_test_support import count_selects
 from sqlalchemy import select
 
 from app.broker.fake import FakeBroker
-from app.db.models import Account, CurrentTaxLot, PolicyRevision, SyncState
+from app.db.models import (
+    Account,
+    CurrentTaxLot,
+    PolicyRevision,
+    Security,
+    SecurityExposure,
+    SyncState,
+)
 from app.domain.allocation import (
     AllocationPolicy,
     AllocationSleeve,
@@ -198,7 +205,7 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
         response, portfolio_selects = count_selects(app.state.engine, lambda: client.get("/api/v1/portfolio"))
         assert response.status_code == 200, response.text
         assert response.json()["position_count"] == 460
-        assert portfolio_selects == 9
+        assert portfolio_selects == 10
 
         lot_page, lot_selects = count_selects(
             app.state.engine,
@@ -262,6 +269,30 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
         ]
         assert exact_numeric_page["items"][0]["available_shares"] == "1"
         assert exact_numeric_page["items"][1]["available_shares"] == "0.9999999999999999999999999999"
+        with app.state.session_factory.begin() as session:
+            state = session.get(SyncState, 1)
+            vti = session.scalar(select(Security).where(Security.ticker == "VTI"))
+            assert state is not None
+            assert vti is not None
+            state.complete = True
+            state.coverage = {
+                **state.coverage,
+                "transactions": True,
+                "transaction_history_start_date": "2026-10-01",
+                "transaction_history_end_date": DEMO_PROPOSED_TRADE_DATE.isoformat(),
+                "lookthrough": True,
+            }
+            session.add(
+                SecurityExposure(
+                    security_id=vti.id,
+                    dimension="security",
+                    exposure_key="AAPL",
+                    weight=Decimal("0.25"),
+                    provider="vanguard",
+                    as_of_date=date(2026, 11, 4),
+                )
+            )
+
         def load_inputs() -> FinancialInputs:
             with app.state.session_factory() as session:
                 account = session.get(Account, 1)
@@ -277,7 +308,13 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
         inputs, full_input_selects = count_selects(app.state.engine, load_inputs)
         assert len(inputs.positions) == 460
         assert len(inputs.lots) == 2500
-        assert full_input_selects == 11
+        assert full_input_selects == 12
+        assert inputs.exposures[0].ticker == "VTI"
+        assert inputs.exposures[0].weight == Decimal("0.25")
+        assert inputs.source_metadata.transaction_history_complete is True
+        assert inputs.source_metadata.transaction_history_start_date == date(2026, 10, 1)
+        assert inputs.source_metadata.transaction_history_end_date == DEMO_PROPOSED_TRADE_DATE
+        assert inputs.source_metadata.lookthrough_complete is True
         resolved, resolver_selects = count_selects(
             app.state.engine,
             lambda: [
@@ -310,6 +347,8 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
         for row in legacy_sleeves:
             assert isinstance(row, dict)
             row.pop("is_transition_destination", None)
+        legacy_bundle.pop("exposures")
+        legacy_bundle.pop("source_metadata")
         legacy_bundle["schema"] = "demo-run-input-v1"
         legacy_bundle.pop("proposed_trade_date")
         legacy_bundle.pop("securities")
@@ -324,6 +363,9 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
         assert len(legacy_restored.lots) == 2500
         assert {lot.sync_generation for lot in legacy_restored.lots} == {inputs.source_generation}
         assert all("sync_generation" not in legacy_lot for legacy_lot in legacy_lots)
+        assert legacy_restored.exposures == ()
+        assert legacy_restored.source_metadata.transaction_history_complete is None
+        assert legacy_restored.source_metadata.lookthrough_complete is None
         assert all(not sleeve.transition_destination for sleeve in legacy_restored.policy.allocation.sleeves)
         current_bundle_missing_lot_generation = inputs.to_provenance()
         current_bundle_missing_lot_generation["lots"][0].pop("sync_generation")

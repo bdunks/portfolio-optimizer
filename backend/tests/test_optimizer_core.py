@@ -27,6 +27,7 @@ from app.domain.financial_inputs import (
     LookThroughExposureInput,
     LotInput,
     PolicyInput,
+    PolicySectorBandInput,
     PolicySettings,
     PositionInput,
     QuoteInput,
@@ -110,7 +111,11 @@ def _inputs(*, objective_settings: bool = True) -> FinancialInputs:
         source_generation=1,
         proposed_trade_date=TRADE_DATE,
         policy=PolicyInput(
-            "test-policy", allocation, PolicySettings(tuple(sorted(settings.items())))
+            "test-policy",
+            allocation,
+            PolicySettings(tuple(sorted(settings.items()))),
+            status="ACTIVE",
+            sector_bands=(PolicySectorBandInput("TEST", Decimal(100), Decimal(100)),),
         ),
         securities=(
             SecurityInput(SecurityIdentity("AAPL", "EQUITY")),
@@ -154,6 +159,8 @@ def _inputs(*, objective_settings: bool = True) -> FinancialInputs:
             LookThroughExposureInput(
                 "NEWETF", "security", "US_MARKET", Decimal(1), "TEST", TRADE_DATE
             ),
+            LookThroughExposureInput("AAPL", "sector", "TEST", Decimal(1), "TEST", TRADE_DATE),
+            LookThroughExposureInput("NEWETF", "sector", "TEST", Decimal(1), "TEST", TRADE_DATE),
         ),
         source_metadata=InputSourceMetadata(
             sync_complete=True,
@@ -767,6 +774,7 @@ def test_worker_fills_buy_slot_after_filtering_wash_blocked_priority_candidate(
             LookThroughExposureInput(
                 "ALTETF", "security", "US_MARKET", Decimal(1), "TEST", TRADE_DATE
             ),
+            LookThroughExposureInput("ALTETF", "sector", "TEST", Decimal(1), "TEST", TRADE_DATE),
         ),
     )
 
@@ -819,6 +827,10 @@ def _add_msft_loss_candidate(inputs: FinancialInputs) -> FinancialInputs:
         quotes=(
             *inputs.quotes,
             QuoteInput("MSFT", Decimal(100), Decimal(100), None, "TEST", NOW, "good", 1),
+        ),
+        exposures=(
+            *inputs.exposures,
+            LookThroughExposureInput("MSFT", "sector", "TEST", Decimal(1), "TEST", TRADE_DATE),
         ),
     )
 
@@ -1015,3 +1027,76 @@ def test_expired_deadline_returns_no_legs(monkeypatch: pytest.MonkeyPatch) -> No
     assert result.status == "deadline_exceeded"
     assert result.legs == ()
     assert "computation_deadline_exceeded" in result.metadata.warnings
+
+
+def _sector_constrained_inputs() -> FinancialInputs:
+    inputs = _inputs()
+    bands = (
+        PolicySectorBandInput("Technology", Decimal(100), Decimal(0)),
+        PolicySectorBandInput("Healthcare", Decimal(0), Decimal(0)),
+    )
+    exposures = (
+        *(row for row in inputs.exposures if row.dimension != "sector"),
+        LookThroughExposureInput("AAPL", "sector", "Technology", Decimal(1), "TEST", TRADE_DATE),
+        LookThroughExposureInput("NEWETF", "sector", "Healthcare", Decimal(1), "TEST", TRADE_DATE),
+    )
+    return replace(
+        inputs,
+        policy=replace(inputs.policy, sector_bands=bands),
+        exposures=exposures,
+    )
+
+
+def test_active_policy_requires_explicit_sector_bands() -> None:
+    inputs = _inputs()
+    inputs = replace(inputs, policy=replace(inputs.policy, sector_bands=()))
+
+    result = validate_candidate(inputs, ())
+
+    assert not result.accepted
+    assert "configuration_required:sector_bands" in result.reasons
+
+
+def test_validator_rejects_replacement_that_worsens_sector_bands() -> None:
+    inputs = _sector_constrained_inputs()
+    sell = ConsolidatedLeg(
+        "sell:AAPL",
+        "SELL",
+        "AAPL",
+        Decimal(1),
+        Decimal(100),
+        (LotAllocation("loss-lot", Decimal(1)),),
+        (),
+        0,
+        ("sale:AAPL",),
+    )
+    buy = ConsolidatedLeg(
+        "buy:NEWETF",
+        "BUY",
+        "NEWETF",
+        Decimal(1),
+        Decimal(100),
+        (),
+        ("sell:AAPL",),
+        1,
+        ("sale:AAPL",),
+    )
+
+    result = validate_candidate(inputs, (sell, buy))
+
+    assert not result.accepted
+    assert "sector_drift_worsened:Technology" in result.reasons
+    assert "sector_drift_worsened:Healthcare" in result.reasons
+
+
+def test_worker_does_not_select_sector_band_violating_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _sector_constrained_inputs()
+
+    result = optimize_worker(OptimizerRequest(inputs), time.monotonic() + 10)
+
+    assert result.status == "ready"
+    assert not any(leg.side == "BUY" and leg.ticker == "NEWETF" for leg in result.legs)
+    assert validate_candidate(inputs, result.legs).accepted

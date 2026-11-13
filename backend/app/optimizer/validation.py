@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 
 from app.domain.decimal_math import exact_difference, exact_product, exact_sum, percentage
@@ -464,6 +464,123 @@ def _exposure_validation(
     return reasons, coverage
 
 
+def _sector_band_errors(
+    inputs: FinancialInputs,
+    evaluation: PortfolioEvaluation,
+    legs: Sequence[ConsolidatedLeg],
+) -> list[str]:
+    raw_bands = inputs.policy.sector_bands
+    if not raw_bands:
+        return (
+            ["configuration_required:sector_bands"]
+            if inputs.policy.status.strip().upper() == "ACTIVE"
+            else []
+        )
+
+    bands: list[tuple[str, Decimal, Decimal]] = []
+    seen: set[str] = set()
+    for band in raw_bands:
+        key = band.sector_key.strip()
+        target = band.target_weight_pct
+        tolerance = band.band_pct
+        if (
+            not key
+            or key in seen
+            or not target.is_finite()
+            or not tolerance.is_finite()
+            or target < _ZERO
+            or target > _HUNDRED
+            or tolerance < _ZERO
+            or tolerance > _HUNDRED
+        ):
+            return ["invalid_sector_band_policy"]
+        seen.add(key)
+        bands.append((key, target / _HUNDRED, tolerance / _HUNDRED))
+    if exact_sum(band.target_weight_pct for band in raw_bands) != _HUNDRED:
+        return ["invalid_sector_band_target_sum"]
+
+    try:
+        current_exposure = aggregate_lookthrough_exposure(inputs, dimension="sector")
+    except ArithmeticError, TypeError, ValueError:
+        return ["sector_exposure_incomplete_or_unknown"]
+    if current_exposure.coverage.complete is not True:
+        return ["sector_exposure_incomplete_or_unknown"]
+    current_values = {
+        row.exposure_key: row.value_usd
+        for row in current_exposure.values
+        if row.dimension == "sector"
+    }
+    current_invested = exact_sum(row.market_value_usd for row in evaluation.current.positions)
+    if exact_sum(current_values.values()) != current_invested:
+        return ["sector_exposure_not_fully_allocated"]
+    if any(key not in seen and value > _ZERO for key, value in current_values.items()):
+        return ["sector_exposure_not_configured"]
+
+    current_positions = {row.ticker.upper(): row for row in evaluation.current.positions}
+    proposed_positions = {row.ticker.upper(): row for row in evaluation.proposed.positions}
+    sector_deltas: dict[str, Decimal] = {}
+    reasons: list[str] = []
+    for ticker in sorted({leg.ticker.upper() for leg in legs}):
+        unit_inputs = replace(
+            inputs,
+            positions=tuple(row for row in inputs.positions if row.ticker.upper() != ticker),
+        )
+        try:
+            unit_exposure = aggregate_lookthrough_exposure(
+                unit_inputs, tickers=(ticker,), dimension="sector"
+            )
+        except ArithmeticError, TypeError, ValueError:
+            reasons.append(f"sector_exposure_unavailable:{ticker}")
+            continue
+        if unit_exposure.coverage.complete is not True:
+            reasons.append(f"sector_exposure_incomplete:{ticker}")
+            continue
+        weights = {
+            row.exposure_key: row.value_usd
+            for row in unit_exposure.values
+            if row.dimension == "sector" and row.value_usd != _ZERO
+        }
+        if exact_sum(weights.values()) != Decimal(1):
+            reasons.append(f"sector_exposure_not_fully_allocated:{ticker}")
+            continue
+        if any(key not in seen and value > _ZERO for key, value in weights.items()):
+            reasons.append(f"sector_exposure_not_configured:{ticker}")
+            continue
+        before = current_positions.get(ticker)
+        after = proposed_positions.get(ticker)
+        before_value = before.market_value_usd if before is not None else _ZERO
+        after_value = after.market_value_usd if after is not None else _ZERO
+        change = exact_difference(after_value, before_value)
+        for sector_key, weight in weights.items():
+            sector_deltas[sector_key] = exact_sum(
+                (sector_deltas.get(sector_key, _ZERO), exact_product(change, weight))
+            )
+
+    if reasons:
+        return reasons
+    proposed_values = {
+        key: exact_sum((value, sector_deltas.get(key, _ZERO)))
+        for key, value in current_values.items()
+    }
+    for key in seen:
+        proposed_values.setdefault(key, sector_deltas.get(key, _ZERO))
+    proposed_invested = exact_sum(row.market_value_usd for row in evaluation.proposed.positions)
+    for sector_key, target, tolerance in bands:
+        current_weight = (
+            current_values.get(sector_key, _ZERO) / current_invested if current_invested else _ZERO
+        )
+        proposed_weight = (
+            proposed_values.get(sector_key, _ZERO) / proposed_invested
+            if proposed_invested
+            else _ZERO
+        )
+        lower = min(current_weight, target - tolerance)
+        upper = max(current_weight, target + tolerance)
+        if proposed_weight < lower or proposed_weight > upper:
+            reasons.append(f"sector_drift_worsened:{sector_key}")
+    return reasons
+
+
 def _objective(
     inputs: FinancialInputs,
     evaluation: PortfolioEvaluation,
@@ -658,6 +775,7 @@ def validate_candidate(
         )
     exposure_errors, exposure_coverage = _exposure_validation(inputs, normalized_legs)
     errors.extend(exposure_errors)
+    errors.extend(_sector_band_errors(inputs, evaluation, normalized_legs))
     if deadline is not None and time.monotonic() >= deadline:
         errors.append("validation_deadline_exceeded")
         return CandidateValidation(

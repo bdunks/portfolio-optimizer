@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import time
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import ROUND_FLOOR, Decimal
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
@@ -135,6 +135,16 @@ class _Screen:
     candidate_types: tuple[str, ...]
     screened_lot_count: int
 
+    sector_model: _SectorModel | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _SectorModel:
+    bands: tuple[tuple[str, Decimal, Decimal], ...]
+    invested_usd: Decimal
+    current_values: tuple[tuple[str, Decimal], ...]
+    ticker_weights: tuple[tuple[str, tuple[tuple[str, Decimal], ...]], ...] = ()
+
 
 @dataclass(frozen=True, slots=True)
 class _RegionSolve:
@@ -160,6 +170,89 @@ def _setting_decimal(
 def _setting_int(inputs: FinancialInputs, key: str) -> int | None:
     value = inputs.policy.settings.get(key)
     return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _build_sector_model(
+    inputs: FinancialInputs, current_positions: tuple[Any, ...]
+) -> tuple[_SectorModel | None, tuple[str, ...]]:
+    raw_bands = inputs.policy.sector_bands
+    if not raw_bands:
+        if inputs.policy.status.strip().upper() == "ACTIVE":
+            return None, ("configuration_required:sector_bands",)
+        return None, ()
+
+    bands: list[tuple[str, Decimal, Decimal]] = []
+    seen: set[str] = set()
+    for band in raw_bands:
+        key = band.sector_key.strip()
+        target = band.target_weight_pct
+        tolerance = band.band_pct
+        if (
+            not key
+            or key in seen
+            or not target.is_finite()
+            or not tolerance.is_finite()
+            or target < _ZERO
+            or target > _HUNDRED
+            or tolerance < _ZERO
+            or tolerance > _HUNDRED
+        ):
+            return None, ("invalid_sector_band_policy",)
+        seen.add(key)
+        bands.append((key, target / _HUNDRED, tolerance / _HUNDRED))
+    if exact_sum(band.target_weight_pct for band in raw_bands) != _HUNDRED:
+        return None, ("invalid_sector_band_target_sum",)
+
+    try:
+        exposure = aggregate_lookthrough_exposure(inputs, dimension="sector")
+    except ArithmeticError, TypeError, ValueError:
+        return None, ("sector_exposure_incomplete_or_unknown",)
+    if exposure.coverage.complete is not True:
+        return None, ("sector_exposure_incomplete_or_unknown",)
+    current_values = {
+        row.exposure_key: row.value_usd for row in exposure.values if row.dimension == "sector"
+    }
+    invested_usd = exact_sum(row.market_value_usd for row in current_positions)
+    if exact_sum(current_values.values()) != invested_usd:
+        return None, ("sector_exposure_not_fully_allocated",)
+    if any(key not in seen and value > _ZERO for key, value in current_values.items()):
+        return None, ("sector_exposure_not_configured",)
+    return (
+        _SectorModel(
+            tuple(bands),
+            invested_usd,
+            tuple(sorted(current_values.items())),
+        ),
+        (),
+    )
+
+
+def _unit_sector_weights(
+    inputs: FinancialInputs, ticker: str
+) -> tuple[tuple[str, Decimal], ...] | None:
+    ticker_key = ticker.upper()
+    unit_inputs = replace(
+        inputs,
+        positions=tuple(row for row in inputs.positions if row.ticker.upper() != ticker_key),
+    )
+    try:
+        exposure = aggregate_lookthrough_exposure(
+            unit_inputs, tickers=(ticker_key,), dimension="sector"
+        )
+    except ArithmeticError, TypeError, ValueError:
+        return None
+    if exposure.coverage.complete is not True:
+        return None
+    weights = tuple(
+        sorted(
+            (row.exposure_key, row.value_usd)
+            for row in exposure.values
+            if row.dimension == "sector" and row.value_usd != _ZERO
+        )
+    )
+    if exact_sum(value for _, value in weights) != _ONE:
+        return None
+    return weights
 
 
 def _whole_floor(value: Decimal) -> Decimal:
@@ -321,6 +414,10 @@ def _screen(
     target_errors = _validate_target_sums(inputs)
     if target_errors:
         return None, target_errors
+    sector_model, sector_errors = _build_sector_model(inputs, baseline.current.positions)
+    if sector_errors:
+        return None, sector_errors
+    sector_weights_by_ticker: dict[str, tuple[tuple[str, Decimal], ...]] = {}
 
     candidates: list[_SaleCandidate] = []
     candidate_types: set[str] = set()
@@ -557,6 +654,18 @@ def _screen(
                 continue
         if total <= 0:
             continue
+        if sector_model is not None:
+            sector_weights = _unit_sector_weights(inputs, ticker)
+            if sector_weights is None:
+                warnings.append(f"buy_sector_exposure_incomplete:{ticker}")
+                continue
+            configured_sectors = {key for key, _, _ in sector_model.bands}
+            if any(
+                key not in configured_sectors and value > _ZERO for key, value in sector_weights
+            ):
+                warnings.append(f"buy_sector_exposure_not_configured:{ticker}")
+                continue
+            sector_weights_by_ticker[ticker] = sector_weights
         max_turnover_usd = total * turnover_pct / _HUNDRED
         max_shares = _whole_floor(max_turnover_usd / buy_price)
         if max_shares <= 0 or buy_price * max_shares < buy_minimum:
@@ -584,6 +693,28 @@ def _screen(
     ]
     available_buy_slots = max(0, order_limit - len(selected_tickers))
     buy_candidates = buy_candidates[:available_buy_slots]
+    if sector_model is not None:
+        for ticker in sorted(selected_tickers):
+            if ticker not in sector_weights_by_ticker:
+                sector_weights = _unit_sector_weights(inputs, ticker)
+                if sector_weights is None:
+                    return None, (f"sector_exposure_incomplete:{ticker}",)
+                configured_sectors = {key for key, _, _ in sector_model.bands}
+                if any(
+                    key not in configured_sectors and value > _ZERO for key, value in sector_weights
+                ):
+                    return None, (f"sector_exposure_not_configured:{ticker}",)
+                sector_weights_by_ticker[ticker] = sector_weights
+        active_buy_tickers = {candidate.ticker for candidate in buy_candidates}
+        sector_model = replace(
+            sector_model,
+            ticker_weights=tuple(
+                sorted(
+                    (ticker, sector_weights_by_ticker[ticker])
+                    for ticker in selected_tickers | active_buy_tickers
+                )
+            ),
+        )
     warnings.append(_INTEGER_SEARCH_INCOMPLETE)
     screen = _Screen(
         baseline,
@@ -592,6 +723,7 @@ def _screen(
         tuple(dict.fromkeys(warnings)),
         tuple(sorted(candidate_types)),
         seen_lots,
+        sector_model,
     )
     return screen, ()
 
@@ -698,6 +830,40 @@ def _model_region(
             sleeve_deltas[key] += amount
         for key in cash_path:
             sleeve_deltas[key] -= amount
+
+    sector_model = screen.sector_model
+    if sector_model is not None:
+        sector_values = dict(sector_model.current_values)
+        ticker_weights = dict(sector_model.ticker_weights)
+        sector_deltas: dict[str, Any] = defaultdict(lambda: cp.Constant(0.0))
+        invested_delta: Any = cp.Constant(0.0)
+        for ticker, rows in sell_by_ticker.items():
+            position = current_positions[ticker]
+            value_per_share = position.market_value_usd / position.shares
+            shares = sum(sell_vars[index] for index, _ in rows)
+            invested_delta -= _cp_float(value_per_share) * shares
+            for sector_key, weight in ticker_weights[ticker]:
+                sector_deltas[sector_key] -= _cp_float(value_per_share * weight) * shares
+        for candidate, variable in zip(screen.buys, buy_vars, strict=True):
+            invested_delta += _cp_float(candidate.execution_price) * variable
+            for sector_key, weight in ticker_weights[candidate.ticker]:
+                sector_deltas[sector_key] += (
+                    _cp_float(candidate.execution_price * weight) * variable
+                )
+        proposed_invested = _cp_float(sector_model.invested_usd) + invested_delta
+        constraints.append(proposed_invested >= 0)
+        for sector_key, target, tolerance in sector_model.bands:
+            current_sector_value = sector_values.get(sector_key, _ZERO)
+            current_weight = (
+                current_sector_value / sector_model.invested_usd
+                if sector_model.invested_usd > _ZERO
+                else _ZERO
+            )
+            lower_bound = min(current_weight, target - tolerance)
+            upper_bound = max(current_weight, target + tolerance)
+            proposed_sector_value = _cp_float(current_sector_value) + sector_deltas[sector_key]
+            constraints.append(proposed_sector_value >= _cp_float(lower_bound) * proposed_invested)
+            constraints.append(proposed_sector_value <= _cp_float(upper_bound) * proposed_invested)
 
     sale_fee_proxy: Any = cp.Constant(0.0)
     for rows in sell_by_ticker.values():

@@ -625,17 +625,19 @@ class PortfolioEffectsResponse(StrictModel):
 
 
 class GroupImpactResponse(StrictModel):
-    demo: Literal[True]
-    wash_status: Literal["not_validated_demo"]
+    demo: bool
+    wash_status: str
     selected_sell_lots_count: int
     sell_proceeds_usd: str
     realized_st_usd: str
     realized_lt_usd: str
-    replacement_buy_shares: str
-    replacement_buy_cost_usd: str
-    cash_after_usd: str
-    portfolio_effects: PortfolioEffectsResponse
-    risk_tracking_score: None
+    replacement_buy_shares: str | None
+    replacement_buy_cost_usd: str | None
+    cash_after_usd: str | None
+    portfolio_effects: PortfolioEffectsResponse | None
+    risk_tracking_score: str | None
+
+
 
 
 class SelectedLotResponse(StrictModel):
@@ -668,11 +670,11 @@ class RecommendationLegResponse(StrictModel):
 class RecommendationGroupResponse(StrictModel):
     group_id: str
     rank: int
-    group_type: Literal["demo_loss_harvest"]
-    sleeve_key: str
+    group_type: str
+    sleeve_key: str | None
     rationale: str
-    estimated_benefit_usd: None
-    impact: GroupImpactResponse
+    estimated_benefit_usd: str | None
+    impact: GroupImpactResponse | None
     dependencies: list[str]
     selected: bool
     rejected: bool
@@ -728,33 +730,34 @@ class FrozenRunDisplayContextResponse(StrictModel):
 
 class OptimizerRunResponse(StrictModel):
     run_id: str
-    status: Literal["demo"]
-    mode: Literal["recommendations_only"]
+    status: str
+    mode: Literal["recommendations_only", "real_optimizer"]
     policy_revision_id: str
     source_generation: int
     as_of: datetime
-    solver_version: Literal["DEMO"]
+    solver_version: str
     proposed_trade_date: date | None = None
-    demo: Literal[True]
+    demo: bool
     actionable: Literal[False]
     input_fingerprint: str | None
     source_checksum: str | None
     batch_settings: dict[str, JSONValue]
     estimated_realized_st_usd: str
     estimated_realized_lt_usd: str
-    estimated_tax_benefit_usd: None
-    estimated_tax_benefit_status: Literal["tax_profile_incomplete", "optimizer_unavailable"]
+    estimated_tax_benefit_usd: str | None
+    estimated_tax_benefit_status: str
     lots_sold_count: int
     positions_exited_count: int
     orders_count: int
     cash_before_usd: str | None
     cash_after_usd: str | None
     portfolio_effects: PortfolioEffectsResponse | None
-    constraints_satisfied: None
+    constraints_satisfied: bool | None
     no_trade_reason: JSONValue | None
     warnings: list[str]
     tax_profile_configured: bool
     frozen_display_context: FrozenRunDisplayContextResponse
+    optimizer_metrics: dict[str, JSONValue] = Field(default_factory=dict)
 
 
 class OptimizerRecommendationsResponse(OptimizerRunResponse):
@@ -812,13 +815,15 @@ class OptimizerExportMetadataResponse(StrictModel):
     source_generation: int
     as_of: datetime
     proposed_trade_date: date | None
-    solver_version: Literal["DEMO"]
-    demo: Literal[True]
+    solver_version: str
+    demo: bool
+    mode: Literal["recommendations_only", "real_optimizer"] = "recommendations_only"
     actionable: Literal[False]
     input_fingerprint: str | None
     source_checksum: str | None
     warnings: list[str]
     frozen_display_context: FrozenRunDisplayContextResponse
+    optimizer_metrics: dict[str, JSONValue] = Field(default_factory=dict)
 
 
 class OptimizerExportJSONResponse(StrictModel):

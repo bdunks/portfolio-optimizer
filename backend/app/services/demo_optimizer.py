@@ -1369,6 +1369,7 @@ def run_summary(run: OptimizerRun, *, session: Session | None = None) -> dict[st
         "tax_profile_configured": display_settings.get("short_term_tax_rate") is not None
         and display_settings.get("long_term_tax_rate") is not None,
         "frozen_display_context": display_context,
+        "optimizer_metrics": {},
     }
 
 
@@ -1525,7 +1526,12 @@ def get_run(session: Session, run_id: str) -> OptimizerRun:
 
 
 def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[str, str]:
-    response = run_recommendations(session, run)
+    if run.frozen_input_bundle.get("mode") != "real_optimizer":
+        response = run_recommendations(session, run)
+    else:
+        from app.services.optimizer_service import real_run_export_response
+
+        response = real_run_export_response(session, run)
     metadata = {
         key: response[key]
         for key in (
@@ -1535,12 +1541,14 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
             "as_of",
             "proposed_trade_date",
             "solver_version",
+            "mode",
             "demo",
             "actionable",
             "input_fingerprint",
             "source_checksum",
             "warnings",
             "frozen_display_context",
+            "optimizer_metrics",
         )
     }
     if file_format == "json":
@@ -1556,6 +1564,7 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
         "as_of",
         "proposed_trade_date",
         "solver_version",
+        "mode",
         "demo",
         "input_fingerprint",
         "source_checksum",
@@ -1594,6 +1603,7 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
         "estimated_tax_benefit_usd",
         "estimated_tax_benefit_status",
         "warnings",
+        "optimizer_metrics_json",
     ]
     writer = csv.DictWriter(output, fieldnames=fields)
     writer.writeheader()
@@ -1603,6 +1613,7 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
             "record_type": "metadata",
             "warnings": ";".join(metadata["warnings"]),
             "estimated_tax_benefit_status": response["estimated_tax_benefit_status"],
+            "optimizer_metrics_json": json.dumps(response["optimizer_metrics"], sort_keys=True, separators=(",", ":"), default=str),
             "orders_count": response["orders_count"],
             "lots_sold_count": response["lots_sold_count"],
             "positions_exited_count": response["positions_exited_count"],

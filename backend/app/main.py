@@ -46,6 +46,7 @@ from app.domain.decimal_math import (
 )
 from app.domain.portfolio_accounting import evaluate_portfolio
 from app.domain.trade_dates import classify_holding_period, resolve_proposed_trade_date
+from app.optimizer.runtime import ProcessSupervisor
 from app.schemas import (
     ActivityPageResponse,
     ErrorEnvelope,
@@ -79,6 +80,15 @@ from app.services.demo_optimizer import (
 )
 from app.services.errors import AppError
 from app.services.financial_input_loader import load_allocation_policy, load_financial_inputs
+from app.services.optimizer_service import (
+    BoundedValidationExecutor,
+    annotate_real_group,
+    apply_real_lot_review_intent,
+    apply_real_selection,
+    create_production_run,
+    real_run_recommendations,
+    real_run_summary,
+)
 from app.services.policy import (
     activate_policy,
     create_policy_draft,
@@ -224,21 +234,29 @@ def create_app(
     broker_source = broker or FakeBroker()
     if seed_demo_data and getattr(broker_source, "mode", "") != "fake":
         raise ValueError("demo seed data is only available with FakeBroker")
+    optimizer_supervisor = ProcessSupervisor(max_workers=2)
+    validation_executor = BoundedValidationExecutor(max_workers=2)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
-        upgrade_database(db_engine)
-        if seed_demo_data:
-            _demo_seed(sessions, broker_source)
-        yield
-        if owned_engine:
-            db_engine.dispose()
+        try:
+            upgrade_database(db_engine)
+            if seed_demo_data:
+                _demo_seed(sessions, broker_source)
+            yield
+        finally:
+            await validation_executor.aclose()
+            await optimizer_supervisor.aclose()
+            if owned_engine:
+                db_engine.dispose()
 
     application = FastAPI(title="Portfolio Optimizer API", version="1.0.0", lifespan=lifespan)
     application.state.engine = db_engine
     application.state.session_factory = sessions
     application.state.broker = broker_source
     application.state.broker_mode = getattr(broker_source, "mode", "unavailable")
+    application.state.optimizer_supervisor = optimizer_supervisor
+    application.state.optimizer_validation_executor = validation_executor
 
     @application.middleware("http")
     async def correlation_and_local_write_boundary(request: Request, call_next: RequestResponseEndpoint) -> Response:
@@ -671,71 +689,107 @@ def create_app(
         }
 
     @application.post("/api/v1/optimizer/runs", status_code=201, response_model=OptimizerRecommendationsResponse, responses=API_ERROR_RESPONSES)
-    def create_optimizer_run(
+    async def create_optimizer_run(
         payload: OptimizerRunInput,
         request: Request,
         session: Session = session_dependency,
     ) -> dict[str, Any]:
+        if payload.mode == "real_optimizer":
+            run = await create_production_run(
+                session,
+                payload,
+                request.app.state.optimizer_supervisor,
+                request.app.state.optimizer_validation_executor,
+                correlation_id=request.state.correlation_id,
+            )
+            return real_run_recommendations(session, get_run(session, run.id))
         with session.begin():
             run = create_demo_run(
                 session,
                 payload,
-                broker_mode=application.state.broker_mode,
+                broker_mode=request.app.state.broker_mode,
                 correlation_id=request.state.correlation_id,
             )
             return run_recommendations(session, run)
 
     @application.get("/api/v1/optimizer/runs/{run_id}", response_model=OptimizerRunResponse, responses=API_ERROR_RESPONSES)
     def optimizer_run_detail(run_id: str, session: Session = session_dependency) -> dict[str, Any]:
-        return run_summary(get_run(session, run_id), session=session)
+        run = get_run(session, run_id)
+        if run.frozen_input_bundle.get("mode") != "real_optimizer":
+            return run_summary(run, session=session)
+        return real_run_summary(run, session)
 
     @application.get("/api/v1/optimizer/runs/{run_id}/recommendations", response_model=OptimizerRecommendationsResponse, responses=API_ERROR_RESPONSES)
     def optimizer_run_recommendations(run_id: str, session: Session = session_dependency) -> dict[str, Any]:
-        return run_recommendations(session, get_run(session, run_id))
+        run = get_run(session, run_id)
+        if run.frozen_input_bundle.get("mode") != "real_optimizer":
+            return run_recommendations(session, run)
+        return real_run_recommendations(session, run)
 
     @application.post("/api/v1/optimizer/runs/{run_id}/selection", response_model=OptimizerRecommendationsResponse, responses=API_ERROR_RESPONSES)
-    def optimizer_run_selection(
+    async def optimizer_run_selection(
         run_id: str,
         payload: OptimizerSelectionInput,
         request: Request,
         session: Session = session_dependency,
     ) -> dict[str, Any]:
         with session.begin():
-            run = apply_selection(
-                session,
-                run_id,
-                payload,
-                correlation_id=request.state.correlation_id,
-            )
-            return run_recommendations(session, run)
-
+            run = get_run(session, run_id)
+            is_demo = run.frozen_input_bundle.get("mode") != "real_optimizer"
+        if is_demo:
+            with session.begin():
+                run = apply_selection(session, run_id, payload, correlation_id=request.state.correlation_id)
+                return run_recommendations(session, run)
+        run = await apply_real_selection(
+            session,
+            run_id,
+            payload,
+            request.app.state.optimizer_supervisor,
+            request.app.state.optimizer_validation_executor,
+            correlation_id=request.state.correlation_id,
+        )
+        return real_run_recommendations(session, get_run(session, run.id))
 
     @application.post(
         "/api/v1/optimizer/runs/{run_id}/lot-review-intent",
         response_model=OptimizerRecommendationsResponse,
         responses=API_ERROR_RESPONSES,
         description=(
-            "Atomically replace the confirmed DEMO basket with the requested broker lots. "
+            "Atomically replace the confirmed DEMO or real optimizer basket with the requested broker lots. "
             "The source generation must match; requests are rejected without mutation when unsupported "
             "or infeasible. This request does not approve or place orders."
         ),
     )
-    def optimizer_run_lot_review_intent(
+    async def optimizer_run_lot_review_intent(
         run_id: str,
         payload: OptimizerLotReviewIntentInput,
         request: Request,
         session: Session = session_dependency,
     ) -> dict[str, Any]:
         with session.begin():
-            run = apply_lot_review_intent(
-                session,
-                run_id,
-                payload,
-                correlation_id=request.state.correlation_id,
-            )
-            return run_recommendations(session, run)
+            run = get_run(session, run_id)
+            is_demo = run.frozen_input_bundle.get("mode") != "real_optimizer"
+        if is_demo:
+            with session.begin():
+                run = apply_lot_review_intent(
+                    session,
+                    run_id,
+                    payload,
+                    correlation_id=request.state.correlation_id,
+                )
+                return run_recommendations(session, run)
+        run = await apply_real_lot_review_intent(
+            session,
+            run_id,
+            payload,
+            request.app.state.optimizer_supervisor,
+            request.app.state.optimizer_validation_executor,
+            correlation_id=request.state.correlation_id,
+        )
+        return real_run_recommendations(session, get_run(session, run.id))
+
     @application.patch("/api/v1/optimizer/runs/{run_id}/recommendations/{group_id}", response_model=OptimizerRecommendationsResponse, responses=API_ERROR_RESPONSES)
-    def annotate_recommendation_group(
+    async def annotate_recommendation_group(
         run_id: str,
         group_id: str,
         payload: RecommendationAnnotationInput,
@@ -743,14 +797,28 @@ def create_app(
         session: Session = session_dependency,
     ) -> dict[str, Any]:
         with session.begin():
-            run = annotate_group(
-                session,
-                run_id,
-                group_id,
-                payload,
-                correlation_id=request.state.correlation_id,
-            )
-            return run_recommendations(session, run)
+            run = get_run(session, run_id)
+            is_demo = run.frozen_input_bundle.get("mode") != "real_optimizer"
+        if is_demo:
+            with session.begin():
+                run = annotate_group(
+                    session,
+                    run_id,
+                    group_id,
+                    payload,
+                    correlation_id=request.state.correlation_id,
+                )
+                return run_recommendations(session, run)
+        run = await annotate_real_group(
+            session,
+            run_id,
+            group_id,
+            payload,
+            request.app.state.optimizer_supervisor,
+            request.app.state.optimizer_validation_executor,
+            correlation_id=request.state.correlation_id,
+        )
+        return real_run_recommendations(session, get_run(session, run.id))
 
     @application.get("/api/v1/optimizer/runs/{run_id}/export", response_model=None, responses=EXPORT_RESPONSES)
     def export_optimizer_run(

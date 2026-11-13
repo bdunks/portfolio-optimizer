@@ -1,0 +1,1238 @@
+"""Two-pass, deadline-bounded top-K tax-lot optimizer worker.
+
+This module proposes canonical legs only. The caller must validate the returned basket independently
+through :func:`app.optimizer.validation.validate_candidate` before storing or displaying it as feasible.
+"""
+from __future__ import annotations
+
+import math
+import time
+from collections import defaultdict
+from dataclasses import dataclass
+from decimal import ROUND_FLOOR, Decimal
+from importlib.metadata import PackageNotFoundError, version
+from typing import Any
+
+import cvxpy as cp
+
+from app.domain.allocation import AllocationSleeve, assignment_path, resolve_cash, resolve_holding
+from app.domain.decimal_math import exact_product, exact_sum
+from app.domain.exposure import aggregate_lookthrough_exposure
+from app.domain.financial_inputs import FinancialInputs, LotInput, PositionInput, QuoteInput
+from app.domain.portfolio_accounting import (
+    BasketValidationError,
+    ConsolidatedLeg,
+    LotAllocation,
+    PortfolioEvaluation,
+    evaluate_portfolio,
+)
+from app.domain.tax import (
+    TaxAffineRegion,
+    TaxProfile,
+    enumerate_tax_regions,
+    evaluate_tax,
+    tax_value,
+)
+from app.domain.trade_dates import classify_holding_period
+from app.optimizer.validation import (
+    CandidateValidation,
+    ObjectivePolicy,
+    read_objective_policy,
+    validate_candidate,
+)
+
+_ZERO = Decimal(0)
+_ONE = Decimal(1)
+_HUNDRED = Decimal(100)
+_BASIS_POINTS = Decimal(10000)
+_INTEGER_SEARCH_INCOMPLETE = "whole_share_search_incomplete_continuous_relaxation_rounded_down"
+OPTIMIZER_IMPLEMENTATION_VERSION = "t-0045-core-v1"
+
+
+@dataclass(frozen=True, slots=True)
+class OptimizerRequest:
+    inputs: FinancialInputs
+    sell_lot_ids: tuple[str, ...] | None = None
+
+
+
+@dataclass(frozen=True, slots=True)
+class TradeGroupPriority:
+    group_id: str
+    rank: int
+    priority_score: Decimal | None
+    objective_components: tuple[tuple[str, Decimal], ...]
+    rationale: tuple[str, ...]
+
+@dataclass(frozen=True, slots=True)
+class OptimizerMetadata:
+    input_generation: int
+    source_checksum: str | None
+    status: str
+    solver: str | None
+    solver_statuses: tuple[str, ...]
+    elapsed_seconds: float
+    screening_seconds: float
+    solve_seconds: float
+    tax_regions_considered: int
+    tax_regions_solved: int
+    tax_region_search_complete: bool
+    integer_search_complete: bool
+    screened_lot_count: int
+    selected_lot_ids: tuple[str, ...]
+    candidate_types: tuple[str, ...]
+    objective_value: Decimal | None
+    baseline_objective_value: Decimal | None
+    estimated_tax_benefit_usd: Decimal | None
+    estimated_trading_cost_usd: Decimal | None
+    exposure_coverage_complete: bool | None
+    rounding_attempts: int
+    warnings: tuple[str, ...]
+    implementation_version: str = OPTIMIZER_IMPLEMENTATION_VERSION
+    solver_versions: tuple[tuple[str, str], ...] = ()
+    trade_group_priorities: tuple[TradeGroupPriority, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class OptimizerResult:
+    status: str
+    legs: tuple[ConsolidatedLeg, ...]
+    metadata: OptimizerMetadata
+
+
+@dataclass(frozen=True, slots=True)
+class _SaleCandidate:
+    lot: LotInput
+    maximum_shares: Decimal
+    mark_price: Decimal
+    execution_price: Decimal
+    gain_per_share: Decimal
+    term: str
+    categories: tuple[str, ...]
+    rank: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class _BuyCandidate:
+    ticker: str
+    maximum_shares: Decimal
+    mark_price: Decimal
+    execution_price: Decimal
+    assignment_path: tuple[str, ...]
+    priority: int
+    replacement_set_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class _Screen:
+    baseline: PortfolioEvaluation
+    sales: tuple[_SaleCandidate, ...]
+    buys: tuple[_BuyCandidate, ...]
+    warnings: tuple[str, ...]
+    candidate_types: tuple[str, ...]
+    screened_lot_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class _RegionSolve:
+    region: TaxAffineRegion | None
+    problem: cp.Problem
+    sell_variables: tuple[cp.Variable, ...]
+    buy_variables: tuple[cp.Variable, ...]
+    solver: str
+    status: str
+
+
+def _setting_decimal(inputs: FinancialInputs, key: str, default: Decimal | None = None) -> Decimal | None:
+    value = inputs.policy.settings.get(key, default)
+    if value is None:
+        return None
+    if not isinstance(value, Decimal) or not value.is_finite():
+        raise ValueError(f"invalid decimal policy setting: {key}")
+    return value
+
+
+def _setting_int(inputs: FinancialInputs, key: str) -> int | None:
+    value = inputs.policy.settings.get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _whole_floor(value: Decimal) -> Decimal:
+    return value.to_integral_value(rounding=ROUND_FLOOR)
+
+
+def _mark_price(quote: QuoteInput) -> Decimal | None:
+    if quote.bid_usd is not None and quote.ask_usd is not None:
+        if quote.bid_usd <= 0 or quote.ask_usd <= 0 or quote.bid_usd > quote.ask_usd:
+            return None
+        return (quote.bid_usd + quote.ask_usd) / Decimal(2)
+    if quote.last_usd is not None and quote.last_usd > 0:
+        return quote.last_usd
+    if quote.bid_usd is not None and quote.bid_usd > 0:
+        return quote.bid_usd
+    if quote.ask_usd is not None and quote.ask_usd > 0:
+        return quote.ask_usd
+    return None
+
+
+def _quote_is_current(inputs: FinancialInputs, quote: QuoteInput | None) -> bool:
+    return (
+        quote is not None
+        and quote.quality.lower() == "good"
+        and quote.sync_generation == inputs.source_generation
+        and quote.as_of <= inputs.account.as_of
+        and _mark_price(quote) is not None
+    )
+
+
+def _execution_prices(mark: Decimal, spread_bps: Decimal) -> tuple[Decimal, Decimal]:
+    half_spread = spread_bps / _BASIS_POINTS
+    sell_price = mark * (_ONE - half_spread)
+    buy_price = mark * (_ONE + half_spread)
+    return sell_price, buy_price
+
+
+def _asset_flags(asset_type: str) -> tuple[bool, bool, bool]:
+    normalized = asset_type.upper()
+    is_equity = normalized == "EQUITY"
+    is_muni = "MUNI" in normalized or "MUNICIPAL" in normalized
+    is_etf = not is_equity and not is_muni and ("ETF" in normalized or "MUTUAL_FUND" in normalized)
+    return is_equity, is_etf, is_muni
+
+
+def _validate_target_sums(inputs: FinancialInputs) -> tuple[str, ...]:
+    sleeves = tuple(row for row in inputs.policy.allocation.sleeves if row.enabled)
+    children: dict[str | None, list[AllocationSleeve]] = defaultdict(list)
+    for row in sleeves:
+        children[row.parent_key].append(row)
+    errors: list[str] = []
+    for parent_key, siblings in children.items():
+        total = exact_sum(row.target_pct or _ZERO for row in siblings)
+        if total != _HUNDRED:
+            label = "top_level" if parent_key is None else parent_key
+            errors.append(f"allocation_target_sum_not_100:{label}")
+    return tuple(errors)
+
+
+def _configured_limits(inputs: FinancialInputs) -> tuple[int, int, int, Decimal, Decimal, Decimal] | None:
+    sell_ticker_limit = _setting_int(inputs, "max_sell_tickers_per_batch")
+    sell_lot_limit = _setting_int(inputs, "max_sell_lots_per_batch")
+    order_limit = _setting_int(inputs, "max_total_orders_per_batch")
+    turnover_pct = _setting_decimal(inputs, "max_batch_turnover_pct")
+    buy_minimum = _setting_decimal(inputs, "min_buy_order_notional_usd")
+    cash_reserve = _setting_decimal(inputs, "cash_reserve_usd", _ZERO)
+    if (
+        sell_ticker_limit is None
+        or sell_lot_limit is None
+        or order_limit is None
+        or turnover_pct is None
+        or buy_minimum is None
+        or cash_reserve is None
+        or sell_ticker_limit <= 0
+        or sell_lot_limit <= 0
+        or order_limit <= 0
+        or not _ZERO <= turnover_pct <= _HUNDRED
+        or buy_minimum < 0
+        or cash_reserve < 0
+    ):
+        return None
+    return sell_ticker_limit, sell_lot_limit, order_limit, turnover_pct, buy_minimum, cash_reserve
+
+
+def _enabled_allowed(inputs: FinancialInputs) -> dict[str, tuple[int, str]]:
+    result: dict[str, tuple[int, str]] = {}
+    for row in inputs.policy.allocation.allowed_securities:
+        if not row.enabled:
+            continue
+        ticker = row.ticker.upper()
+        candidate = (row.priority, row.replacement_set_id)
+        if ticker not in result or candidate[0] < result[ticker][0]:
+            result[ticker] = candidate
+    return result
+
+
+def _current_overweight_rank(
+    inputs: FinancialInputs,
+    baseline: PortfolioEvaluation,
+    position: PositionInput,
+    sale_notional: Decimal,
+) -> Decimal:
+    if position.assignment is None:
+        return _ZERO
+    path = assignment_path(inputs.policy.allocation, position.assignment.sleeve_key, position.assignment.sub_sleeve_key)
+    if path is None:
+        return _ZERO
+    target_rows = {row.sleeve_key: row for row in baseline.allocation.target.sleeves}
+    values = dict(baseline.current.sleeve_values_usd)
+    bonus: list[Decimal] = []
+    total = baseline.current.portfolio_total_usd
+    for key in path:
+        target_row = target_rows.get(key)
+        sleeve = next((item for item in inputs.policy.allocation.sleeves if item.key == key), None)
+        if target_row is None or sleeve is None:
+            continue
+        target = target_row.target_whole_portfolio_pct
+        band = sleeve.drift_band_pp or _ZERO
+        if sleeve.parent_key is not None:
+            parent = target_rows.get(sleeve.parent_key)
+            band = band * (parent.target_whole_portfolio_pct if parent else _ZERO) / _HUNDRED
+        current_pct = values.get(key, _ZERO) * _HUNDRED / total if total else _ZERO
+        excess = max(_ZERO, current_pct - target - band)
+        if excess:
+            bonus.append(min(excess, sale_notional * _HUNDRED / total if total else _ZERO) / _HUNDRED)
+    return exact_sum(bonus)
+
+
+def _screen(
+    request: OptimizerRequest,
+    config: ObjectivePolicy,
+    deadline: float,
+) -> tuple[_Screen | None, tuple[str, ...]]:
+    inputs = request.inputs
+    if time.monotonic() >= deadline:
+        return None, ("deadline_exceeded_during_screen",)
+    if inputs.source_metadata.sync_complete is False:
+        return None, ("source_sync_incomplete",)
+    sync_warning: list[str] = []
+    if inputs.source_metadata.sync_complete is None:
+        # The input loader may not expose a sync completeness fact for legacy/demo provenance.
+        sync_warning.append("source_sync_completeness_unknown")
+    try:
+        baseline = evaluate_portfolio(inputs, ())
+    except BasketValidationError as error:
+        return None, (f"current_portfolio_invalid:{error.code}",)
+    warnings = list(sync_warning)
+    position_by_ticker = {row.ticker.upper(): row for row in inputs.positions}
+    security_by_ticker = {row.identity.ticker.upper(): row for row in inputs.securities}
+    quote_by_ticker = {row.ticker.upper(): row for row in inputs.quotes}
+    inputs_profile = TaxProfile.from_policy_settings(inputs.policy.settings)
+    gain_sales_allowed = inputs.policy.settings.get("allow_gain_sales", False) is True
+    etf_harvest_allowed = inputs.policy.settings.get("permit_etf_harvest", False) is True
+    muni_exit_allowed = inputs.policy.settings.get("permit_muni_exit", False) is True
+    preferred_etfs = inputs.policy.settings.get("prefer_etf_buys", False) is True
+    total = baseline.current.portfolio_total_usd
+    target_errors = _validate_target_sums(inputs)
+    if target_errors:
+        return None, target_errors
+
+    candidates: list[_SaleCandidate] = []
+    candidate_types: set[str] = set()
+    seen_lots = 0
+    for lot in inputs.lots:
+        if time.monotonic() >= deadline:
+            warnings.append("deadline_during_screening")
+            break
+        seen_lots += 1
+        ticker = lot.ticker.upper()
+        position = position_by_ticker.get(ticker)
+        security = security_by_ticker.get(ticker)
+        quote = quote_by_ticker.get(ticker)
+        if position is None or security is None or quote is None:
+            continue
+        if not _quote_is_current(inputs, quote) or not security.tradable:
+            continue
+        if position.sync_generation != inputs.source_generation or lot.sync_generation != inputs.source_generation:
+            warnings.append(f"stale_position_or_lot:{ticker}:{lot.broker_lot_id}")
+            continue
+        whole_available = _whole_floor(lot.available_shares)
+        if whole_available <= 0:
+            if lot.available_shares > 0:
+                warnings.append(f"fractional_remainder_not_executable:{lot.broker_lot_id}")
+            continue
+        if lot.available_shares != whole_available:
+            warnings.append(f"fractional_remainder_not_executable:{lot.broker_lot_id}")
+            if lot.fractional_cleanup_unsupported:
+                warnings.append(f"fractional_cleanup_unsupported:{lot.broker_lot_id}")
+        mark = _mark_price(quote)
+        if mark is None:
+            continue
+        sell_price, _ = _execution_prices(mark, config.estimated_spread_bps)
+        if sell_price <= 0:
+            continue
+        gain_per_share = sell_price - lot.adjusted_unit_basis_usd
+        is_equity, is_etf, is_muni = _asset_flags(security.identity.asset_type)
+        sale_notional = sell_price * whole_available
+        band_bonus = _current_overweight_rank(inputs, baseline, position, sale_notional)
+        categories: list[str] = []
+        if gain_per_share < 0:
+            if is_equity:
+                categories.append("stock_tlh")
+            elif is_etf and etf_harvest_allowed:
+                categories.append("etf_tlh")
+            elif is_muni and muni_exit_allowed:
+                categories.append("municipal_exit")
+        if gain_sales_allowed:
+            if is_muni and muni_exit_allowed:
+                categories.append("municipal_exit")
+            elif is_equity:
+                categories.append("gain_aware_stock_cleanup")
+            elif is_etf:
+                categories.append("allowed_etf_swap_exit")
+        if band_bonus > 0 and (gain_per_share <= 0 or gain_sales_allowed):
+            categories.append("allocation_exit")
+        if not categories:
+            continue
+
+        if gain_per_share > 0 and not inputs_profile.tax_rates_complete:
+            warnings.append(f"gain_candidate_blocked_incomplete_tax_rates:{lot.broker_lot_id}")
+            continue
+        if lot.fractional_cleanup_unsupported and lot.available_shares < 1:
+            continue
+        quantity_gain = gain_per_share * whole_available
+        term = classify_holding_period(lot.acquired_date, inputs.proposed_trade_date)
+        st_gain = quantity_gain if term == "ST" else _ZERO
+        lt_gain = quantity_gain if term == "LT" else _ZERO
+        tax_eval = evaluate_tax(inputs_profile, st_gain, lt_gain)
+        tax_benefit = tax_eval.estimated_tax_benefit_usd or _ZERO
+        cost = sale_notional * config.estimated_spread_bps / _BASIS_POINTS + config.estimated_fee_per_order_usd
+        cleanup_fraction = Decimal(1) / Decimal(max(1, len(inputs.lots)))
+        rank = exact_sum(
+            (
+                config.weight("objective_tax_weight") * tax_benefit / total if total else _ZERO,
+                config.weight("objective_band_weight") * band_bonus,
+                config.weight("objective_allocation_weight") * band_bonus,
+                config.weight("objective_cleanup_weight") * cleanup_fraction,
+                -(config.weight("objective_trading_cost_weight") * cost / total if total else _ZERO),
+                -(config.weight("objective_turnover_weight") * sale_notional / total if total else _ZERO),
+            )
+        )
+        candidates.append(
+            _SaleCandidate(
+                lot,
+                whole_available,
+                mark,
+                sell_price,
+                gain_per_share,
+                "ST" if inputs_profile.tax_rates_complete and st_gain != 0 else "LT",
+                tuple(categories),
+                rank,
+            )
+        )
+        candidate_types.update(categories)
+
+    limits = _configured_limits(inputs)
+    if limits is None:
+        return None, ("configuration_required:batch_limits_and_cash_policy",)
+    sell_ticker_limit, sell_lot_limit, order_limit, turnover_pct, buy_minimum, _cash_reserve = limits
+    if config.estimated_spread_bps >= _BASIS_POINTS:
+        return None, ("invalid_configuration:estimated_spread_bps_must_be_less_than_10000",)
+    candidates.sort(key=lambda row: (-row.rank, row.lot.ticker.upper(), row.lot.broker_lot_id))
+    if request.sell_lot_ids is not None:
+        requested = set(request.sell_lot_ids)
+        matched = {candidate.lot.broker_lot_id for candidate in candidates}
+        unknown = requested - {lot.broker_lot_id for lot in inputs.lots}
+        ineligible = requested - matched
+        if unknown:
+            return None, tuple(f"unknown_selected_lot:{lot_id}" for lot_id in sorted(unknown))
+        if ineligible:
+            return None, tuple(f"selected_lot_not_eligible:{lot_id}" for lot_id in sorted(ineligible))
+        candidates = [candidate for candidate in candidates if candidate.lot.broker_lot_id in requested]
+        if len(candidates) > sell_lot_limit:
+            return None, ("selected_subset_exceeds_max_sell_lots_per_batch",)
+        if len({candidate.lot.ticker.upper() for candidate in candidates}) > sell_ticker_limit:
+            return None, ("selected_subset_exceeds_max_sell_tickers_per_batch",)
+    selected_sales: list[_SaleCandidate] = []
+    selected_tickers: set[str] = set()
+    for candidate in candidates:
+        ticker = candidate.lot.ticker.upper()
+        if len(selected_sales) >= sell_lot_limit:
+            break
+        if ticker not in selected_tickers and len(selected_tickers) >= sell_ticker_limit:
+            continue
+        selected_sales.append(candidate)
+        selected_tickers.add(ticker)
+
+    enabled_allowed = _enabled_allowed(inputs)
+    buy_candidates: list[_BuyCandidate] = []
+    exposure_buy_cache: dict[str, bool] = {}
+    for ticker, (priority, replacement_set) in sorted(enabled_allowed.items(), key=lambda item: (item[1][0], item[0])):
+        if time.monotonic() >= deadline:
+            warnings.append("deadline_during_buy_screening")
+            break
+        security = security_by_ticker.get(ticker)
+        quote = quote_by_ticker.get(ticker)
+        if security is None or not security.tradable or not _quote_is_current(inputs, quote):
+            continue
+        assert quote is not None
+        is_equity, is_etf, is_muni = _asset_flags(security.identity.asset_type)
+        if preferred_etfs and not (is_etf or security.identity.is_completion_etf):
+            continue
+        if is_muni:
+            continue
+        resolution = resolve_holding(inputs.policy.allocation, security.identity)
+        if resolution.assignment is None:
+            continue
+        path = assignment_path(inputs.policy.allocation, resolution.assignment.sleeve_key, resolution.assignment.sub_sleeve_key)
+        if path is None:
+            continue
+        mark = _mark_price(quote)
+        if mark is None:
+            continue
+        _, buy_price = _execution_prices(mark, config.estimated_spread_bps)
+        if buy_price <= 0 or buy_price < 0:
+            continue
+        if not is_equity:
+            try:
+                candidate_exposure = aggregate_lookthrough_exposure(inputs, tickers=(ticker,))
+                exposure_ok = candidate_exposure.coverage.complete is True and bool(candidate_exposure.values)
+            except (ValueError, TypeError, ArithmeticError):
+                exposure_ok = False
+            exposure_buy_cache[ticker] = exposure_ok
+            if not exposure_ok:
+                warnings.append(f"buy_exposure_incomplete:{ticker}")
+                continue
+        if total <= 0:
+            continue
+        max_turnover_usd = total * turnover_pct / _HUNDRED
+        max_shares = _whole_floor(max_turnover_usd / buy_price)
+        if max_shares <= 0 or buy_price * max_shares < buy_minimum:
+            continue
+        buy_candidates.append(
+            _BuyCandidate(ticker, max_shares, mark, buy_price, path, priority, replacement_set)
+        )
+    # A replacement BUY must be distinct from every source ticker in this basket.
+    buy_candidates = [candidate for candidate in buy_candidates if candidate.ticker not in selected_tickers]
+    available_buy_slots = max(0, order_limit - len(selected_tickers))
+    buy_candidates = buy_candidates[:available_buy_slots]
+    warnings.append(_INTEGER_SEARCH_INCOMPLETE)
+    screen = _Screen(
+        baseline,
+        tuple(selected_sales),
+        tuple(buy_candidates),
+        tuple(dict.fromkeys(warnings)),
+        tuple(sorted(candidate_types)),
+        seen_lots,
+    )
+    return screen, ()
+
+
+def _cp_float(value: Decimal) -> float:
+    return float(value)
+
+
+def _model_region(
+    request: OptimizerRequest,
+    screen: _Screen,
+    config: ObjectivePolicy,
+    limits: tuple[int, int, int, Decimal, Decimal, Decimal],
+    profile: TaxProfile,
+    region: TaxAffineRegion | None,
+) -> tuple[cp.Problem, tuple[cp.Variable, ...], tuple[cp.Variable, ...]]:
+    inputs = request.inputs
+    baseline = screen.baseline
+    sell_vars = tuple(cp.Variable(nonneg=True, name=f"sell_{index}") for index in range(len(screen.sales)))
+    buy_vars = tuple(cp.Variable(nonneg=True, name=f"buy_{index}") for index in range(len(screen.buys)))
+    constraints: list[Any] = []
+    for variable, candidate in zip(sell_vars, screen.sales, strict=True):
+        constraints.append(variable <= _cp_float(candidate.maximum_shares))
+    for variable, candidate in zip(buy_vars, screen.buys, strict=True):
+        constraints.append(variable <= _cp_float(candidate.maximum_shares))
+
+    sell_by_ticker: dict[str, list[tuple[int, _SaleCandidate]]] = defaultdict(list)
+    for index, candidate in enumerate(screen.sales):
+        sell_by_ticker[candidate.lot.ticker.upper()].append((index, candidate))
+    current_positions = {row.ticker.upper(): row for row in inputs.positions}
+    sleeve_deltas: dict[str, Any] = defaultdict(lambda: cp.Constant(0.0))
+    cash_path: tuple[str, ...] = ()
+    cash_resolution = resolve_cash(inputs.policy.allocation)
+    if cash_resolution.assignment is not None:
+        resolved_path = assignment_path(
+            inputs.policy.allocation,
+            cash_resolution.assignment.sleeve_key,
+            cash_resolution.assignment.sub_sleeve_key,
+        )
+        cash_path = resolved_path or ()
+    sell_proceeds: Any = cp.Constant(0.0)
+    sell_turnover: Any = cp.Constant(0.0)
+    buy_spend: Any = cp.Constant(0.0)
+    buy_turnover: Any = cp.Constant(0.0)
+    realized_st: Any = cp.Constant(0.0)
+    realized_lt: Any = cp.Constant(0.0)
+    gross_st_gain: Any = cp.Constant(0.0)
+    gross_lt_gain: Any = cp.Constant(0.0)
+    lot_cleanup: Any = cp.Constant(0.0)
+    position_cleanup: Any = cp.Constant(0.0)
+
+    for ticker, rows in sell_by_ticker.items():
+        position = current_positions[ticker]
+        if position.assignment is None:
+            continue
+        path = assignment_path(inputs.policy.allocation, position.assignment.sleeve_key, position.assignment.sub_sleeve_key) or ()
+        position_value_per_share = position.market_value_usd / position.shares
+        total_ticker_shares: Any = cp.Constant(0.0)
+        for index, candidate in rows:
+            variable = sell_vars[index]
+            total_ticker_shares += variable
+            sell_proceeds += _cp_float(candidate.execution_price) * variable
+            sell_turnover += _cp_float(candidate.execution_price) * variable
+            for key in path:
+                sleeve_deltas[key] -= _cp_float(position_value_per_share) * variable
+            gain = candidate.gain_per_share
+            if candidate.term == "ST":
+                realized_st += _cp_float(gain) * variable
+                if gain > 0:
+                    gross_st_gain += _cp_float(gain) * variable
+            else:
+                realized_lt += _cp_float(gain) * variable
+                if gain > 0:
+                    gross_lt_gain += _cp_float(gain) * variable
+            lot_cleanup += variable / max(_cp_float(candidate.maximum_shares), 1.0)
+        for key in cash_path:
+            sleeve_deltas[key] += sum(
+                _cp_float(candidate.execution_price) * sell_vars[index] for index, candidate in rows
+            )
+        position_cleanup += total_ticker_shares / max(_cp_float(position.shares), 1.0)
+
+    for index, candidate in enumerate(screen.buys):
+        variable = buy_vars[index]
+        amount = _cp_float(candidate.execution_price) * variable
+        buy_spend += amount
+        buy_turnover += amount
+        for key in candidate.assignment_path:
+            sleeve_deltas[key] += amount
+        for key in cash_path:
+            sleeve_deltas[key] -= amount
+
+    sale_fee_proxy: Any = cp.Constant(0.0)
+    for rows in sell_by_ticker.values():
+        max_shares = exact_sum(candidate.maximum_shares for _, candidate in rows)
+        sale_fee_proxy += _cp_float(config.estimated_fee_per_order_usd) * sum(
+            sell_vars[index] for index, _ in rows
+        ) / max(_cp_float(max_shares), 1.0)
+    buy_fee_proxy: Any = cp.Constant(0.0)
+    for variable, candidate in zip(buy_vars, screen.buys, strict=True):
+        buy_fee_proxy += _cp_float(config.estimated_fee_per_order_usd) * variable / max(
+            _cp_float(candidate.maximum_shares), 1.0
+        )
+    fee_proxy = sale_fee_proxy + buy_fee_proxy
+
+    _, _, _, turnover_pct, _, cash_reserve = limits
+    total = baseline.current.portfolio_total_usd
+    constraints.append(sell_turnover + buy_turnover <= _cp_float(total * turnover_pct / _HUNDRED))
+    constraints.append(
+        _cp_float(inputs.account.cash_usd) + sell_proceeds - buy_spend - fee_proxy >= _cp_float(cash_reserve)
+    )
+    constraints.append(
+        _cp_float(inputs.account.settled_buying_power_usd) + sell_proceeds - buy_spend - fee_proxy >= 0
+    )
+
+    gain_budget = _setting_decimal(inputs, "gain_budget_usd")
+    st_gain_limit = _setting_decimal(inputs, "st_gain_limit_usd")
+    lt_gain_limit = _setting_decimal(inputs, "lt_gain_limit_usd")
+    if gain_budget is not None:
+        constraints.append(gross_st_gain + gross_lt_gain <= _cp_float(gain_budget))
+    if st_gain_limit is not None:
+        constraints.append(gross_st_gain <= _cp_float(st_gain_limit))
+    if lt_gain_limit is not None:
+        constraints.append(gross_lt_gain <= _cp_float(lt_gain_limit))
+
+    incremental_tax: Any = cp.Constant(0.0)
+    if region is not None:
+        post_st = _cp_float(profile.baseline_st_net_usd) + realized_st
+        post_lt = _cp_float(profile.baseline_lt_net_usd) + realized_lt
+        for half_plane in region.inequalities:
+            constraints.append(
+                _cp_float(half_plane.short_term_coefficient) * post_st
+                + _cp_float(half_plane.long_term_coefficient) * post_lt
+                <= _cp_float(half_plane.upper_bound_usd)
+            )
+        baseline_tax = tax_value(profile, profile.baseline_st_net_usd, profile.baseline_lt_net_usd)
+        assert baseline_tax is not None
+        incremental_tax = (
+            _cp_float(region.short_term_coefficient) * post_st
+            + _cp_float(region.long_term_coefficient) * post_lt
+            + _cp_float(region.constant_usd)
+            - _cp_float(baseline_tax)
+        )
+        max_tax = _setting_decimal(inputs, "max_incremental_tax_cost_usd")
+        if max_tax is not None:
+            constraints.append(incremental_tax <= _cp_float(max_tax))
+    else:
+        max_tax = _setting_decimal(inputs, "max_incremental_tax_cost_usd")
+        if max_tax is not None and (screen.sales or screen.buys):
+            # Without complete rates the configured tax-cost cap cannot be independently proven.
+            constraints.extend(variable == 0 for variable in (*sell_vars, *buy_vars))
+
+    sleeve_by_key = {row.key: row for row in inputs.policy.allocation.sleeves if row.enabled}
+    target_by_key = {row.sleeve_key: row for row in baseline.allocation.target.sleeves}
+    current_values = dict(baseline.current.sleeve_values_usd)
+    post_weights: dict[str, Any] = {}
+    allocation_terms: list[Any] = []
+    band_terms: list[Any] = []
+    for key, target_row in target_by_key.items():
+        target = target_row.target_whole_portfolio_pct
+        current_value = current_values.get(key, _ZERO)
+        post_weight = (_cp_float(current_value) + sleeve_deltas[key]) * _cp_float(_HUNDRED / total)
+        post_weights[key] = post_weight
+        allocation_terms.append(cp.abs(post_weight - _cp_float(target)) / _cp_float(_HUNDRED))
+        sleeve = sleeve_by_key[key]
+        band = sleeve.drift_band_pp or _ZERO
+        if sleeve.parent_key is not None:
+            parent_target = target_by_key.get(sleeve.parent_key)
+            band = band * (parent_target.target_whole_portfolio_pct if parent_target else _ZERO) / _HUNDRED
+        band_terms.append(cp.pos(cp.abs(post_weight - _cp_float(target)) - _cp_float(band)) / _cp_float(_HUNDRED))
+        current_weight = current_value * _HUNDRED / total if total else _ZERO
+        allowed_distance = max(abs(current_weight - target), band)
+        constraints.append(post_weight >= _cp_float(target - allowed_distance))
+        constraints.append(post_weight <= _cp_float(target + allowed_distance))
+
+    spread_cost: Any = cp.Constant(0.0)
+    for index, candidate in enumerate(screen.sales):
+        spread_cost += _cp_float(candidate.mark_price * config.estimated_spread_bps / _BASIS_POINTS) * sell_vars[index]
+    for candidate, variable in zip(screen.buys, buy_vars, strict=True):
+        spread_cost += _cp_float(candidate.mark_price * config.estimated_spread_bps / _BASIS_POINTS) * variable
+    trading_cost_proxy = spread_cost + fee_proxy
+    turnover_expr = sell_turnover + buy_turnover
+    cleanup_denominator = max(1, baseline.lot_count_before + baseline.position_count_before)
+    cleanup_reward = (lot_cleanup + position_cleanup) / cleanup_denominator
+    objective = cp.Minimize(
+        _cp_float(config.weight("objective_band_weight")) * sum(band_terms)
+        + _cp_float(config.weight("objective_allocation_weight")) * sum(allocation_terms)
+        + _cp_float(config.weight("objective_tax_weight")) * incremental_tax / _cp_float(total)
+        + _cp_float(config.weight("objective_trading_cost_weight")) * trading_cost_proxy / _cp_float(total)
+        + _cp_float(config.weight("objective_turnover_weight")) * turnover_expr / _cp_float(total)
+        - _cp_float(config.weight("objective_cleanup_weight")) * cleanup_reward
+    )
+    problem = cp.Problem(objective, constraints)
+    return problem, sell_vars, buy_vars
+
+
+def _solve_problem(
+    problem: cp.Problem,
+    deadline: float,
+    regions_remaining: int,
+) -> tuple[str | None, str]:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return None, "deadline_exceeded"
+    native_limit = max(0.001, min(remaining, remaining / max(1, regions_remaining)))
+    try:
+        problem.solve(
+            solver=cp.OSQP,
+            verbose=False,
+            warm_start=False,
+            max_iter=20000,
+            eps_abs=1e-7,
+            eps_rel=1e-7,
+            time_limit=native_limit,
+        )
+        status = problem.status
+        if status in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE, cp.INFEASIBLE, cp.INFEASIBLE_INACCURATE}:
+            return "OSQP", status
+    except (cp.error.SolverError, ValueError, TypeError):
+        status = "osqp_error"
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return None, "deadline_exceeded_after_osqp"
+    try:
+        problem.solve(solver=cp.CLARABEL, verbose=False, time_limit=remaining)
+        return "CLARABEL", problem.status
+    except (cp.error.SolverError, ValueError, TypeError):
+        return None, "solver_error"
+
+
+def _canonical_legs(
+    screen: _Screen,
+    sell_values: tuple[Decimal, ...],
+    buy_values: tuple[Decimal, ...],
+) -> tuple[ConsolidatedLeg, ...]:
+    allocations: dict[str, list[LotAllocation]] = defaultdict(list)
+    prices: dict[str, Decimal] = {}
+    for candidate, shares in zip(screen.sales, sell_values, strict=True):
+        if shares <= 0:
+            continue
+        ticker = candidate.lot.ticker.upper()
+        allocations[ticker].append(LotAllocation(candidate.lot.broker_lot_id, shares))
+        prices[ticker] = candidate.execution_price
+    sells: list[ConsolidatedLeg] = []
+    for ticker in sorted(allocations):
+        lot_allocations = tuple(sorted(allocations[ticker], key=lambda item: item.broker_lot_id))
+        shares = exact_sum(row.shares for row in lot_allocations)
+        sells.append(
+            ConsolidatedLeg(
+                leg_id=f"sell:{ticker}",
+                side="SELL",
+                ticker=ticker,
+                shares=shares,
+                estimated_unit_price_usd=prices[ticker],
+                selected_lots=lot_allocations,
+                sequence=0,
+                group_ids=(f"sale:{ticker}",),
+            )
+        )
+    sale_groups = tuple(leg.group_ids[0] for leg in sells)
+    dependencies = tuple(leg.leg_id for leg in sells)
+    buys: list[ConsolidatedLeg] = []
+    for candidate, shares in zip(screen.buys, buy_values, strict=True):
+        if shares <= 0:
+            continue
+        buys.append(
+            ConsolidatedLeg(
+                leg_id=f"buy:{candidate.ticker}",
+                side="BUY",
+                ticker=candidate.ticker,
+                shares=shares,
+                estimated_unit_price_usd=candidate.execution_price,
+                depends_on_leg_ids=dependencies,
+                sequence=1,
+                group_ids=sale_groups or (f"buy:{candidate.ticker}",),
+            )
+        )
+    return (*sells, *buys)
+
+
+def _decimal_solution(value: object, maximum: Decimal) -> Decimal:
+    if value is None or not isinstance(value, (int, float, Decimal)):
+        return _ZERO
+    numeric = float(value)
+    if not math.isfinite(numeric) or numeric <= 0:
+        return _ZERO
+    raw = min(Decimal(str(numeric)), maximum)
+    return _whole_floor(raw)
+
+
+def _scaled_legs(legs: tuple[ConsolidatedLeg, ...], factor: Decimal) -> tuple[ConsolidatedLeg, ...]:
+    scaled: list[ConsolidatedLeg] = []
+    for leg in legs:
+        if leg.side == "SELL":
+            allocations = tuple(
+                LotAllocation(row.broker_lot_id, _whole_floor(row.shares * factor))
+                for row in leg.selected_lots
+            )
+            allocations = tuple(row for row in allocations if row.shares > 0)
+            shares = exact_sum(row.shares for row in allocations)
+            if not allocations:
+                continue
+            scaled.append(
+                ConsolidatedLeg(
+                    leg.leg_id,
+                    leg.side,
+                    leg.ticker,
+                    shares,
+                    leg.estimated_unit_price_usd,
+                    allocations,
+                    (),
+                    leg.sequence,
+                    leg.group_ids,
+                )
+            )
+        else:
+            shares = _whole_floor(leg.shares * factor)
+            if shares <= 0:
+                continue
+            scaled.append(
+                ConsolidatedLeg(
+                    leg.leg_id,
+                    leg.side,
+                    leg.ticker,
+                    shares,
+                    leg.estimated_unit_price_usd,
+                    (),
+                    tuple(item.leg_id for item in scaled if item.side == "SELL"),
+                    1,
+                    leg.group_ids,
+                )
+            )
+    return tuple(scaled)
+
+
+def _repair_and_validate(
+    inputs: FinancialInputs,
+    legs: tuple[ConsolidatedLeg, ...],
+    deadline: float,
+) -> tuple[tuple[ConsolidatedLeg, ...] | None, CandidateValidation | None, int]:
+    attempts = 0
+    factors = (Decimal(1), Decimal("0.75"), Decimal("0.5"), Decimal("0.25"))
+    for factor in factors:
+        if time.monotonic() >= deadline:
+            return None, None, attempts
+        attempts += 1
+        candidate = legs if factor == 1 else _scaled_legs(legs, factor)
+        # A sub-minimum BUY is never emitted; try the independently validated sale-only remainder.
+        minimum_buy = _setting_decimal(inputs, "min_buy_order_notional_usd", _ZERO) or _ZERO
+        filtered = tuple(
+            leg
+            for leg in candidate
+            if leg.side != "BUY" or exact_product(leg.shares, leg.estimated_unit_price_usd) >= minimum_buy
+        )
+        sell_ids = tuple(leg.leg_id for leg in filtered if leg.side == "SELL")
+        filtered = tuple(
+            ConsolidatedLeg(
+                leg.leg_id,
+                leg.side,
+                leg.ticker,
+                leg.shares,
+                leg.estimated_unit_price_usd,
+                leg.selected_lots,
+                sell_ids if leg.side == "BUY" else (),
+                1 if leg.side == "BUY" else 0,
+                leg.group_ids,
+            )
+            for leg in filtered
+        )
+        validation = validate_candidate(inputs, filtered, deadline)
+        if validation.accepted:
+            return filtered, validation, attempts
+    return None, None, attempts
+
+
+def _package_versions() -> tuple[tuple[str, str], ...]:
+    packages = ("cvxpy", "osqp", "clarabel")
+    versions: list[tuple[str, str]] = []
+    for package in packages:
+        try:
+            installed_version = version(package)
+        except PackageNotFoundError:
+            installed_version = "not-installed"
+        versions.append((package, installed_version))
+    return tuple(versions)
+
+
+def _metadata(
+    inputs: FinancialInputs,
+    status: str,
+    solver: str | None,
+    solver_statuses: tuple[str, ...],
+    started: float,
+    screen_started: float,
+    solve_started: float,
+    regions_considered: int,
+    regions_solved: int,
+    region_complete: bool,
+    screened_lots: int,
+    selected_ids: tuple[str, ...],
+    candidate_types: tuple[str, ...],
+    objective: Decimal | None,
+    baseline_objective: Decimal | None,
+    tax_benefit: Decimal | None,
+    trading_cost: Decimal | None,
+    exposure_complete: bool | None,
+    rounding_attempts: int,
+    warnings: tuple[str, ...],
+    group_priorities: tuple[TradeGroupPriority, ...] = (),
+) -> OptimizerMetadata:
+    return OptimizerMetadata(
+        input_generation=inputs.source_generation,
+        source_checksum=inputs.source_checksum,
+        status=status,
+        solver=solver,
+        solver_statuses=solver_statuses,
+        elapsed_seconds=max(0.0, time.monotonic() - started),
+        screening_seconds=max(0.0, solve_started - screen_started),
+        solve_seconds=max(0.0, time.monotonic() - solve_started),
+        tax_regions_considered=regions_considered,
+        tax_regions_solved=regions_solved,
+        tax_region_search_complete=region_complete,
+        integer_search_complete=False,
+        screened_lot_count=screened_lots,
+        selected_lot_ids=selected_ids,
+        candidate_types=candidate_types,
+        objective_value=objective,
+        baseline_objective_value=baseline_objective,
+        estimated_tax_benefit_usd=tax_benefit,
+        estimated_trading_cost_usd=trading_cost,
+        exposure_coverage_complete=exposure_complete,
+        rounding_attempts=rounding_attempts,
+        warnings=tuple(dict.fromkeys((*warnings, _INTEGER_SEARCH_INCOMPLETE))),
+        implementation_version=OPTIMIZER_IMPLEMENTATION_VERSION,
+        solver_versions=_package_versions(),
+        trade_group_priorities=group_priorities,
+    )
+def _group_priorities(
+    inputs: FinancialInputs,
+    screen: _Screen,
+    baseline: CandidateValidation,
+    legs: tuple[ConsolidatedLeg, ...],
+    deadline: float,
+) -> tuple[tuple[TradeGroupPriority, ...], tuple[str, ...]]:
+    sells = tuple(leg for leg in legs if leg.side == "SELL")
+    if not sells:
+        return (), ()
+    baseline_components = dict(baseline.objective_components)
+    if not baseline_components:
+        return (), ("trade_group_priority_components_unavailable",)
+    candidates_by_lot = {row.lot.broker_lot_id: row for row in screen.sales}
+    ranked: list[TradeGroupPriority] = []
+    warnings: list[str] = []
+    has_shared_buys = any(leg.side == "BUY" for leg in legs)
+    for index, leg in enumerate(sells):
+        group_id = leg.group_ids[0] if leg.group_ids else f"sale:{leg.ticker}"
+        if time.monotonic() >= deadline:
+            warnings.append("trade_group_priority_deadline_incomplete")
+            for pending in sells[index:]:
+                pending_group = pending.group_ids[0] if pending.group_ids else f"sale:{pending.ticker}"
+                ranked.append(
+                    TradeGroupPriority(
+                        pending_group,
+                        0,
+                        None,
+                        (),
+                        ("Independent objective recomputation skipped at the shared deadline.",),
+                    )
+                )
+            break
+        validation = validate_candidate(inputs, (leg,), deadline)
+        group_types = tuple(
+            sorted(
+                {
+                    candidate_type
+                    for allocation in leg.selected_lots
+                    for candidate in (candidates_by_lot.get(allocation.broker_lot_id),)
+                    if candidate is not None
+                    for candidate_type in candidate.categories
+                }
+            )
+        )
+
+        rationale = [
+            "Score is the independently Decimal-recomputed no-trade objective minus this isolated SELL group's objective.",
+            f"Configured candidate types: {', '.join(group_types) or 'not classified'}.",
+        ]
+
+        if has_shared_buys:
+            rationale.append("Replacement BUY effects are shared by the final basket and are not attributed to this isolated SELL score.")
+        if not validation.accepted:
+            rationale.append(f"Isolated SELL score is diagnostic, not a stand-alone executable group: {', '.join(validation.reasons)}.")
+        scorable = bool(validation.objective_components)
+        if scorable:
+            group_components = dict(validation.objective_components)
+            component_deltas = tuple(
+                (key, baseline_value - group_components.get(key, baseline_value))
+                for key, baseline_value in baseline.objective_components
+            )
+            score = exact_sum(value for _, value in component_deltas)
+        else:
+            component_deltas = ()
+            score = None
+            rationale.extend(f"Isolated group validation: {reason}." for reason in validation.reasons)
+        ranked.append(TradeGroupPriority(group_id, 0, score, component_deltas, tuple(rationale)))
+    ranked.sort(key=lambda row: (row.priority_score is None, -(row.priority_score or _ZERO), row.group_id))
+    priorities = tuple(
+        TradeGroupPriority(row.group_id, rank, row.priority_score, row.objective_components, row.rationale)
+        for rank, row in enumerate(ranked, start=1)
+    )
+    if has_shared_buys:
+        warnings.append("trade_group_priority_isolated_sell_scores_do_not_attribute_shared_buy_effects")
+    return priorities, tuple(warnings)
+
+
+
+
+def optimize_worker(request: OptimizerRequest, computation_deadline: float) -> OptimizerResult:
+    """Run Pass 1 screening and Pass 2 exact-tax-region convex relaxations before whole-share repair."""
+    started = time.monotonic()
+    inputs = request.inputs
+    config, config_errors = read_objective_policy(inputs)
+    if config is None:
+        meta = _metadata(
+            inputs,
+            "configuration_required",
+            None,
+            (),
+            started,
+            started,
+            time.monotonic(),
+            0,
+            0,
+            False,
+            0,
+            (),
+            (),
+            None,
+            None,
+            None,
+            None,
+            None,
+            0,
+            config_errors,
+        )
+        return OptimizerResult("configuration_required", (), meta)
+    if config.estimated_spread_bps >= _BASIS_POINTS:
+        warnings = ("invalid_configuration:estimated_spread_bps_must_be_less_than_10000",)
+        meta = _metadata(inputs, "configuration_required", None, (), started, started, time.monotonic(), 0, 0, False, 0, (), (), None, None, None, None, None, 0, warnings)
+        return OptimizerResult("configuration_required", (), meta)
+    limits = _configured_limits(inputs)
+    if limits is None:
+        warnings = ("configuration_required:batch_limits_and_cash_policy",)
+        meta = _metadata(inputs, "configuration_required", None, (), started, started, time.monotonic(), 0, 0, False, 0, (), (), None, None, None, None, None, 0, warnings)
+        return OptimizerResult("configuration_required", (), meta)
+    target_errors = _validate_target_sums(inputs)
+    if target_errors:
+        meta = _metadata(inputs, "configuration_required", None, (), started, started, time.monotonic(), 0, 0, False, 0, (), (), None, None, None, None, None, 0, target_errors)
+        return OptimizerResult("configuration_required", (), meta)
+    if time.monotonic() >= computation_deadline:
+        meta = _metadata(inputs, "deadline_exceeded", None, (), started, started, time.monotonic(), 0, 0, False, 0, (), (), None, None, None, None, None, 0, ("computation_deadline_exceeded",))
+        return OptimizerResult("deadline_exceeded", (), meta)
+
+    screen_started = time.monotonic()
+    screen, screen_errors = _screen(request, config, computation_deadline)
+    solve_started = time.monotonic()
+    if screen is None:
+        status = "deadline_exceeded" if any("deadline" in error for error in screen_errors) else "infeasible"
+        meta = _metadata(inputs, status, None, (), started, screen_started, solve_started, 0, 0, False, 0, (), (), None, None, None, None, None, 0, screen_errors)
+        return OptimizerResult(status, (), meta)
+    baseline_result = validate_candidate(inputs, (), computation_deadline)
+    if not baseline_result.accepted or baseline_result.objective_value is None:
+        meta = _metadata(
+            inputs,
+            "configuration_required" if any("configuration_required" in reason for reason in baseline_result.reasons) else "infeasible",
+            None,
+            (),
+            started,
+            screen_started,
+            solve_started,
+            0,
+            0,
+            False,
+            screen.screened_lot_count,
+            (),
+            screen.candidate_types,
+            None,
+            None,
+            None,
+            None,
+            None,
+            0,
+            (*screen.warnings, *baseline_result.reasons),
+        )
+        return OptimizerResult(meta.status, (), meta)
+    baseline_objective = baseline_result.objective_value
+    profile = TaxProfile.from_policy_settings(inputs.policy.settings)
+    if profile.tax_rates_complete:
+        tax_regions = enumerate_tax_regions(profile) or ()
+        region_list: tuple[TaxAffineRegion | None, ...] = tuple(tax_regions)
+        region_search_needed = True
+    else:
+        region_list = (None,)
+        region_search_needed = False
+    solver_statuses: list[str] = []
+    used_solvers: list[str] = []
+    solved_regions = 0
+    region_complete = True
+    best_legs: tuple[ConsolidatedLeg, ...] = ()
+    best_validation = baseline_result
+    best_score = baseline_objective
+    best_selected: tuple[str, ...] = ()
+    rounding_attempts = 0
+    for index, region in enumerate(region_list):
+        if time.monotonic() >= computation_deadline:
+            region_complete = False
+            solver_statuses.append("deadline_exceeded")
+            break
+        try:
+            problem, sell_vars, buy_vars = _model_region(request, screen, config, limits, profile, region)
+        except (ValueError, TypeError, ArithmeticError, cp.error.DCPError) as error:
+            region_complete = False
+            solver_statuses.append(f"model_error:{type(error).__name__}")
+            continue
+        solver, solver_status = _solve_problem(problem, computation_deadline, len(region_list) - index)
+        solver_statuses.append(f"{solver or 'none'}:{solver_status}")
+        if solver is None and "deadline" in solver_status:
+            region_complete = False
+            break
+        if solver is not None:
+            used_solvers.append(solver)
+        if solver_status not in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE}:
+            if solver_status not in {cp.INFEASIBLE, cp.INFEASIBLE_INACCURATE}:
+                region_complete = False
+            else:
+                solved_regions += 1
+            continue
+        solved_regions += 1
+        sale_values = tuple(_decimal_solution(variable.value, candidate.maximum_shares) for variable, candidate in zip(sell_vars, screen.sales, strict=True))
+        buy_values = tuple(_decimal_solution(variable.value, candidate.maximum_shares) for variable, candidate in zip(buy_vars, screen.buys, strict=True))
+        proposed = _canonical_legs(screen, sale_values, buy_values)
+        repaired, validation, attempts = _repair_and_validate(inputs, proposed, computation_deadline)
+        rounding_attempts += attempts
+        if repaired is None or validation is None or not validation.accepted or validation.objective_value is None:
+            continue
+        if validation.objective_value < best_score - Decimal("0.0000000001"):
+            best_legs = repaired
+            best_validation = validation
+            best_score = validation.objective_value
+            best_selected = tuple(sorted(allocation.broker_lot_id for leg in repaired if leg.side == "SELL" for allocation in leg.selected_lots))
+
+    if not profile.tax_rates_complete:
+        region_complete = True
+    warnings = list(screen.warnings)
+    if not profile.tax_rates_complete:
+        warnings.append("tax_profile_incomplete_estimated_benefit_null")
+    if not region_search_needed:
+        warnings.append("tax_regions_not_enumerated_incomplete_rates")
+    if not region_complete:
+        warnings.append("tax_region_search_incomplete_deadline_or_solver")
+
+    if not best_legs:
+        observed_statuses = tuple(status.rsplit(":", 1)[-1] for status in solver_statuses)
+        if time.monotonic() >= computation_deadline:
+            status = "deadline_exceeded"
+        elif observed_statuses and all(
+            value in {cp.INFEASIBLE, cp.INFEASIBLE_INACCURATE} for value in observed_statuses
+        ):
+            status = "infeasible"
+        elif not region_complete:
+            status = "search_incomplete"
+        else:
+            status = "no_trade"
+        meta = _metadata(
+            inputs,
+            status,
+            "+".join(sorted(set(used_solvers))) or None,
+            tuple(solver_statuses),
+            started,
+            screen_started,
+            solve_started,
+            len(region_list) if region_search_needed else 0,
+            solved_regions,
+            region_complete,
+            screen.screened_lot_count,
+            (),
+            screen.candidate_types,
+            baseline_objective,
+            baseline_objective,
+            None if not profile.tax_rates_complete else best_validation.estimated_tax_benefit_usd,
+            best_validation.estimated_trading_cost_usd,
+            best_validation.exposure_coverage.complete if best_validation.exposure_coverage else None,
+            rounding_attempts,
+            tuple(warnings),
+        )
+        return OptimizerResult(status, (), meta)
+    group_priorities, group_priority_warnings = _group_priorities(
+        inputs, screen, baseline_result, best_legs, computation_deadline
+    )
+    warnings.extend(group_priority_warnings)
+
+    status = "ready"
+    meta = _metadata(
+        inputs,
+        status,
+        "+".join(sorted(set(used_solvers))) or None,
+        tuple(solver_statuses),
+        started,
+        screen_started,
+        solve_started,
+        len(region_list) if region_search_needed else 0,
+        solved_regions,
+        region_complete,
+        screen.screened_lot_count,
+        best_selected,
+        screen.candidate_types,
+        best_validation.objective_value,
+        baseline_objective,
+        best_validation.estimated_tax_benefit_usd,
+        best_validation.estimated_trading_cost_usd,
+        best_validation.exposure_coverage.complete if best_validation.exposure_coverage else None,
+        rounding_attempts,
+        (*warnings, *best_validation.warnings),
+        group_priorities,
+    )
+    return OptimizerResult(status, best_legs, meta)
+
+
+def resolve_subset(
+    request: OptimizerRequest,
+    selected_sell_lot_ids: tuple[str, ...],
+    deadline: float,
+) -> OptimizerResult:
+    """Fast Pass-2 re-solve restricted to the user-selected source lot IDs."""
+    return optimize_worker(OptimizerRequest(request.inputs, tuple(selected_sell_lot_ids)), deadline)

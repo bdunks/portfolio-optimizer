@@ -683,7 +683,6 @@ def test_joint_loss_harvest_is_independently_validated_and_prioritized(
     } == {"loss-lot"}
 
 
-
 def test_subset_requires_a_positive_whole_share_for_each_selected_lot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -694,9 +693,7 @@ def test_subset_requires_a_positive_whole_share_for_each_selected_lot(
         lots=(replace(inputs.lots[0], available_shares=Decimal(1)),),
     )
 
-    result = resolve_subset(
-        OptimizerRequest(inputs), ("loss-lot",), time.monotonic() + 10
-    )
+    result = resolve_subset(OptimizerRequest(inputs), ("loss-lot",), time.monotonic() + 10)
 
     assert result.status == "ready", (result.metadata.warnings, result.metadata.solver_statuses)
     sells = [leg for leg in result.legs if leg.side == "SELL"]
@@ -720,13 +717,12 @@ def test_subset_rejects_repair_that_drops_a_requested_lot(
         return (), empty_validation, 0
 
     monkeypatch.setattr(core_module, "_repair_and_validate", drop_selected_lot)
-    result = optimize_worker(
-        OptimizerRequest(inputs, ("loss-lot",)), time.monotonic() + 10
-    )
+    result = optimize_worker(OptimizerRequest(inputs, ("loss-lot",)), time.monotonic() + 10)
 
     assert result.status != "ready"
     assert result.legs == ()
     assert "selected_lot_set_mismatch" in result.metadata.solver_statuses
+
 
 def test_worker_fills_buy_slot_after_filtering_wash_blocked_priority_candidate(
     monkeypatch: pytest.MonkeyPatch,

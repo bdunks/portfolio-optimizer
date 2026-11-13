@@ -932,7 +932,7 @@ def _canonical_legs(
     return (*sells, *buys)
 
 
-def _decimal_solution(value: object, maximum: Decimal) -> Decimal:
+def _decimal_solution(value: object, maximum: Decimal, minimum: Decimal = _ZERO) -> Decimal:
     if value is None:
         return _ZERO
     shape = getattr(value, "shape", None)
@@ -956,6 +956,8 @@ def _decimal_solution(value: object, maximum: Decimal) -> Decimal:
         raw = min(Decimal(str(value)), maximum)
     except ArithmeticError, TypeError, ValueError:
         return _ZERO
+    if raw > _ZERO and minimum > _ZERO and maximum >= minimum:
+        raw = max(raw, minimum)
     return _whole_floor(raw)
 
 
@@ -1479,7 +1481,11 @@ def optimize_worker(request: OptimizerRequest, computation_deadline: float) -> O
         solved_regions += 1
         repair_started = time.monotonic()
         sale_values = tuple(
-            _decimal_solution(variable.value, candidate.maximum_shares)
+            _decimal_solution(
+                variable.value,
+                candidate.maximum_shares,
+                _ONE if candidate.lot.broker_lot_id in (request.sell_lot_ids or ()) else _ZERO,
+            )
             for variable, candidate in zip(sell_vars, screen.sales, strict=True)
         )
         buy_values = tuple(

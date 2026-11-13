@@ -28,7 +28,7 @@ from app.domain.financial_inputs import (
 )
 from app.domain.portfolio_accounting import LotAllocation
 from app.optimizer.core import OptimizerRequest, optimize_worker, resolve_subset
-from app.optimizer.validation import validate_candidate
+from app.optimizer.validation import read_objective_policy, validate_candidate
 
 TRADE_DATE = date(2026, 11, 13)
 NOW = datetime(2026, 11, 13, 16, 0, tzinfo=UTC)
@@ -137,6 +137,15 @@ def test_worker_requires_persisted_objective_settings(monkeypatch: pytest.Monkey
     assert "configuration_required:objective_band_weight" in result.metadata.warnings
     assert result.legs == ()
 
+
+
+def test_policy_settings_get_provides_typed_objective_decimals() -> None:
+    config, reasons = read_objective_policy(_inputs())
+
+    assert config is not None
+    assert reasons == ()
+    assert config.weight("objective_tax_weight") == Decimal(1)
+    assert config.estimated_spread_bps == Decimal(0)
 
 
 def test_no_trade_preserves_baseline_objective(monkeypatch: pytest.MonkeyPatch) -> None:

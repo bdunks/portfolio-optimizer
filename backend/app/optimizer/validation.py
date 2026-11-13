@@ -62,11 +62,13 @@ class CandidateValidation:
 
 
 def read_objective_policy(inputs: FinancialInputs) -> tuple[ObjectivePolicy | None, tuple[str, ...]]:
-    """Read required persisted objective/cost settings via the typed Decimal accessor only."""
+    """Read required objective/cost settings as exact Decimals, without adding policy defaults."""
     settings = inputs.policy.settings
     accessor = getattr(settings, "decimal", None)
     if not callable(accessor):
-        return None, ("configuration_required:settings_decimal_accessor",)
+        accessor = getattr(settings, "get", None)
+    if not callable(accessor):
+        return None, ("configuration_required:typed_policy_settings_accessor",)
     values: dict[str, Decimal] = {}
     missing: list[str] = []
     invalid: list[str] = []

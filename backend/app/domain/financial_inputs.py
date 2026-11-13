@@ -13,6 +13,7 @@ from app.domain.allocation import (
     SleeveAssignment,
     resolve_holding,
 )
+from app.domain.decimal_math import exact_sum
 
 type SettingValue = Decimal | date | bool | int | str | None
 
@@ -496,7 +497,7 @@ def financial_inputs_from_provenance(
     override_data = policy_data.get("overrides")
     sector_band_data = policy_data.get("sector_bands", [])
     if not isinstance(sector_band_data, list):
-        raise ValueError("frozen sector band policy data is malformed")
+        raise TypeError("frozen sector band policy data is malformed")
     sector_bands = tuple(
         PolicySectorBandInput(
             sector_key=str(row["sector_key"]),
@@ -508,6 +509,20 @@ def financial_inputs_from_provenance(
     )
     if len(sector_bands) != len(sector_band_data):
         raise ValueError("frozen sector band policy data is malformed")
+    sector_keys = [row.sector_key for row in sector_bands]
+    if (
+        any(not key.strip() for key in sector_keys)
+        or len(set(sector_keys)) != len(sector_keys)
+        or any(
+            not row.target_weight_pct.is_finite()
+            or not row.band_pct.is_finite()
+            or not Decimal(0) <= row.target_weight_pct <= Decimal(100)
+            or not Decimal(0) <= row.band_pct <= Decimal(100)
+            for row in sector_bands
+        )
+        or (sector_bands and exact_sum(row.target_weight_pct for row in sector_bands) != Decimal(100))
+    ):
+        raise ValueError("frozen sector band policy data is invalid")
     if not all(isinstance(value, (dict, list)) for value in (settings_data, sleeve_data, allowed_data, override_data)):
         raise ValueError("frozen financial provenance contains malformed policy data")
     sleeves = tuple(

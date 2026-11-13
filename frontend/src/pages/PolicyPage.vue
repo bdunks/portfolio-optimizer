@@ -509,6 +509,7 @@ import USAllocationTransition from '@/components/USAllocationTransition.vue';
 import PolicyUSTransitionSettings from '@/components/PolicyUSTransitionSettings.vue';
 import PolicySleevesEditor from '@/components/PolicySleevesEditor.vue';
 import PolicySectorBandsEditor from '@/components/PolicySectorBandsEditor.vue';
+import type { EditableSectorBand } from '@/pages/policy-form';
 import PolicyTaxBatchSettings from '@/components/PolicyTaxBatchSettings.vue';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';

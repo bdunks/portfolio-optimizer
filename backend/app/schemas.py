@@ -161,8 +161,16 @@ class SleeveInput(StrictModel):
 
 class SectorBandInput(StrictModel):
     sector_key: str = Field(min_length=1, max_length=128)
+
     target_weight_pct: ExactDecimal
     band_pct: ExactDecimal
+
+    @field_validator("sector_key")
+    @classmethod
+    def sector_key_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("sector key must not be blank")
+        return value
 
 
 

@@ -206,7 +206,7 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
         response, portfolio_selects = count_selects(app.state.engine, lambda: client.get("/api/v1/portfolio"))
         assert response.status_code == 200, response.text
         assert response.json()["position_count"] == 460
-        assert portfolio_selects == 10
+        assert portfolio_selects == 11
 
         lot_page, lot_selects = count_selects(
             app.state.engine,
@@ -348,7 +348,7 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
         assert without_transactions.source_metadata.transaction_history_start_date == date(2026, 10, 1)
         assert len(inputs.positions) == 460
         assert len(inputs.lots) == 2500
-        assert full_input_selects == 12
+        assert full_input_selects == 13
         assert inputs.exposures[0].ticker == "VTI"
         assert inputs.exposures[0].weight == Decimal("0.25")
         assert len(inputs.transactions) == 1
@@ -375,6 +375,18 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
             inputs.to_provenance(), proposed_trade_date=DEMO_PROPOSED_TRADE_DATE
         )
         assert restored == inputs
+        malformed_sector_bundle = inputs.to_provenance()
+        malformed_sector_policy = malformed_sector_bundle["policy"]
+        assert isinstance(malformed_sector_policy, dict)
+        malformed_sector_bands = malformed_sector_policy["sector_bands"]
+        assert isinstance(malformed_sector_bands, list)
+        assert isinstance(malformed_sector_bands[0], dict)
+        malformed_sector_bands[0]["target_weight_pct"] = "NaN"
+        with pytest.raises(ValueError, match="frozen sector band policy data is invalid"):
+            financial_inputs_from_provenance(
+                malformed_sector_bundle,
+                proposed_trade_date=DEMO_PROPOSED_TRADE_DATE,
+            )
         frozen_sleeves = inputs.to_provenance()["policy"]["sleeves"]
         frozen_settings = inputs.to_provenance()["policy"]["settings"]
         assert isinstance(frozen_settings, dict)

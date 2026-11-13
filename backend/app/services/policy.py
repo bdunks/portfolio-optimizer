@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 from app.db.models import (
     CurrentPosition,
     PolicyAllowedSecurity,
-    PolicySectorBand,
     PolicyRevision,
+    PolicySectorBand,
     PolicySecurityOverride,
     PolicySleeve,
     Security,
@@ -23,7 +23,6 @@ from app.domain.allocation import (
 )
 from app.domain.decimal_math import exact_sum
 from app.schemas import PolicyDraftInput, PolicySettingsInput, SleeveInput
-
 from app.services.errors import AppError
 from app.services.financial_input_loader import load_allocation_policy
 
@@ -118,7 +117,7 @@ def create_policy_draft(session: Session, payload: PolicyDraftInput) -> PolicyRe
     sector_keys = [item.sector_key for item in payload.sector_bands]
     if len(set(sector_keys)) != len(sector_keys):
         raise AppError("duplicate_sector_band", "Sector keys must be unique", status_code=422)
-    if any(
+    if any(not item.sector_key.strip() for item in payload.sector_bands) or any(
         not item.target_weight_pct.is_finite()
         or not item.band_pct.is_finite()
         or not Decimal(0) <= item.target_weight_pct <= ONE_HUNDRED
@@ -319,7 +318,8 @@ def validate_policy_revision(session: Session, revision: PolicyRevision) -> list
         errors.append({"code": "duplicate_sector_band", "message": "Sector keys must be unique"})
     if sector_bands:
         if any(
-            not row.target_weight_pct.is_finite()
+            not row.sector_key.strip()
+            or not row.target_weight_pct.is_finite()
             or not row.band_pct.is_finite()
             or not Decimal(0) <= row.target_weight_pct <= ONE_HUNDRED
             or not Decimal(0) <= row.band_pct <= ONE_HUNDRED

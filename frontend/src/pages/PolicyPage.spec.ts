@@ -16,6 +16,8 @@ import PolicyPage from './PolicyPage.vue';
 import { useWorkspaceStore } from '@/stores/workspace-store';
 import { Select } from '@/components/ui/select';
 import { seedCurrentRunForTest } from '@/test-utils/workspace-harness';
+import { getTestQueryClientForPinia } from '@/test-utils/workspace-mount';
+import { workspaceQueryKeys } from '@/composables/queries/workspace-queries';
 
 function labelForSleeveControl(wrapper: ReturnType<typeof mountWithWorkspace>, labelText: string) {
   const label = wrapper
@@ -271,6 +273,7 @@ function readyTransitionPortfolio(
   activeRevisionId: string,
   usTransition: USTransitionResponse | null = transitionResponse(),
   portfolioRevisionId = activeRevisionId,
+  currentWeights?: Record<string, string>,
 ): PortfolioReadyResponse {
   return {
     status: 'ready',
@@ -295,7 +298,13 @@ function readyTransitionPortfolio(
       last_error_code: null,
       last_error_summary: null,
     },
-    allocation: { current: null, proposed: null, target: null },
+    allocation: {
+      current: currentWeights
+        ? { total_portfolio_usd: '250.00', sleeve_weights_pct: currentWeights }
+        : null,
+      proposed: null,
+      target: null,
+    },
     us_transition: usTransition,
   };
 }
@@ -394,6 +403,7 @@ async function mountTransitionPolicy(
     activePolicy?: PolicyRevisionResponse;
     portfolioRevisionId?: string;
     usTransition?: USTransitionResponse | null;
+    currentWeights?: Record<string, string>;
   } = {},
 ) {
   const active = options.activePolicy ?? transitionPolicy();
@@ -401,6 +411,7 @@ async function mountTransitionPolicy(
     active.id,
     options.usTransition === undefined ? transitionResponse() : options.usTransition,
     options.portfolioRevisionId ?? active.id,
+    options.currentWeights,
   );
   const fetcher = vi.fn<typeof fetch>((input) => {
     const url = requestAddress(input);
@@ -426,7 +437,7 @@ async function mountTransitionPolicy(
   setActivePinia(pinia);
   const wrapper = mountWithWorkspace(PolicyPage, { global: { plugins: [pinia] } });
   await flushPromises();
-  return { wrapper, pinia, active, portfolio };
+  return { wrapper, pinia, active, portfolio, fetcher };
 }
 
 function revisionFromPayload(payload: PolicyDraftInput): PolicyRevisionResponse {
@@ -1332,6 +1343,106 @@ describe('PolicyPage', () => {
     expect(card.text()).toContain('Unavailable (unverified data)');
     expect(card.text()).not.toContain('20.0000%');
     expect(card.text()).not.toContain('40.0000%');
+    wrapper.unmount();
+  });
+  it('compares only confirmed whole-portfolio root weights against exact same-base targets', async () => {
+    const { wrapper } = await mountTransitionPolicy({ currentWeights: { us: '96.0000' } });
+    const status = wrapper.get('[aria-labelledby="current-allocation-title"]');
+    expect(status.text()).toContain('US equity: current 96.0000% of portfolio; target 100.0000%');
+    expect(status.text()).toContain('outside band');
+    expect(status.text()).toContain('Nested allocation weights are not supplied');
+    wrapper.unmount();
+  });
+  it('reports exact inclusive allocation bands and unavailable values honestly', async () => {
+    for (const [weight, expected] of [
+      ['102.2500', 'within band'],
+      ['102.250000000000000001', 'outside band'],
+      ['-1', 'outside band'],
+      ['invalid', 'status unavailable'],
+    ] as const) {
+      const { wrapper } = await mountTransitionPolicy({ currentWeights: { us: weight } });
+      const status = wrapper.get('[aria-labelledby="current-allocation-title"]');
+      expect(status.text()).toContain(expected);
+      wrapper.unmount();
+    }
+
+    const missing = await mountTransitionPolicy({ currentWeights: {} });
+    expect(missing.wrapper.get('[aria-labelledby="current-allocation-title"]').text()).toContain(
+      'status unavailable',
+    );
+    missing.wrapper.unmount();
+  });
+
+  it('keeps populated allocation weights withheld for dirty or mismatched policy context', async () => {
+    const dirty = await mountTransitionPolicy({ currentWeights: { us: '96.0000' } });
+    const dirtyEditor = useWorkspaceStore(dirty.pinia).policyEditor.state.draft;
+    dirtyEditor.sleeves.find((sleeve) => sleeve.sleeve_key === 'us')!.target_pct = '99';
+    await flushPromises();
+    expect(dirty.wrapper.get('[aria-labelledby="current-allocation-title"]').text()).not.toContain(
+      'US equity: current',
+    );
+    dirty.wrapper.unmount();
+
+    const mismatch = await mountTransitionPolicy({
+      currentWeights: { us: '96.0000' },
+      portfolioRevisionId: 'revision-previous',
+    });
+    expect(
+      mismatch.wrapper.get('[aria-labelledby="current-allocation-title"]').text(),
+    ).not.toContain('US equity: current');
+    mismatch.wrapper.unmount();
+
+    const stale = await mountTransitionPolicy({ currentWeights: { us: '96.0000' } });
+    getTestQueryClientForPinia(stale.pinia)
+      .getQueryCache()
+      .find({ queryKey: workspaceQueryKeys.portfolio })
+      ?.setState({
+        status: 'error',
+        error: new Error('test stale portfolio read'),
+        fetchStatus: 'idle',
+        errorUpdateCount: 1,
+      });
+    await flushPromises();
+    expect(stale.wrapper.get('[aria-labelledby="current-allocation-title"]').text()).not.toContain(
+      'US equity: current',
+    );
+    stale.wrapper.unmount();
+  });
+
+  it('places the gradual-target explanation beside allocation editing', async () => {
+    const { wrapper } = await mountTransitionPolicy();
+    const allocation = wrapper.get('[aria-labelledby="current-allocation-title"]').element;
+    const explanation = allocation.nextElementSibling;
+    expect(explanation?.textContent).toContain('gradual destinations, not immediate liquidation');
+    expect(explanation?.textContent).toContain('tax, wash-sale, gain-budget, batch, and risk');
+    expect(explanation?.textContent).toContain('0% target does not mean sell immediately');
+    expect(explanation?.textContent).toContain('individual user approval');
+    wrapper.unmount();
+  });
+
+  it('summarizes edited policy limits and approval behavior without presenting draft weights as current', async () => {
+    const { wrapper, pinia } = await mountTransitionPolicy();
+    const overview = wrapper.get('[aria-labelledby="policy-overview-title"]');
+    expect(overview.text()).toContain(
+      'Enabled allocation count includes top-level and nested sleeves',
+    );
+    expect(overview.text()).toContain('3 of 3 (top-level and nested)');
+    expect(overview.text()).toContain('2.2500, 0.0000 percentage points by allocation');
+    expect(overview.text()).toContain('Not configured');
+    const budget = useWorkspaceStore(pinia).policyEditor.state.draft.settings;
+    budget.gain_budget_usd = '';
+    await flushPromises();
+    expect(overview.text()).toContain('Not configured USD');
+    budget.gain_budget_usd = '0';
+    await flushPromises();
+    expect(overview.text()).toContain('0 USD');
+    expect(overview.text()).toContain('10 / 20 / 12');
+    expect(wrapper.get('[data-policy-tax-settings-root]').text()).toContain(
+      'each order requires individual user approval',
+    );
+    expect(wrapper.get('[aria-labelledby="current-allocation-title"]').text()).toContain(
+      'unverified',
+    );
     wrapper.unmount();
   });
 });

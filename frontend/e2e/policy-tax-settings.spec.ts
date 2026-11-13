@@ -22,6 +22,11 @@ test('tax and batch settings remain accessible and responsive', async ({
   });
   await expect(page.getByRole('heading', { name: 'Allocation Policy', exact: true })).toBeVisible();
 
+  const overview = page.locator('[aria-labelledby="policy-overview-title"]');
+  await expect(overview).toContainText('Enabled allocations');
+  await expect(overview).toContainText('Configured drift bands');
+  await expect(overview).toContainText('Maximum per-batch SELL tickers / lots / total orders');
+  await expect(page.locator('[aria-labelledby="current-allocation-title"]')).toBeVisible();
   const taxSettings = page.locator('[data-policy-tax-settings-root]');
   await expect(taxSettings).toBeVisible();
   const taxHeading = taxSettings.getByRole('heading', { name: 'Tax & Batch Settings', level: 2 });
@@ -33,6 +38,17 @@ test('tax and batch settings remain accessible and responsive', async ({
   const preferEtfBuysControl = taxSettings.locator('[id$="-prefer-etf-buys"]');
   await expect(shortTermRate).toBeVisible();
   await expect(preferEtfBuys).toBeVisible();
+  for (const name of [
+    'Allow appreciated-gain sales',
+    'Permit ETF harvesting',
+    'Permit municipal-bond exit',
+  ]) {
+    await expect(taxSettings.getByRole('combobox', { name })).toBeVisible();
+  }
+  await expect(taxSettings).toContainText(
+    'preferred ETF buys, appreciated-gain sales, ETF harvesting, and municipal-bond exits',
+  );
+  await expect(taxSettings).toContainText('each order requires individual user approval');
   await expectNoPageOverflow(page, 'desktop policy page');
 
   await taxSettings.screenshot({ path: testInfo.outputPath('policy-tax-settings-desktop.png') });

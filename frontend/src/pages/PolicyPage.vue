@@ -70,6 +70,55 @@
 
     <ResourceFreshnessNotice :resources="['portfolio', 'policy']" />
 
+    <section class="policy-overview" aria-labelledby="policy-overview-title">
+      <Card>
+        <CardHeader>
+          <h2 id="policy-overview-title" class="tw:m-0! tw:text-lg tw:font-semibold">
+            Policy at a glance
+          </h2>
+          <p class="tw:m-0! tw:max-w-prose tw:text-sm tw:text-muted-foreground">
+            Values below describe the edited form; they become active only after saving and
+            activating this exact revision. Enabled allocation count includes top-level and nested
+            sleeves.
+          </p>
+        </CardHeader>
+        <CardContent class="tw:grid tw:gap-4">
+          <dl class="tw:grid tw:grid-cols-1 tw:gap-3 tw:sm:grid-cols-2 tw:lg:grid-cols-4">
+            <div>
+              <dt class="tw:font-medium">Enabled allocations</dt>
+              <dd>{{ enabledAllocationCount }} of {{ sleeves.length }} (top-level and nested)</dd>
+            </div>
+            <div>
+              <dt class="tw:font-medium">Configured drift bands</dt>
+              <dd>{{ driftBandSummary }}</dd>
+            </div>
+            <div>
+              <dt class="tw:font-medium">Incremental realized-gain budget</dt>
+              <dd>
+                {{ settings.gain_budget_usd?.trim() ? settings.gain_budget_usd : 'Not configured' }}
+                USD
+              </dd>
+            </div>
+            <div>
+              <dt class="tw:font-medium">Maximum per-batch SELL tickers / lots / total orders</dt>
+              <dd>
+                {{ settings.max_sell_tickers_per_batch }} / {{ settings.max_sell_lots_per_batch }} /
+                {{ settings.max_total_orders_per_batch }}
+              </dd>
+            </div>
+          </dl>
+          <p v-if="activePolicy" class="tw:m-0! tw:text-sm">
+            Active policy: revision {{ activePolicy.revision_number }} ({{ activePolicy.id }}).
+            {{
+              editorMatchesActivePolicy
+                ? 'The edited form matches this active revision.'
+                : 'Active values differ from or are not confirmed for this edited form.'
+            }}
+          </p>
+          <p v-else class="tw:m-0! tw:text-sm">No active policy revision is confirmed.</p>
+        </CardContent>
+      </Card>
+    </section>
     <section class="revision-panel" aria-labelledby="revision-title">
       <Card>
         <CardHeader
@@ -88,6 +137,13 @@
         </CardHeader>
         <CardContent class="tw:grid tw:gap-4">
           <div class="tw:grid tw:items-end tw:gap-4 tw:md:grid-cols-[minmax(0,1fr)_auto_auto]">
+            <p v-if="activePolicy" class="tw:m-0! tw:text-sm">
+              Active revision limits: gain budget
+              {{ activePolicy.settings.gain_budget_usd ?? 'not configured' }} USD; SELL tickers /
+              lots / total orders {{ activePolicy.settings.max_sell_tickers_per_batch }} /
+              {{ activePolicy.settings.max_sell_lots_per_batch }} /
+              {{ activePolicy.settings.max_total_orders_per_batch }}.
+            </p>
             <revisionForm.Field name="revisionId">
               <template #default="{ field }">
                 <Field class="tw:max-w-xl">
@@ -240,6 +296,47 @@
       </template>
     </PolicyUSTransitionSettings>
 
+    <section aria-labelledby="current-allocation-title" class="tw:rounded-md tw:border tw:p-4">
+      <h2 id="current-allocation-title" class="tw:m-0! tw:text-base tw:font-semibold">
+        Current allocation vs. active targets
+      </h2>
+      <p v-if="currentAllocationRows.length" class="tw:my-2! tw:text-sm tw:text-muted-foreground">
+        Current and target values below are percentages of the whole portfolio for top-level sleeves
+        only; nested targets are percentages of their parent and are not inferred from these totals.
+      </p>
+      <p v-else class="tw:my-2! tw:text-sm tw:text-muted-foreground">
+        {{
+          currentPortfolioTransitionStatus === 'confirmed'
+            ? 'Current allocation weights are unavailable.'
+            : `Current allocation status is ${currentPortfolioTransitionStatus} for this configuration.`
+        }}
+        It is shown only for a fresh portfolio matching the unchanged active policy; allocation
+        status is separate from activation validation.
+      </p>
+      <ul v-if="currentAllocationRows.length" class="tw:grid tw:gap-1 tw:pl-5">
+        <li v-for="row in currentAllocationRows" :key="row.key">
+          {{ row.name }}: current {{ row.current ?? 'unavailable' }}% of portfolio; target
+          {{ row.target }}% ± {{ row.band }} percentage points —
+          {{
+            row.current === undefined || row.withinBand === null
+              ? 'status unavailable'
+              : row.withinBand
+                ? 'within band'
+                : 'outside band'
+          }}.
+        </li>
+      </ul>
+      <p v-if="currentAllocationRows.length" class="tw:m-0! tw:text-xs tw:text-muted-foreground">
+        Nested allocation weights are not supplied as comparable whole-portfolio values here; use
+        the explicitly reported transition context above where available. Missing weights are
+        unavailable, never assumed zero.
+      </p>
+    </section>
+    <p class="tw:m-0! tw:text-sm tw:text-muted-foreground">
+      Targets are gradual destinations, not immediate liquidation instructions. Recommendations
+      remain constrained by tax, wash-sale, gain-budget, batch, and risk considerations; a 0% target
+      does not mean sell immediately. Every order still requires individual user approval.
+    </p>
     <PolicySleevesEditor
       :draft="editorState.draft"
       :positions="portfolio?.positions ?? null"
@@ -464,6 +561,23 @@ const editor = store.policyEditor;
 const editorState = editor.state;
 const settings = editorState.draft.settings;
 const sleeves = computed(() => editorState.draft.sleeves);
+
+const enabledAllocationCount = computed(
+  () => sleeves.value.filter((sleeve) => sleeve.enabled !== false).length,
+);
+const driftBandSummary = computed(() => {
+  const bands = [
+    ...new Set(
+      sleeves.value
+        .filter((sleeve) => sleeve.enabled !== false)
+        .map((sleeve) => sleeve.drift_band_pp),
+    ),
+  ];
+  if (!bands.length) return 'No enabled allocations';
+  return bands.length === 1
+    ? `${bands[0]} percentage points per enabled allocation`
+    : `${bands.join(', ')} percentage points by allocation (no single global band)`;
+});
 const allowedSecurities = computed(() => editorState.draft.allowedSecurities);
 const replacementEditorOpen = ref(false);
 const replacementContext = ref<ReplacementSetsContext | null>(null);
@@ -578,6 +692,45 @@ const currentPortfolioTransitionStatus = computed<TransitionSnapshotStatus>(() =
     return 'unverified';
   }
   return 'confirmed';
+});
+
+function decimalWithinBand(current: string, target: string, band: string): boolean | null {
+  const values = [current, target, band].map((value) =>
+    /^-?\d+(?:\.\d+)?$/.test(value) ? value : null,
+  );
+  if (values.some((value) => value === null)) return null;
+  const scale = Math.max(...values.map((value) => value!.split('.')[1]?.length ?? 0));
+  const toScaled = (value: string): bigint => {
+    const negative = value.startsWith('-');
+    const unsigned = negative ? value.slice(1) : value;
+    const [whole = '0', fraction = ''] = unsigned.split('.');
+    const scaled = BigInt(`${whole}${fraction.padEnd(scale, '0')}`);
+    return negative ? -scaled : scaled;
+  };
+  const difference = toScaled(current) - toScaled(target);
+  return (difference < 0n ? -difference : difference) <= toScaled(band);
+}
+const currentAllocationRows = computed(() => {
+  const weights = portfolio.value?.allocation.current?.sleeve_weights_pct;
+  if (
+    !weights ||
+    !editorMatchesActivePolicy.value ||
+    currentPortfolioTransitionStatus.value !== 'confirmed'
+  )
+    return [];
+  return sleeves.value
+    .filter((sleeve) => sleeve.enabled !== false && !sleeve.parent_sleeve_key)
+    .map((sleeve) => ({
+      key: sleeve.sleeve_key,
+      name: sleeve.display_name || sleeve.sleeve_key,
+      current: weights[sleeve.sleeve_key],
+      target: sleeve.target_pct,
+      band: sleeve.drift_band_pp,
+      withinBand:
+        weights[sleeve.sleeve_key] === undefined
+          ? null
+          : decimalWithinBand(weights[sleeve.sleeve_key]!, sleeve.target_pct, sleeve.drift_band_pp),
+    }));
 });
 const portfolioLabelContext = computed(() => {
   const transition = portfolio.value?.us_transition;

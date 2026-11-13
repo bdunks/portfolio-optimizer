@@ -12,7 +12,9 @@
         </CardTitle>
         <CardDescription class="tax-intro tw:m-0">
           Blank nullable values are sent as null; blank required values are never guessed as zero.
-          Amounts remain exact API decimal strings.
+          Amounts remain exact API decimal strings. Existing behavior preferences below control
+          preferred ETF buys, appreciated-gain sales, ETF harvesting, and municipal-bond exits.
+          These preferences never authorize an order: each order requires individual user approval.
         </CardDescription>
       </CardHeader>
       <CardContent>

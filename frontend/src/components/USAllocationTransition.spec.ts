@@ -207,4 +207,14 @@ describe('USAllocationTransition', () => {
     expect(wrapper.text()).not.toContain('0 USD');
     expect(wrapper.text()).not.toContain('0%');
   });
+  it('suppresses its heading when embedded while retaining an accessible section label and guidance', () => {
+    const wrapper = mount(USAllocationTransition, {
+      props: { transition, basketStatus: 'no-selection', showHeading: false },
+    });
+
+    expect(wrapper.find('h2').exists()).toBe(false);
+    expect(wrapper.get('section').attributes('aria-labelledby')).toBe('transition-status-label');
+    expect(wrapper.get('#transition-status-label').text()).toBe('US allocation transition status');
+    expect(wrapper.text()).toContain('gradual, tax-constrained transition');
+  });
 });

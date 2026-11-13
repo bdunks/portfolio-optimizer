@@ -1,8 +1,16 @@
 <template>
-  <section class="transition-panel tw:min-w-0 tw:space-y-3" aria-labelledby="transition-title">
+  <section
+    class="transition-panel tw:min-w-0 tw:space-y-3"
+    :aria-labelledby="showHeading ? 'transition-title' : 'transition-status-label'"
+  >
     <header class="transition-heading">
       <div class="tw:min-w-0">
-        <h2 id="transition-title" class="transition-title tw:m-0">US Equities Transition Policy</h2>
+        <h2 v-if="showHeading" id="transition-title" class="transition-title tw:m-0">
+          US Equities Transition Policy
+        </h2>
+        <span v-else id="transition-status-label" class="tw:sr-only">
+          US allocation transition status
+        </span>
         <p class="panel-description tw:mt-1">
           Configured targets guide a gradual, tax-constrained transition; they are not instructions
           to liquidate immediately.
@@ -176,6 +184,7 @@ const props = withDefaults(
     basketStatus?: BasketStatus;
     roleIdentity?: TransitionRoleIdentity | null;
     provenance?: 'current_portfolio' | 'current_run' | 'saved_run';
+    showHeading?: boolean;
   }>(),
   {
     labels: () => ({}),
@@ -183,6 +192,7 @@ const props = withDefaults(
     basketStatus: 'no-selection',
     roleIdentity: null,
     provenance: 'current_portfolio',
+    showHeading: true,
   },
 );
 

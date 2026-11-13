@@ -4,14 +4,18 @@ import { mountWithWorkspace } from '@/test-utils/workspace-mount';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import type {
+  OptimizerRecommendationsResponse,
   PolicyDraftInput,
   PolicyRevisionResponse,
   PolicyResponse,
   PolicySettingsResponse,
+  PortfolioReadyResponse,
+  USTransitionResponse,
 } from '@/types/api';
 import PolicyPage from './PolicyPage.vue';
 import { useWorkspaceStore } from '@/stores/workspace-store';
 import { Select } from '@/components/ui/select';
+import { seedCurrentRunForTest } from '@/test-utils/workspace-harness';
 
 function labelForSleeveControl(wrapper: ReturnType<typeof mountWithWorkspace>, labelText: string) {
   const label = wrapper
@@ -69,7 +73,7 @@ async function setSleeveSelect(
   } else if (optionLabel === 'Choose destination' || optionLabel === 'Choose new parent') {
     domainValue = '';
   } else {
-    const row = wrapper.findAll('tbody tr').find((candidate) => {
+    const row = wrapper.findAll('[data-policy-sleeves-root] tbody tr').find((candidate) => {
       const nameInput = candidate.find('input[aria-label^="Sleeve display name for "]');
       const key = candidate.find('.sleeve-key').text().trim();
       return (
@@ -186,6 +190,243 @@ function notSyncedPortfolioResponse() {
     allocation: { current: null, proposed: null, target: null },
     us_transition: null,
   };
+}
+
+function transitionResponse(
+  options: {
+    destination?: string | null;
+    proposedNew?: string;
+  } = {},
+): USTransitionResponse {
+  const destination = options.destination === undefined ? 'new' : options.destination;
+  const proposedNew = options.proposedNew ?? '30.0000';
+  const child = (within: string) => ({
+    value_usd: '100.00',
+    within_us_sleeve_pct: within,
+    whole_portfolio_pct: within,
+  });
+  return {
+    sleeve_key: 'us',
+    transition_destination_sleeve_key: destination,
+    label: 'API transition label',
+    current: {
+      us_sleeve_value_usd: '200.00',
+      us_sleeve_whole_portfolio_pct: '80.0000',
+      etf_progress_pct: destination === null ? null : '20.0000',
+      children: { legacy: child('80.0000'), new: child('20.0000') },
+    },
+    proposed_basket: {
+      us_sleeve_value_usd: '200.00',
+      us_sleeve_whole_portfolio_pct: '80.0000',
+      etf_progress_pct: destination === null ? null : proposedNew,
+      children: { legacy: child(String(100 - Number(proposedNew))), new: child(proposedNew) },
+    },
+    target: {
+      us_sleeve_whole_portfolio_pct: '80.0000',
+      children: {
+        legacy: { within_us_sleeve_pct: '60.0000', whole_portfolio_pct: '48.0000' },
+        new: { within_us_sleeve_pct: '40.0000', whole_portfolio_pct: '32.0000' },
+      },
+    },
+  };
+}
+
+function transitionPolicy(destinationConfigured = true): PolicyRevisionResponse {
+  return {
+    ...activeRevision,
+    sleeves: [
+      ...activeRevision.sleeves,
+      {
+        sleeve_key: 'legacy',
+        display_name: 'API Legacy label',
+        sort_order: 1,
+        parent_sleeve_key: 'us',
+        target_pct: '60.0000',
+        drift_band_pp: '0.0000',
+        is_direct_index_container: false,
+        is_direct_index_sleeve: true,
+        is_transition_destination: false,
+        is_cash_sleeve: false,
+        enabled: true,
+      },
+      {
+        sleeve_key: 'new',
+        display_name: 'API New label',
+        sort_order: 2,
+        parent_sleeve_key: 'us',
+        target_pct: '40.0000',
+        drift_band_pp: '0.0000',
+        is_direct_index_container: false,
+        is_direct_index_sleeve: false,
+        is_transition_destination: destinationConfigured,
+        is_cash_sleeve: false,
+        enabled: true,
+      },
+    ],
+    activation_errors: [],
+  };
+}
+
+function readyTransitionPortfolio(
+  activeRevisionId: string,
+  usTransition: USTransitionResponse | null = transitionResponse(),
+  portfolioRevisionId = activeRevisionId,
+): PortfolioReadyResponse {
+  return {
+    status: 'ready',
+    demo: true,
+    source: 'FakeBroker',
+    account: { display_name: 'Fixture account', account_type: 'brokerage', tax_treatment: null },
+    as_of: '2026-01-01T12:00:00Z',
+    cash_usd: '0.00',
+    settled_buying_power_usd: '0.00',
+    positions_market_value_usd: '250.00',
+    portfolio_total_usd: '250.00',
+    position_count: 0,
+    positions: [],
+    active_policy_revision_id: portfolioRevisionId,
+    unassigned_tickers: [],
+    coverage: {},
+    sync: {
+      generation: 7,
+      complete: true,
+      started_at: '2026-01-01T11:00:00Z',
+      completed_at: '2026-01-01T12:00:00Z',
+      last_error_code: null,
+      last_error_summary: null,
+    },
+    allocation: { current: null, proposed: null, target: null },
+    us_transition: usTransition,
+  };
+}
+
+function selectedRunFixture(
+  options: {
+    revisionId?: string;
+    generation?: number;
+    selected?: boolean;
+    usTransition?: USTransitionResponse | null;
+  } = {},
+): OptimizerRecommendationsResponse {
+  const selected = options.selected ?? true;
+  return {
+    run_id: 'transition-policy-run',
+    status: 'demo',
+    mode: 'recommendations_only',
+    policy_revision_id: options.revisionId ?? transitionPolicy().id,
+    source_generation: options.generation ?? 7,
+    as_of: '2026-01-01T12:00:00Z',
+    solver_version: 'DEMO',
+    demo: true,
+    actionable: false,
+    input_fingerprint: null,
+    source_checksum: null,
+    batch_settings: {},
+    estimated_realized_st_usd: '-1.00',
+    estimated_realized_lt_usd: '0.00',
+    estimated_tax_benefit_usd: null,
+    estimated_tax_benefit_status: 'tax_profile_incomplete',
+    lots_sold_count: selected ? 1 : 0,
+    positions_exited_count: 0,
+    orders_count: selected ? 1 : 0,
+    cash_before_usd: '0.00',
+    cash_after_usd: '0.00',
+    portfolio_effects: {
+      allocation: { current: null, proposed: null, target: null },
+      us_transition: options.usTransition ?? transitionResponse({ proposedNew: '35.0000' }),
+    },
+    constraints_satisfied: null,
+    no_trade_reason: null,
+    warnings: [],
+    tax_profile_configured: false,
+    frozen_display_context: { available: false, unavailable_reason: 'test fixture' },
+    groups: [
+      {
+        group_id: 'selected-group',
+        rank: 1,
+        group_type: 'demo_loss_harvest',
+        sleeve_key: 'us',
+        rationale: 'test fixture',
+        estimated_benefit_usd: null,
+        impact: {} as never,
+        dependencies: [],
+        selected,
+        rejected: false,
+        note: null,
+        rejection_reason: null,
+        leg_ids: ['selected-sell'],
+        warnings: [],
+      },
+    ],
+    consolidated_legs: [
+      {
+        leg_id: 'selected-sell',
+        side: 'SELL',
+        ticker: 'VTI',
+        shares: '1',
+        estimated_unit_price_usd: '10.00',
+        estimated_notional_usd: '10.00',
+        net_st_realized_usd: '-1.00',
+        selected,
+        group_ids: ['selected-group'],
+        net_lt_realized_usd: '0.00',
+        sequence: 1,
+        dependencies: [],
+        selected_lots: [
+          {
+            broker_lot_id: 'fixture-lot-1',
+            shares: '1',
+            acquired_date: '2025-01-01',
+            adjusted_basis_usd: '11.00',
+            st_lt: 'ST',
+            realized_pl_usd: '-1.00',
+            selected,
+          },
+        ],
+        details: {},
+      },
+    ],
+  } as unknown as OptimizerRecommendationsResponse;
+}
+
+async function mountTransitionPolicy(
+  options: {
+    activePolicy?: PolicyRevisionResponse;
+    portfolioRevisionId?: string;
+    usTransition?: USTransitionResponse | null;
+  } = {},
+) {
+  const active = options.activePolicy ?? transitionPolicy();
+  const portfolio = readyTransitionPortfolio(
+    active.id,
+    options.usTransition === undefined ? transitionResponse() : options.usTransition,
+    options.portfolioRevisionId ?? active.id,
+  );
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestAddress(input);
+    if (url.pathname === '/health')
+      return Promise.resolve(
+        jsonResponse({
+          status: 'ok',
+          schema_ready: true,
+          broker_mode: 'demo',
+          live_broker_enabled: false,
+          order_submission_enabled: false,
+        }),
+      );
+    if (url.pathname === '/api/v1/policy')
+      return Promise.resolve(
+        jsonResponse({ active, drafts: [], superseded: [] } satisfies PolicyResponse),
+      );
+    if (url.pathname === '/api/v1/portfolio') return Promise.resolve(jsonResponse(portfolio));
+    return Promise.reject(new Error(`Unhandled local API request: ${url.pathname}`));
+  });
+  vi.stubGlobal('fetch', fetcher);
+  const pinia = createPinia();
+  setActivePinia(pinia);
+  const wrapper = mountWithWorkspace(PolicyPage, { global: { plugins: [pinia] } });
+  await flushPromises();
+  return { wrapper, pinia, active, portfolio };
 }
 
 function revisionFromPayload(payload: PolicyDraftInput): PolicyRevisionResponse {
@@ -412,7 +653,10 @@ describe('PolicyPage', () => {
     expect(activationCard.find('[data-slot="card"]').exists()).toBe(true);
     expect(wrapper.get('#revision-title').element.tagName).toBe('H2');
     expect(wrapper.get('#activation-title').element.tagName).toBe('H2');
-    const statusBadges = wrapper.findAll('[data-slot="badge"]');
+    const statusBadges = [
+      ...revisionCard.findAll('[data-slot="badge"]'),
+      ...activationCard.findAll('[data-slot="badge"]'),
+    ];
     expect(statusBadges.map((badge) => badge.text())).toEqual([
       'Editing source revision-active-synthetic',
       'Target sums valid',
@@ -945,6 +1189,149 @@ describe('PolicyPage', () => {
     allCloseButton.click();
     await flushPromises();
     expect(document.activeElement).toBe(allConfiguredTrigger.element);
+    wrapper.unmount();
+  });
+  it('shows only the confirmed active-policy transition and matching selected current-run effects', async () => {
+    const { wrapper, pinia, active } = await mountTransitionPolicy();
+    const store = useWorkspaceStore(pinia);
+    seedCurrentRunForTest(store, selectedRunFixture({ revisionId: active.id }));
+    store.currentRunView = 'current';
+    await flushPromises();
+
+    const card = wrapper.get('[data-us-transition-settings-root]');
+    const table = card.get('[aria-label="US allocation transition comparison"] table');
+    const newHoldingsRow = table
+      .findAll('tbody tr')
+      .find((row) => row.text().includes('API New label'));
+    expect(newHoldingsRow?.text()).toContain('20.0000%');
+    expect(newHoldingsRow?.text()).toContain('35.0000%');
+    expect(newHoldingsRow?.text()).toContain('40.0000%');
+    expect(card.text()).toContain('Currently in new holdings');
+    expect(card.text()).toContain('Current selected-basket API context');
+    expect(
+      wrapper
+        .findAll('h2')
+        .filter((heading) => heading.text().trim() === 'US Equities Transition Policy'),
+    ).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it('shows no-selection and setup guidance for an unconfigured destination', async () => {
+    const { wrapper } = await mountTransitionPolicy({
+      activePolicy: transitionPolicy(false),
+      usTransition: transitionResponse({ destination: null }),
+    });
+    const card = wrapper.get('[data-us-transition-settings-root]');
+    expect(card.text()).toContain('Set up US transition');
+    expect(card.text()).toContain('No transition destination is designated');
+    expect(card.text()).toContain('No trades selected. Proposed values are not shown.');
+    expect(card.get('.transition-headline').text()).not.toContain('0.0000%');
+    const noTrades = await mountTransitionPolicy();
+    const noTradeStore = useWorkspaceStore(noTrades.pinia);
+    seedCurrentRunForTest(
+      noTradeStore,
+      selectedRunFixture({
+        revisionId: noTrades.active.id,
+        selected: false,
+        usTransition: transitionResponse({ proposedNew: '55.0000' }),
+      }),
+    );
+    noTradeStore.currentRunView = 'current';
+    await flushPromises();
+    const noTradeCard = noTrades.wrapper.get('[data-us-transition-settings-root]');
+    expect(noTradeCard.text()).toContain('Current portfolio API context');
+    expect(noTradeCard.text()).toContain('No trades selected. Proposed values are not shown.');
+    const noTradeRow = noTradeCard
+      .get('[aria-label="US allocation transition comparison"] table')
+      .findAll('tbody tr')
+      .find((row) => row.text().includes('API New label'));
+    expect(noTradeRow?.text()).toContain('20.0000%');
+    expect(noTradeRow?.text()).toContain('40.0000%');
+    expect(noTradeRow?.text()).not.toContain('55.0000%');
+    noTrades.wrapper.unmount();
+    const table = card.get('[aria-label="US allocation transition comparison"] table');
+    expect(table.text()).toContain('40.0000%');
+    wrapper.unmount();
+  });
+
+  it('withholds selected-trade effects while review is pending or run is stale', async () => {
+    const pending = await mountTransitionPolicy();
+    const pendingStore = useWorkspaceStore(pending.pinia);
+    seedCurrentRunForTest(pendingStore, selectedRunFixture({ revisionId: pending.active.id }));
+    pendingStore.currentRunView = 'current';
+    pendingStore.reviewMutationCount = 1;
+    await flushPromises();
+    const pendingCard = pending.wrapper.get('[data-us-transition-settings-root]');
+    const pendingRow = pendingCard
+      .get('[aria-label="US allocation transition comparison"] table')
+      .findAll('tbody tr')
+      .find((row) => row.text().includes('API New label'));
+    expect(pendingRow?.text()).toContain('Pending');
+    expect(pendingRow?.text()).not.toContain('35.0000%');
+    pending.wrapper.unmount();
+
+    const stale = await mountTransitionPolicy();
+    const staleStore = useWorkspaceStore(stale.pinia);
+    seedCurrentRunForTest(
+      staleStore,
+      selectedRunFixture({ revisionId: stale.active.id, generation: 6 }),
+    );
+    staleStore.currentRunView = 'current';
+    await flushPromises();
+    const staleCard = stale.wrapper.get('[data-us-transition-settings-root]');
+    const staleRow = staleCard
+      .get('[aria-label="US allocation transition comparison"] table')
+      .findAll('tbody tr')
+      .find((row) => row.text().includes('API New label'));
+    expect(staleRow?.text()).toContain('Unavailable (stale effects)');
+    expect(staleRow?.text()).not.toContain('35.0000%');
+    stale.wrapper.unmount();
+  });
+
+  it('withholds backend values for draft editors without losing exact targets', async () => {
+    const dirty = await mountTransitionPolicy();
+    const dirtyEditor = useWorkspaceStore(dirty.pinia).policyEditor;
+    const draftDestination = dirtyEditor.state.draft.sleeves.find(
+      (sleeve) => sleeve.sleeve_key === 'new',
+    );
+    if (!draftDestination) throw new Error('The editable destination sleeve is missing');
+    draftDestination.display_name = 'Draft New label';
+    draftDestination.target_pct = '73.000000000000000001';
+    await flushPromises();
+    const dirtyCard = dirty.wrapper.get('[data-us-transition-settings-root]');
+    expect(dirtyCard.text()).toContain('unsaved policy draft');
+    expect(dirtyCard.text()).toContain('status is withheld');
+    expect(dirtyCard.text()).not.toContain('20.0000%');
+    expect(dirtyCard.text()).not.toContain('40.0000%');
+    const draftTransitionTable = dirtyCard.get(
+      '[aria-label="US allocation transition comparison"] table',
+    );
+    expect(draftTransitionTable.text()).not.toContain('API New label');
+    expect(
+      dirty.wrapper
+        .findAll('input[aria-label^="Target percent"]')
+        .some((input) => (input.element as HTMLInputElement).value === '73.000000000000000001'),
+    ).toBe(true);
+    dirty.wrapper.unmount();
+
+    const inactive = await mountTransitionPolicy();
+    const inactiveEditor = useWorkspaceStore(inactive.pinia).policyEditor.state;
+    inactiveEditor.sourceRevisionId = 'revision-inactive';
+    inactiveEditor.selectedRevisionId = 'revision-inactive';
+    await flushPromises();
+    const inactiveCard = inactive.wrapper.get('[data-us-transition-settings-root]');
+    expect(inactiveCard.text()).toContain('inactive or differently sourced policy revision');
+    expect(inactiveCard.text()).not.toContain('20.0000%');
+    expect(inactiveCard.text()).not.toContain('40.0000%');
+    inactive.wrapper.unmount();
+  });
+
+  it('marks portfolio values unverified when revisions differ', async () => {
+    const { wrapper } = await mountTransitionPolicy({ portfolioRevisionId: 'revision-previous' });
+    const card = wrapper.get('[data-us-transition-settings-root]');
+    expect(card.text()).toContain('Unavailable (unverified data)');
+    expect(card.text()).not.toContain('20.0000%');
+    expect(card.text()).not.toContain('40.0000%');
     wrapper.unmount();
   });
 });

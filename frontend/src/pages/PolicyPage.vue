@@ -219,7 +219,26 @@
       :draft="editorState.draft"
       @update:sleeves="updateSleeves"
       @open-replacements="openUSReplacements"
-    />
+    >
+      <template #transition-status>
+        <Alert
+          v-if="policyTransitionContextNotice"
+          role="status"
+          class="tw:border-amber-600/40 tw:bg-amber-50"
+        >
+          <AlertDescription>{{ policyTransitionContextNotice }}</AlertDescription>
+        </Alert>
+        <USAllocationTransition
+          :transition="policyTransition.transition"
+          :labels="policyTransition.labels"
+          :snapshot-status="policyTransition.snapshotStatus"
+          :basket-status="policyTransition.basketStatus"
+          :role-identity="policyTransition.roleIdentity"
+          :provenance="policyTransition.provenance"
+          :show-heading="false"
+        />
+      </template>
+    </PolicyUSTransitionSettings>
 
     <PolicySleevesEditor
       :draft="editorState.draft"
@@ -375,7 +394,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, toRef, watch } from 'vue';
 import { useForm } from '@tanstack/vue-form';
-import type { AllowedSecurityInput, OverrideInput } from '@/types/api';
+import type { AllowedSecurityInput, OverrideInput, USTransitionResponse } from '@/types/api';
 import ApiActionError from '@/components/ApiActionError.vue';
 import WorkspacePageHeader from '@/components/WorkspacePageHeader.vue';
 import WorkspaceCapabilityNotice from '@/components/WorkspaceCapabilityNotice.vue';
@@ -383,6 +402,7 @@ import WorkspaceCapabilityNotice from '@/components/WorkspaceCapabilityNotice.vu
 import ResourceFreshnessNotice from '@/components/ResourceFreshnessNotice.vue';
 import PolicyHoldingOverridesEditor from '@/components/PolicyHoldingOverridesEditor.vue';
 import PolicyReplacementSetsEditor from '@/components/PolicyReplacementSetsEditor.vue';
+import USAllocationTransition from '@/components/USAllocationTransition.vue';
 import PolicyUSTransitionSettings from '@/components/PolicyUSTransitionSettings.vue';
 import PolicySleevesEditor from '@/components/PolicySleevesEditor.vue';
 import PolicyTaxBatchSettings from '@/components/PolicyTaxBatchSettings.vue';
@@ -407,11 +427,30 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import { useWorkspace } from '@/composables/use-workspace';
+import { selectPortfolioLabelContext, selectRunPresentation } from '@/stores/workspace-selectors';
+import { selectionFromRun } from './recommendations-state';
 import type { EditablePolicyDraft, EditablePolicySettings, EditableSleeve } from './policy-form';
 import {
   createPolicyRevisionSelectionSchema,
   type PolicyRevisionFormValues,
 } from '@/forms/policy-revision';
+
+type TransitionSnapshotStatus = 'confirmed' | 'pending' | 'stale' | 'unverified' | 'unavailable';
+type TransitionBasketStatus =
+  'confirmed' | 'no-selection' | 'pending' | 'stale' | 'unverified' | 'unavailable';
+type TransitionRoleIdentity = {
+  containerKey: string | null;
+  legacyKey: string | null;
+  destinationKey: string | null;
+};
+type PolicyTransitionPresentation = {
+  transition: USTransitionResponse | null;
+  labels: Record<string, string>;
+  snapshotStatus: TransitionSnapshotStatus;
+  basketStatus: TransitionBasketStatus;
+  roleIdentity: TransitionRoleIdentity | null;
+  provenance: 'current_portfolio' | 'current_run';
+};
 
 type ReplacementSetsContext = {
   sleeveKey: string;
@@ -486,6 +525,196 @@ const loading = computed(
 const saving = computed(() => editorState.pendingSave);
 const activating = computed(() => editorState.pendingActivation);
 
+const activePolicy = computed(() => store.policy?.active ?? null);
+const editorMatchesActivePolicy = computed(() => {
+  const active = activePolicy.value;
+  return Boolean(
+    initialized.value &&
+    active &&
+    !dirty.value &&
+    !saving.value &&
+    !activating.value &&
+    sourceRevisionId.value === active.id &&
+    selectedRevisionId.value === active.id,
+  );
+});
+const policyRunPresentation = computed(() =>
+  selectRunPresentation({
+    run: store.currentRun,
+    summary: store.currentRunSummary,
+    view: store.currentRunView,
+    proposedRunIsStale: store.proposedRunIsStale,
+    health: store.health,
+    portfolio: store.portfolio,
+    activePolicy: activePolicy.value,
+    resourceFreshness: store.resourceFreshness,
+    resourceReadsPending: store.workspaceResourceLoadPending,
+    reviewMutationPending: store.reviewMutationPending,
+  }),
+);
+const currentPortfolioTransitionStatus = computed<TransitionSnapshotStatus>(() => {
+  if (!initialized.value) return 'pending';
+  if (!editorMatchesActivePolicy.value) return 'unverified';
+  if (store.workspaceResourceLoadPending) return 'pending';
+  const freshness = store.resourceFreshness;
+  if (
+    freshness.health.status === 'stale' ||
+    freshness.portfolio.status === 'stale' ||
+    freshness.policy.status === 'stale'
+  ) {
+    return 'stale';
+  }
+  if (!portfolio.value) return 'unavailable';
+  if (
+    !portfolio.value.sync.complete ||
+    store.health?.status !== 'ok' ||
+    !store.health.schema_ready ||
+    freshness.health.status !== 'fresh' ||
+    freshness.portfolio.status !== 'fresh' ||
+    freshness.policy.status !== 'fresh' ||
+    !activePolicy.value ||
+    !portfolioLabelContext.value.revisionsMatch
+  ) {
+    return 'unverified';
+  }
+  return 'confirmed';
+});
+const portfolioLabelContext = computed(() => {
+  const transition = portfolio.value?.us_transition;
+  const sleeveKeys = transition
+    ? [
+        transition.sleeve_key,
+        ...(transition.transition_destination_sleeve_key
+          ? [transition.transition_destination_sleeve_key]
+          : []),
+        ...Object.keys(transition.current.children),
+        ...Object.keys(transition.proposed_basket.children),
+        ...Object.keys(transition.target.children),
+      ]
+    : [];
+  return selectPortfolioLabelContext({
+    portfolio: store.portfolio,
+    activePolicy: activePolicy.value,
+    sleeveKeys,
+  });
+});
+function selectedTradeBasket(run: NonNullable<typeof store.currentRun>): boolean | null {
+  if (!Array.isArray(run.groups) || !Array.isArray(run.consolidated_legs)) return null;
+  try {
+    return (selectionFromRun(run).selected_group_ids?.length ?? 0) > 0;
+  } catch {
+    return null;
+  }
+}
+const policyTransition = computed<PolicyTransitionPresentation>(() => {
+  const snapshotStatus = currentPortfolioTransitionStatus.value;
+  let transition = portfolio.value?.us_transition ?? null;
+  let basketStatus: TransitionBasketStatus = 'no-selection';
+  let provenance: PolicyTransitionPresentation['provenance'] = 'current_portfolio';
+
+  if (!editorMatchesActivePolicy.value) {
+    return {
+      transition: null,
+      labels: {},
+      snapshotStatus: 'unverified',
+      basketStatus: 'unverified',
+      roleIdentity: null,
+      provenance,
+    };
+  }
+
+  const presentation = policyRunPresentation.value;
+  if (presentation.currentRunMatches) {
+    const run = store.currentRun;
+    if (!run) {
+      basketStatus = 'unverified';
+    } else {
+      const hasSelectedTrades = selectedTradeBasket(run);
+      if (hasSelectedTrades === null) {
+        basketStatus = 'unverified';
+      } else if (!hasSelectedTrades) {
+        basketStatus = 'no-selection';
+      } else if (run.portfolio_effects?.us_transition) {
+        transition = run.portfolio_effects.us_transition;
+        basketStatus = 'confirmed';
+        provenance = 'current_run';
+      } else {
+        basketStatus = 'unavailable';
+      }
+    }
+  } else if (presentation.state === 'pending') {
+    basketStatus = 'pending';
+  } else if (presentation.state === 'stale') {
+    basketStatus = 'stale';
+  } else if (presentation.state === 'unverified') {
+    basketStatus = 'unverified';
+  }
+
+  const confirmedPolicyContext = snapshotStatus === 'confirmed' && activePolicy.value;
+  const transitionKeys = transition
+    ? [
+        transition.sleeve_key,
+        ...(transition.transition_destination_sleeve_key
+          ? [transition.transition_destination_sleeve_key]
+          : []),
+        ...Object.keys(transition.current.children),
+        ...Object.keys(transition.proposed_basket.children),
+        ...Object.keys(transition.target.children),
+      ]
+    : [];
+  const labelContext = confirmedPolicyContext
+    ? selectPortfolioLabelContext({
+        portfolio: store.portfolio,
+        activePolicy: activePolicy.value,
+        sleeveKeys: transitionKeys,
+      })
+    : null;
+  const sleeves = confirmedPolicyContext ? (activePolicy.value?.sleeves ?? null) : null;
+  const containers = sleeves?.filter((sleeve) => sleeve.is_direct_index_container) ?? [];
+  const containerKey = containers.length === 1 ? (containers[0]?.sleeve_key ?? null) : null;
+  const children = sleeves?.filter((sleeve) => sleeve.parent_sleeve_key === containerKey) ?? [];
+  const legacy = children.filter((sleeve) => sleeve.is_direct_index_sleeve);
+  const destinations = children.filter((sleeve) => sleeve.is_transition_destination);
+
+  return {
+    transition,
+    labels: labelContext?.revisionsMatch ? labelContext.labels : {},
+    snapshotStatus,
+    basketStatus,
+    roleIdentity: containerKey
+      ? {
+          containerKey,
+          legacyKey: legacy.length === 1 ? (legacy[0]?.sleeve_key ?? null) : null,
+          destinationKey: destinations.length === 1 ? (destinations[0]?.sleeve_key ?? null) : null,
+        }
+      : null,
+    provenance,
+  };
+});
+const policyTransitionContextNotice = computed(() => {
+  if (!initialized.value) return 'Loading Policy context; transition status is not yet confirmed.';
+  if (saving.value || activating.value) {
+    return 'Policy revision change in progress; status remains withheld.';
+  }
+  const active = activePolicy.value;
+  if (!active) return 'No active policy revision is confirmed; transition status is withheld.';
+  if (!editorMatchesActivePolicy.value) {
+    const draftContext =
+      sourceRevisionId.value === null && selectedRevisionId.value === null
+        ? 'new policy draft'
+        : sourceRevisionId.value !== active.id || selectedRevisionId.value !== active.id
+          ? 'inactive or differently sourced policy revision'
+          : 'unsaved policy draft';
+    return (
+      `This ${draftContext} differs from observed active revision ${active.id}. ` +
+      'Backend current, target, and selected-trade status is withheld for this configuration. ' +
+      'Exact draft targets and mappings remain in the allocation editor.'
+    );
+  }
+  if (policyRunPresentation.value.state === 'saved')
+    return 'A saved optimizer run is frozen context, not current Policy effects.';
+  return null;
+});
 const formIssues = computed(() => {
   const issues: string[] = [...syntaxIssues.value];
   if (sleeves.value.some((sleeve) => !sleeve.sleeve_key.trim() || !sleeve.display_name.trim()))

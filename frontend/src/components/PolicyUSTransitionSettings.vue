@@ -70,6 +70,9 @@
               : 'No unique US allocation is designated.'
           }}
         </p>
+        <div class="tw:mt-2 tw:min-w-0 tw:border-t tw:pt-4">
+          <slot name="transition-status" />
+        </div>
       </CardContent>
     </Card>
     <div

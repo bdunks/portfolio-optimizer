@@ -1470,6 +1470,16 @@ test('FakeBroker policy, review, and lot workflows', async ({
     contentType: 'image/png',
   });
 
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await expectNoHorizontalOverflow(page, 'policy page at tablet');
+  await expect(sleeveRegion).toBeVisible();
+  await expect(sleeveRegion).toHaveAttribute('tabindex', '0');
+  const policyTabletScreenshot = testInfo.outputPath('policy-page-tablet.png');
+  await page.screenshot({ path: policyTabletScreenshot, fullPage: true });
+  await testInfo.attach('policy page tablet', {
+    path: policyTabletScreenshot,
+    contentType: 'image/png',
+  });
   await page.setViewportSize({ width: 390, height: 844 });
   await policyRevisionSelect.focus();
   await expect(policyRevisionSelect).toBeFocused();
@@ -1503,18 +1513,33 @@ test('FakeBroker policy, review, and lot workflows', async ({
     element.scrollLeft = 0;
   });
 
-  await page.getByRole('button', { name: 'Add sleeve' }).click();
+  await page.getByRole('button', { name: 'Add allocation' }).click();
   await expect(page.getByText('Target check — activation is not valid yet')).toBeVisible();
   const newSleeveKey = (
     await sleeveRegion.locator('tbody .sleeve-key').last().textContent()
   )?.trim();
   if (!newSleeveKey) throw new Error('The newly added sleeve key is missing');
 
-  const parentSelect = page.getByRole('combobox', { name: `Parent sleeve for ${newSleeveKey}` });
+  const settingsTrigger = page.getByRole('button', { name: `Actions for ${newSleeveKey}` });
+  await settingsTrigger.focus();
+  await expect(settingsTrigger).toBeFocused();
+  await page.keyboard.press('Enter');
+  const settingsAction = page.getByRole('menuitem', { name: 'Allocation settings' });
+  await expect(settingsAction).toBeVisible();
+  await page.keyboard.press('ArrowDown');
+  await expect(settingsAction).toBeFocused();
+  await page.keyboard.press('Enter');
+  const settingsDialog = page.getByRole('dialog', { name: `Settings for ${newSleeveKey}` });
+  await expect(settingsDialog).toBeVisible();
+  const parentSelect = settingsDialog.getByRole('combobox', {
+    name: `Parent sleeve for ${newSleeveKey}`,
+  });
   await parentSelect.focus();
+  await expect(parentSelect).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(page.getByRole('option').first()).toBeVisible();
   await page.keyboard.press('Escape');
+  await settingsDialog.getByRole('button', { name: 'Close' }).click();
 
   const enabledCheckbox = page.getByRole('checkbox', { name: `Enabled ${newSleeveKey}` });
   await enabledCheckbox.focus();
@@ -1526,8 +1551,12 @@ test('FakeBroker policy, review, and lot workflows', async ({
   await page.keyboard.press('Space');
   await expect(enabledCheckbox).toHaveAttribute('aria-checked', 'true');
 
-  const deleteButton = page.getByRole('button', { name: `Delete ${newSleeveKey}` });
+  const deleteButton = page.getByRole('button', { name: `Actions for ${newSleeveKey}` });
   await deleteButton.focus();
+  await page.keyboard.press('Enter');
+  const deleteAction = page.getByRole('menuitem', { name: 'Delete allocation' });
+  await expect(deleteAction).toBeVisible();
+  await deleteAction.focus();
   await page.keyboard.press('Enter');
   const deletionPanel = page
     .locator('[role="group"]')
@@ -1539,6 +1568,9 @@ test('FakeBroker policy, review, and lot workflows', async ({
   await expect(deletionPanel).toHaveCount(0);
 
   await deleteButton.focus();
+  await page.keyboard.press('Enter');
+  await expect(deleteAction).toBeVisible();
+  await deleteAction.focus();
   await page.keyboard.press('Enter');
   await expect(deletionPanel).toBeVisible();
   const confirmDeleteButton = deletionPanel.getByRole('button', { name: 'Confirm delete' });

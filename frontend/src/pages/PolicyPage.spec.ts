@@ -445,8 +445,10 @@ describe('PolicyPage', () => {
     expect(wrapper.get('.workspace-page').classes()).toContain('policy-page');
     expect(wrapper.text()).toContain('Allocation Policy');
     expect(wrapper.text()).toContain('ST/LT tax rates use fraction units');
-    const target = wrapper.find('input[aria-label="Target percent for US equity"]');
-    await setSleeveCheckbox(wrapper, 'Transition destination sub-sleeve for US equity', true);
+    const target = wrapper.find('input[aria-label="Target percent of portfolio for US equity"]');
+    expect(wrapper.find('[data-slot="checkbox"][id$="-transition-destination"]').exists()).toBe(
+      false,
+    );
     await target.setValue('99.9999999999999999');
     expect((wrapper.get('button.primary-button').element as HTMLButtonElement).disabled).toBe(
       false,
@@ -464,7 +466,7 @@ describe('PolicyPage', () => {
 
     const savedPayload = draftPayloads[0];
     expect(savedPayload?.source_revision_id).toBe('revision-active-synthetic');
-    expect(savedPayload?.sleeves[0]?.is_transition_destination).toBe(true);
+    expect(savedPayload?.sleeves[0]?.is_transition_destination).toBe(false);
     expect(savedPayload?.sleeves[0]?.target_pct).toBe('99.9999999999999999');
     expect(savedPayload?.settings.short_term_tax_rate).toBe('0.2500');
     expect(savedPayload?.settings.long_term_tax_rate).toBeNull();
@@ -643,12 +645,14 @@ describe('PolicyPage', () => {
 
     await firstMount
       .findAll('button')
-      .find((button) => button.text().includes('Add sleeve'))!
+      .find((button) => button.text().includes('Add allocation'))!
       .trigger('click');
     const firstNames = firstMount.findAll(
       'input[aria-label="Sleeve display name for sleeve-new-1"]',
     );
-    const firstTargets = firstMount.findAll('input[aria-label="Target percent for sleeve-new-1"]');
+    const firstTargets = firstMount.findAll(
+      'input[aria-label="Target percent of portfolio for sleeve-new-1"]',
+    );
     const firstDriftBands = firstMount.findAll(
       'input[aria-label="Drift band in percentage points for sleeve-new-1"]',
     );
@@ -664,7 +668,7 @@ describe('PolicyPage', () => {
     await flushPromises();
     await secondMount
       .findAll('button')
-      .find((button) => button.text().includes('Add sleeve'))!
+      .find((button) => button.text().includes('Add allocation'))!
       .trigger('click');
     const sleeveKeys = secondMount.findAll('.sleeve-key').map((element) => element.text());
     expect(sleeveKeys).toContain('sleeve-new-1');

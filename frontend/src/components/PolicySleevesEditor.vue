@@ -3,6 +3,7 @@
     class="policy-sleeves-editor-root workspace-foundation tw:min-w-0"
     data-workspace-foundation
     data-policy-sleeves-root
+    ref="sleeveEditorRoot"
     :aria-labelledby="`${sectionId}-title`"
   >
     <Card class="tw:min-w-0">
@@ -22,9 +23,9 @@
               destination is configured.
             </CardDescription>
           </div>
-          <Button type="button" variant="outline" size="sm" @click="addSleeve">
+          <Button type="button" variant="outline" size="sm" @click="addSleeve(null)">
             <Plus aria-hidden="true" />
-            Add sleeve
+            Add allocation
           </Button>
         </div>
       </CardHeader>
@@ -65,7 +66,7 @@
           role="region"
           aria-label="Sleeve allocation policy settings"
           tabindex="0"
-          class="tw:min-w-[88rem]"
+          class="tw:min-w-[70rem]"
         >
           <TableCaption class="tw:sr-only">
             Configured sleeves and their allocation policy settings
@@ -80,7 +81,13 @@
           <sleeveForm.Field name="sleeves">
             <template #default>
               <TableBody>
-                <TableRow v-for="row in tableRows" :key="row.id">
+                <TableRow
+                  v-for="row in tableRows"
+                  :key="row.id"
+                  :data-sleeve-key="row.original.sleeve_key"
+                  :data-parent-sleeve-key="row.original.parent_sleeve_key ?? ''"
+                  :data-hierarchy-depth="displayRowByKey.get(row.original.sleeve_key)?.depth ?? 0"
+                >
                   <template v-for="cell in row.getAllCells()" :key="cell.id">
                     <TableHead
                       v-if="cell.column.id === 'order'"
@@ -94,12 +101,12 @@
                     </TableCell>
                   </template>
                 </TableRow>
-                <TableEmpty v-if="tableRows.length === 0" :colspan="8">
+                <TableEmpty v-if="tableRows.length === 0" :colspan="6">
                   <Empty class="tw:border-0 tw:bg-transparent">
                     <EmptyHeader>
                       <EmptyTitle>No sleeves configured</EmptyTitle>
                       <EmptyDescription>
-                        No sleeves configured. Add a sleeve and enter its policy values.
+                        No allocations configured. Add an allocation and enter its policy values.
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
@@ -108,6 +115,132 @@
             </template>
           </sleeveForm.Field>
         </Table>
+
+        <Sheet v-model:open="contextualSettingsOpen">
+          <SheetContent
+            v-if="contextualSettingsSleeve"
+            side="right"
+            class="tw:gap-6"
+            @close-auto-focus="restoreSettingsFocus"
+          >
+            <SheetHeader>
+              <SheetTitle>
+                Settings for
+                {{ contextualSettingsSleeve.display_name || contextualSettingsSleeve.sleeve_key }}
+              </SheetTitle>
+              <SheetDescription>
+                Choose where this allocation sits and edit its explicit cash and direct-index roles.
+                Top-level targets are percentages of the portfolio; nested targets are percentages
+                of their parent.
+              </SheetDescription>
+            </SheetHeader>
+
+            <FieldGroup class="tw:gap-4">
+              <Field>
+                <FieldLabel
+                  :id="contextualControlId('parent-label')"
+                  :for="contextualControlId('parent')"
+                >
+                  Parent sleeve for
+                  {{ contextualSettingsSleeve.display_name || contextualSettingsSleeve.sleeve_key }}
+                </FieldLabel>
+                <Select
+                  :model-value="contextualParentValue"
+                  @update:model-value="
+                    setSleeveParent(contextualSettingsSleeve.sleeve_key, String($event ?? ''))
+                  "
+                >
+                  <SelectTrigger
+                    :id="contextualControlId('parent')"
+                    :aria-labelledby="contextualControlId('parent-label')"
+                    class="tw:w-full"
+                  >
+                    <SelectValue placeholder="Choose parent" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem
+                        v-for="option in contextualParentOptions"
+                        :key="option.value"
+                        :value="option.value"
+                      >
+                        {{ option.label }}
+                      </SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+
+              <FieldGroup class="tw:gap-3">
+                <Field orientation="horizontal" class="tw:items-center tw:gap-2">
+                  <Checkbox
+                    :id="contextualControlId('direct-index-container')"
+                    :model-value="contextualSettingsSleeve.is_direct_index_container ?? false"
+                    :aria-labelledby="contextualControlId('direct-index-container-label')"
+                    @update:model-value="
+                      setDirectIndexContainer(contextualSettingsSleeve.sleeve_key, $event === true)
+                    "
+                  />
+                  <FieldLabel
+                    :id="contextualControlId('direct-index-container-label')"
+                    :for="contextualControlId('direct-index-container')"
+                  >
+                    Direct-index container for
+                    {{
+                      contextualSettingsSleeve.display_name || contextualSettingsSleeve.sleeve_key
+                    }}
+                  </FieldLabel>
+                </Field>
+                <Field orientation="horizontal" class="tw:items-center tw:gap-2">
+                  <Checkbox
+                    :id="contextualControlId('direct-index-sleeve')"
+                    :model-value="contextualSettingsSleeve.is_direct_index_sleeve ?? false"
+                    :aria-labelledby="contextualControlId('direct-index-sleeve-label')"
+                    @update:model-value="
+                      setSleeveRole(
+                        contextualSettingsSleeve.sleeve_key,
+                        'is_direct_index_sleeve',
+                        $event === true,
+                      )
+                    "
+                  />
+                  <FieldLabel
+                    :id="contextualControlId('direct-index-sleeve-label')"
+                    :for="contextualControlId('direct-index-sleeve')"
+                  >
+                    Direct-index sleeve for
+                    {{
+                      contextualSettingsSleeve.display_name || contextualSettingsSleeve.sleeve_key
+                    }}
+                  </FieldLabel>
+                </Field>
+                <Field orientation="horizontal" class="tw:items-center tw:gap-2">
+                  <Checkbox
+                    :id="contextualControlId('cash-sleeve')"
+                    :model-value="contextualSettingsSleeve.is_cash_sleeve ?? false"
+                    :aria-labelledby="contextualControlId('cash-sleeve-label')"
+                    @update:model-value="
+                      setSleeveRole(
+                        contextualSettingsSleeve.sleeve_key,
+                        'is_cash_sleeve',
+                        $event === true,
+                      )
+                    "
+                  />
+                  <FieldLabel
+                    :id="contextualControlId('cash-sleeve-label')"
+                    :for="contextualControlId('cash-sleeve')"
+                  >
+                    Cash sleeve for
+                    {{
+                      contextualSettingsSleeve.display_name || contextualSettingsSleeve.sleeve_key
+                    }}
+                  </FieldLabel>
+                </Field>
+              </FieldGroup>
+            </FieldGroup>
+          </SheetContent>
+        </Sheet>
 
         <sleeveForm.Field name="deletion">
           <template #default="{ field }">
@@ -255,12 +388,14 @@ import { FlexRender, tableFeatures as createTableFeatures, useTable } from '@tan
 import type { ColumnDef } from '@tanstack/vue-table';
 import { Plus, Trash2 } from '@lucide/vue';
 import type { Component } from 'vue';
-import { computed, h, shallowRef, useId, watch } from 'vue';
+import { computed, h, nextTick, ref, shallowRef, useId, watch } from 'vue';
 import PolicySleeveTableCell from '@/components/PolicySleeveTableCell.vue';
 import type { PolicySleeveColumnKind } from '@/components/PolicySleeveTableCell.vue';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card';
+
+import { Checkbox } from '@/components/ui/checkbox';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
 import {
@@ -271,6 +406,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
 import {
   Table,
   TableBody,
@@ -301,6 +444,7 @@ const emit = defineEmits<{
 }>();
 
 const sectionId = useId();
+const sleeveEditorRoot = ref<HTMLElement | null>(null);
 let nextSleeveNumber = 1;
 
 function copySleeves(sleeves: readonly PolicySleeveFormRow[]): PolicySleeveFormRow[] {
@@ -354,6 +498,25 @@ const sleeveForm = useForm({
 });
 const formValues = sleeveForm.useSelector((state) => state.values);
 const sleeves = computed(() => formValues.value.sleeves);
+
+const contextualSettingsKey = shallowRef('');
+const contextualSettingsOpen = ref(false);
+const collapsedSleeveKeys = shallowRef(new Set<string>());
+const contextualSettingsSleeve = computed(
+  () => sleeves.value.find((sleeve) => sleeve.sleeve_key === contextualSettingsKey.value) ?? null,
+);
+const contextualParentOptions = computed(() =>
+  contextualSettingsSleeve.value ? parentOptions(contextualSettingsSleeve.value) : [],
+);
+const contextualParentValue = computed(() =>
+  contextualSettingsSleeve.value
+    ? selectedOptionValue(
+        contextualParentOptions.value,
+        'parent',
+        contextualSettingsSleeve.value.parent_sleeve_key,
+      )
+    : optionToken('parent', ''),
+);
 const deletion = computed(() => formValues.value.deletion);
 const targetIssues = computed(() => props.targetIssues);
 const reassignments = computed(() => props.draft.reassignments);
@@ -459,6 +622,56 @@ function parentOptions(sleeve: PolicySleeveFormRow) {
   ];
 }
 
+function contextualControlId(field: string): string {
+  const key = contextualSettingsSleeve.value?.sleeve_key ?? 'none';
+  return `${sectionId}-sleeve-${encodeURIComponent(key)}-settings-${field}`;
+}
+
+function openSleeveSettings(key: string): void {
+  contextualSettingsKey.value = key;
+  contextualSettingsOpen.value = true;
+}
+
+function restoreSettingsFocus(event: Event): void {
+  event.preventDefault();
+  const key = contextualSettingsKey.value;
+  void nextTick(() => {
+    const root = sleeveEditorRoot.value;
+    if (!root) return;
+    const row = Array.from(root.querySelectorAll<HTMLElement>('tr[data-sleeve-key]')).find(
+      (candidate) => candidate.dataset.sleeveKey === key,
+    );
+    const actionsButton = row?.querySelector<HTMLButtonElement>(
+      'button[aria-label^="Actions for "]',
+    );
+    (
+      actionsButton ??
+      root.querySelector<HTMLElement>(
+        '[role="region"][aria-label="Sleeve allocation policy settings"]',
+      )
+    )?.focus();
+  });
+}
+
+function toggleSleeveExpansion(key: string): void {
+  if (childrenOf(key).length === 0) return;
+  const next = new Set(collapsedSleeveKeys.value);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  collapsedSleeveKeys.value = next;
+}
+
+function expandSleevePath(key: string): void {
+  const next = new Set(collapsedSleeveKeys.value);
+  let current = sleeves.value.find((sleeve) => sleeve.sleeve_key === key);
+  while (current) {
+    next.delete(current.sleeve_key);
+    if (!current.parent_sleeve_key) break;
+    current = sleeves.value.find((sleeve) => sleeve.sleeve_key === current?.parent_sleeve_key);
+  }
+  collapsedSleeveKeys.value = next;
+}
+
 function reassignmentOptions(excludedKey: string) {
   return [
     choice('reassignment', '', 'Choose destination'),
@@ -503,10 +716,13 @@ function setSleeveParent(key: string, value: string): void {
   const sleeve = sleeves.value.find((candidate) => candidate.sleeve_key === key);
   if (!sleeve) return;
   const nextParent = selectedDomainValue(parentOptions(sleeve), value);
-  if (nextParent !== undefined) updateSleeve(key, { parent_sleeve_key: nextParent });
+  if (nextParent !== undefined) {
+    updateSleeve(key, { parent_sleeve_key: nextParent });
+    if (nextParent) expandSleevePath(nextParent);
+  }
 }
 
-function addSleeve(): void {
+function addSleeve(parentKey: string | null = null): void {
   let key: string;
   do {
     key = `sleeve-new-${nextSleeveNumber++}`;
@@ -518,7 +734,7 @@ function addSleeve(): void {
       sleeve_key: key,
       display_name: '',
       sort_order: sleeves.value.length,
-      parent_sleeve_key: null,
+      parent_sleeve_key: parentKey,
       target_pct: '',
       drift_band_pp: '',
       is_direct_index_container: false,
@@ -528,6 +744,7 @@ function addSleeve(): void {
       enabled: true,
     },
   ]);
+  if (parentKey) expandSleevePath(parentKey);
 }
 
 function hasEnabledChild(key: string): boolean {
@@ -600,17 +817,16 @@ function setSleeveRole(
   );
 }
 
-function setTransitionDestination(key: string, enabled: boolean): void {
-  setSleeves(
-    sleeves.value.map((sleeve) => ({
-      ...sleeve,
-      is_transition_destination: sleeve.sleeve_key === key && enabled,
-    })),
-  );
-}
-
 function childrenOf(key: string): PolicySleeveFormRow[] {
   return sleeves.value.filter((sleeve) => sleeve.parent_sleeve_key === key);
+}
+
+function targetBasis(sleeve: PolicySleeveFormRow): string {
+  if (!sleeve.parent_sleeve_key) return 'of portfolio';
+  const parent = sleeves.value.find(
+    (candidate) => candidate.sleeve_key === sleeve.parent_sleeve_key,
+  );
+  return `within ${parent?.display_name || sleeve.parent_sleeve_key}`;
 }
 
 function isDescendant(candidateKey: string, ancestorKey: string): boolean {
@@ -632,8 +848,9 @@ function sleeveSiblingTargetIndex(index: number, direction: -1 | 1): number | nu
   return siblings[siblingPosition + direction]?.candidateIndex ?? null;
 }
 
-function canMoveSleeve(index: number, direction: -1 | 1): boolean {
-  return sleeveSiblingTargetIndex(index, direction) !== null;
+function canMoveSleeve(key: string, direction: -1 | 1): boolean {
+  const index = sleeves.value.findIndex((sleeve) => sleeve.sleeve_key === key);
+  return index >= 0 && sleeveSiblingTargetIndex(index, direction) !== null;
 }
 
 function moveSleeve(key: string, direction: -1 | 1): void {
@@ -700,6 +917,10 @@ function confirmDeleteSleeve(): void {
         : sleeve,
     );
   setSleeves(next);
+  if (contextualSettingsKey.value === key) {
+    contextualSettingsKey.value = '';
+    contextualSettingsOpen.value = false;
+  }
   sleeveForm.setFieldValue('deletion', { sleeveKey: '', targetKey: '', childReparents: {} });
   deleteError.value = '';
 }
@@ -708,25 +929,26 @@ function cancelDeleteSleeve(): void {
   sleeveForm.setFieldValue('deletion', { sleeveKey: '', targetKey: '', childReparents: {} });
   deleteError.value = '';
 }
-
 function cellProps(kind: PolicySleeveColumnKind, sleeve: PolicySleeveFormRow, rowIndex: number) {
-  const parents = kind === 'parent' ? parentOptions(sleeve) : [];
   const reassignments = kind === 'enabled' ? reassignmentOptions(sleeve.sleeve_key) : [];
+  const displayRow = displayRowByKey.value.get(sleeve.sleeve_key);
   return {
     kind,
     sleeve,
     rowIndex,
     sectionId,
-    parentOptions: parents,
+    targetBasis: targetBasis(sleeve),
+    hierarchyDepth: displayRow?.depth ?? 0,
+    hasChildren: displayRow?.hasChildren ?? false,
+    isExpanded: displayRow ? !collapsedSleeveKeys.value.has(sleeve.sleeve_key) : false,
     reassignmentOptions: reassignments,
-    parentValue: selectedOptionValue(parents, 'parent', sleeve.parent_sleeve_key ?? null),
     reassignmentValue: selectedOptionValue(
       reassignments,
       'reassignment',
       props.draft.reassignments[sleeve.sleeve_key] ?? '',
     ),
-    canMoveUp: kind === 'order' && canMoveSleeve(rowIndex, -1),
-    canMoveDown: kind === 'order' && canMoveSleeve(rowIndex, 1),
+    canMoveUp: kind === 'order' && canMoveSleeve(sleeve.sleeve_key, -1),
+    canMoveDown: kind === 'order' && canMoveSleeve(sleeve.sleeve_key, 1),
   };
 }
 
@@ -738,14 +960,13 @@ function renderSleeveCell(
   return h(PolicySleeveTableCell as Component, {
     ...cellProps(kind, sleeve, rowIndex),
     onEditText: setSleeveText,
-    onEditParent: setSleeveParent,
-    onEditContainer: setDirectIndexContainer,
-    onEditRole: setSleeveRole,
-    onEditTransition: setTransitionDestination,
     onEditEnabled: setSleeveEnabled,
     onEditReassignment: setReassignment,
     onMove: moveSleeve,
     onDelete: beginDeleteSleeve,
+    onAddChild: addSleeve,
+    onOpenSettings: openSleeveSettings,
+    onToggleExpand: toggleSleeveExpansion,
   });
 }
 
@@ -760,17 +981,63 @@ const makeColumn = (
   accessorFn: accessor,
   cell: ({ row }) => renderSleeveCell(kind, row.original, row.index),
 });
+type SleeveDisplayRow = {
+  sleeve: PolicySleeveFormRow;
+  depth: number;
+  hasChildren: boolean;
+};
+
+const visibleSleeveRows = computed<SleeveDisplayRow[]>(() => {
+  const rows: SleeveDisplayRow[] = [];
+  const visitedKeys = new Set<string>();
+
+  function visit(sleeve: PolicySleeveFormRow, depth: number): void {
+    if (visitedKeys.has(sleeve.sleeve_key)) return;
+    visitedKeys.add(sleeve.sleeve_key);
+    const children = sleeves.value.filter(
+      (candidate) => candidate.parent_sleeve_key === sleeve.sleeve_key,
+    );
+    rows.push({ sleeve, depth, hasChildren: children.length > 0 });
+    if (!collapsedSleeveKeys.value.has(sleeve.sleeve_key)) {
+      for (const child of children) visit(child, depth + 1);
+    } else {
+      markHiddenDescendants(sleeve.sleeve_key);
+    }
+  }
+
+  function markHiddenDescendants(parentKey: string): void {
+    const descendants = sleeves.value.filter(
+      (candidate) => candidate.parent_sleeve_key === parentKey,
+    );
+    for (const descendant of descendants) {
+      if (visitedKeys.has(descendant.sleeve_key)) continue;
+      visitedKeys.add(descendant.sleeve_key);
+      markHiddenDescendants(descendant.sleeve_key);
+    }
+  }
+
+  const roots = sleeves.value.filter(
+    (sleeve) =>
+      !sleeve.parent_sleeve_key ||
+      !sleeves.value.some((candidate) => candidate.sleeve_key === sleeve.parent_sleeve_key),
+  );
+  for (const root of roots) visit(root, 0);
+  // Keep orphaned or cyclic legacy data visible instead of silently dropping an allocation.
+  for (const sleeve of sleeves.value) visit(sleeve, 0);
+  return rows;
+});
+const displayRowByKey = computed(
+  () => new Map(visibleSleeveRows.value.map((row) => [row.sleeve.sleeve_key, row])),
+);
 const columns: Array<ColumnDef<typeof sleeveTableFeatures, PolicySleeveFormRow>> = [
-  makeColumn('order', 'Order / sleeve key', (sleeve) => sleeve.sleeve_key),
+  makeColumn('order', 'Allocation', (sleeve) => sleeve.sleeve_key),
   makeColumn('name', 'Name', (sleeve) => sleeve.display_name),
-  makeColumn('parent', 'Parent', (sleeve) => sleeve.parent_sleeve_key),
-  makeColumn('target', 'Target (%)', (sleeve) => sleeve.target_pct),
+  makeColumn('target', 'Target (% of portfolio / parent)', (sleeve) => sleeve.target_pct),
   makeColumn('drift', 'Drift band (pp)', (sleeve) => sleeve.drift_band_pp),
-  makeColumn('designations', 'Designations', (sleeve) => sleeve.is_direct_index_container),
   makeColumn('enabled', 'Enabled', (sleeve) => sleeve.enabled),
   makeColumn('actions', 'Actions', (sleeve) => sleeve.sleeve_key),
 ];
-const tableData = shallowRef(sleeves.value);
+const tableData = shallowRef(visibleSleeveRows.value.map((row) => row.sleeve));
 const table = useTable({
   features: sleeveTableFeatures,
   columns,
@@ -778,8 +1045,9 @@ const table = useTable({
   getRowId: (sleeve: PolicySleeveFormRow) => sleeve.sleeve_key,
 });
 watch(
-  sleeves,
-  (nextSleeves) => {
+  [sleeves, visibleSleeveRows],
+  () => {
+    const nextSleeves = visibleSleeveRows.value.map((row) => row.sleeve);
     tableData.value = nextSleeves;
     table.setOptions((previous) => ({ ...previous, data: nextSleeves }));
   },

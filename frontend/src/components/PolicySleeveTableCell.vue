@@ -1,33 +1,58 @@
 <template>
-  <div v-if="kind === 'order'" class="tw:flex tw:items-center tw:gap-1">
-    <span class="tw:sr-only">Sleeve order {{ rowIndex + 1 }} controls</span>
-    <Button
-      type="button"
-      variant="outline"
-      size="icon-sm"
-      :aria-label="`Move ${sleeve.display_name || sleeve.sleeve_key} up`"
-      :disabled="!canMoveUp"
-      @click="emit('move', sleeve.sleeve_key, -1)"
+  <div v-if="kind === 'order'" class="tw:flex tw:min-w-max tw:items-center tw:gap-1">
+    <div
+      class="tw:flex tw:items-center tw:gap-1"
+      :style="{ paddingInlineStart: `${hierarchyDepth * 1.25}rem` }"
     >
-      <ArrowUp aria-hidden="true" />
-    </Button>
-    <Button
-      type="button"
-      variant="outline"
-      size="icon-sm"
-      :aria-label="`Move ${sleeve.display_name || sleeve.sleeve_key} down`"
-      :disabled="!canMoveDown"
-      @click="emit('move', sleeve.sleeve_key, 1)"
-    >
-      <ArrowDown aria-hidden="true" />
-    </Button>
-    <span aria-hidden="true" class="tw:whitespace-nowrap tw:text-muted-foreground">
-      {{ rowIndex + 1 }}
-    </span>
-    <code class="sleeve-key">{{ sleeve.sleeve_key || 'new sleeve' }}</code>
+      <Button
+        v-if="hasChildren"
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        :aria-label="`${isExpanded ? 'Collapse' : 'Expand'} children of ${sleeve.display_name || sleeve.sleeve_key}`"
+        :aria-expanded="isExpanded"
+        @click="emit('toggle-expand', sleeve.sleeve_key)"
+      >
+        <ChevronRight
+          aria-hidden="true"
+          class="tw:transition-transform"
+          :class="isExpanded ? 'tw:rotate-90' : ''"
+        />
+      </Button>
+      <span v-else aria-hidden="true" class="tw:size-8 tw:shrink-0" />
+      <Button
+        type="button"
+        variant="outline"
+        size="icon-sm"
+        :aria-label="`Move ${sleeve.display_name || sleeve.sleeve_key} up`"
+        :disabled="!canMoveUp"
+        @click="emit('move', sleeve.sleeve_key, -1)"
+      >
+        <ArrowUp aria-hidden="true" />
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="icon-sm"
+        :aria-label="`Move ${sleeve.display_name || sleeve.sleeve_key} down`"
+        :disabled="!canMoveDown"
+        @click="emit('move', sleeve.sleeve_key, 1)"
+      >
+        <ArrowDown aria-hidden="true" />
+      </Button>
+      <span aria-hidden="true" class="tw:whitespace-nowrap tw:text-muted-foreground">
+        {{ rowIndex + 1 }}
+      </span>
+      <div class="tw:flex tw:min-w-0 tw:flex-col tw:gap-0.5">
+        <code class="sleeve-key">{{ sleeve.sleeve_key || 'new sleeve' }}</code>
+        <span v-if="hierarchyDepth > 0" class="tw:text-xs tw:text-muted-foreground">
+          Sub-sleeve
+        </span>
+      </div>
+    </div>
   </div>
 
-  <FieldGroup v-else-if="kind === 'name'" class="tw:min-w-0 tw:gap-1">
+  <FieldGroup v-else-if="kind === 'name'" class="tw:min-w-[12rem] tw:gap-1">
     <Field>
       <FieldLabel :for="controlId('name')" class="tw:sr-only">{{
         `Sleeve display name for ${sleeve.display_name || sleeve.sleeve_key}`
@@ -44,48 +69,22 @@
     </Field>
   </FieldGroup>
 
-  <FieldGroup v-else-if="kind === 'parent'" class="tw:min-w-0 tw:gap-1">
-    <Field>
-      <FieldLabel :id="controlId('parent-label')" :for="controlId('parent')" class="tw:sr-only">
-        {{ `Parent sleeve for ${sleeve.display_name || sleeve.sleeve_key}` }}
-      </FieldLabel>
-      <Select
-        :model-value="parentValue"
-        @update:model-value="emit('edit-parent', sleeve.sleeve_key, String($event ?? ''))"
-      >
-        <SelectTrigger
-          :id="controlId('parent')"
-          :aria-labelledby="controlId('parent-label')"
-          class="tw:w-full"
-        >
-          <SelectValue placeholder="Choose parent" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectGroup>
-            <SelectItem v-for="option in parentOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </SelectItem>
-          </SelectGroup>
-        </SelectContent>
-      </Select>
-    </Field>
-  </FieldGroup>
-
   <FieldGroup v-else-if="kind === 'target'" class="tw:min-w-0 tw:gap-1">
     <Field>
       <FieldLabel :for="controlId('target')" class="tw:sr-only">{{
-        `Target percent for ${sleeve.display_name || sleeve.sleeve_key}`
+        `Target percent ${targetBasis} for ${sleeve.display_name || sleeve.sleeve_key}`
       }}</FieldLabel>
       <Input
         :id="controlId('target')"
         :model-value="sleeve.target_pct"
-        :aria-label="`Target percent for ${sleeve.display_name || sleeve.sleeve_key}`"
+        :aria-label="`Target percent ${targetBasis} for ${sleeve.display_name || sleeve.sleeve_key}`"
         inputmode="decimal"
         placeholder="0"
         @update:model-value="
           emit('edit-text', sleeve.sleeve_key, 'target_pct', String($event ?? ''))
         "
       />
+      <span class="tw:text-xs tw:text-muted-foreground">Percent {{ targetBasis }}</span>
     </Field>
   </FieldGroup>
 
@@ -104,66 +103,6 @@
           emit('edit-text', sleeve.sleeve_key, 'drift_band_pp', String($event ?? ''))
         "
       />
-    </Field>
-  </FieldGroup>
-
-  <FieldGroup v-else-if="kind === 'designations'" class="tw:min-w-[16rem] tw:gap-2">
-    <Field orientation="horizontal" class="tw:items-center tw:gap-2">
-      <Checkbox
-        :id="controlId('direct-index-container')"
-        :model-value="sleeve.is_direct_index_container ?? false"
-        :aria-labelledby="controlId('direct-index-container-label')"
-        @update:model-value="emit('edit-container', sleeve.sleeve_key, $event === true)"
-      />
-      <FieldLabel
-        :id="controlId('direct-index-container-label')"
-        :for="controlId('direct-index-container')"
-      >
-        {{ `Direct-index container for ${sleeve.display_name || sleeve.sleeve_key}` }}
-      </FieldLabel>
-    </Field>
-    <Field orientation="horizontal" class="tw:items-center tw:gap-2">
-      <Checkbox
-        :id="controlId('direct-index-sleeve')"
-        :model-value="sleeve.is_direct_index_sleeve ?? false"
-        :aria-labelledby="controlId('direct-index-sleeve-label')"
-        @update:model-value="
-          emit('edit-role', sleeve.sleeve_key, 'is_direct_index_sleeve', $event === true)
-        "
-      />
-      <FieldLabel
-        :id="controlId('direct-index-sleeve-label')"
-        :for="controlId('direct-index-sleeve')"
-      >
-        {{ `Direct-index sleeve for ${sleeve.display_name || sleeve.sleeve_key}` }}
-      </FieldLabel>
-    </Field>
-    <Field orientation="horizontal" class="tw:items-center tw:gap-2">
-      <Checkbox
-        :id="controlId('transition-destination')"
-        :model-value="sleeve.is_transition_destination ?? false"
-        :aria-labelledby="controlId('transition-destination-label')"
-        @update:model-value="emit('edit-transition', sleeve.sleeve_key, $event === true)"
-      />
-      <FieldLabel
-        :id="controlId('transition-destination-label')"
-        :for="controlId('transition-destination')"
-      >
-        {{ `Transition destination sub-sleeve for ${sleeve.display_name || sleeve.sleeve_key}` }}
-      </FieldLabel>
-    </Field>
-    <Field orientation="horizontal" class="tw:items-center tw:gap-2">
-      <Checkbox
-        :id="controlId('cash-sleeve')"
-        :model-value="sleeve.is_cash_sleeve ?? false"
-        :aria-labelledby="controlId('cash-sleeve-label')"
-        @update:model-value="
-          emit('edit-role', sleeve.sleeve_key, 'is_cash_sleeve', $event === true)
-        "
-      />
-      <FieldLabel :id="controlId('cash-sleeve-label')" :for="controlId('cash-sleeve')">
-        {{ `Cash sleeve for ${sleeve.display_name || sleeve.sleeve_key}` }}
-      </FieldLabel>
     </Field>
   </FieldGroup>
 
@@ -216,23 +155,54 @@
     </Field>
   </FieldGroup>
 
-  <Button
-    v-else
-    type="button"
-    variant="destructive"
-    size="sm"
-    :aria-label="`Delete ${sleeve.display_name || sleeve.sleeve_key}`"
-    @click="emit('delete', sleeve.sleeve_key)"
-  >
-    <Trash2 aria-hidden="true" />
-    Delete
-  </Button>
+  <DropdownMenu v-else>
+    <DropdownMenuTrigger as-child>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        :aria-label="`Actions for ${sleeve.display_name || sleeve.sleeve_key}`"
+      >
+        <MoreHorizontal aria-hidden="true" />
+      </Button>
+    </DropdownMenuTrigger>
+    <DropdownMenuContent align="end">
+      <DropdownMenuItem @select="emit('add-child', sleeve.sleeve_key)">
+        <Plus aria-hidden="true" />
+        Add sub-sleeve
+      </DropdownMenuItem>
+      <DropdownMenuItem @select="emit('open-settings', sleeve.sleeve_key)">
+        <Settings2 aria-hidden="true" />
+        Allocation settings
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem class="tw:text-destructive" @select="emit('delete', sleeve.sleeve_key)">
+        <Trash2 aria-hidden="true" />
+        Delete allocation
+      </DropdownMenuItem>
+    </DropdownMenuContent>
+  </DropdownMenu>
 </template>
 
 <script setup lang="ts">
-import { ArrowDown, ArrowUp, Trash2 } from '@lucide/vue';
+import {
+  ArrowDown,
+  ArrowUp,
+  ChevronRight,
+  MoreHorizontal,
+  Plus,
+  Settings2,
+  Trash2,
+} from '@lucide/vue';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import {
@@ -245,8 +215,7 @@ import {
 } from '@/components/ui/select';
 import type { EditableSleeve } from '@/pages/policy-form';
 
-export type PolicySleeveColumnKind =
-  'order' | 'name' | 'parent' | 'target' | 'drift' | 'designations' | 'enabled' | 'actions';
+export type PolicySleeveColumnKind = 'order' | 'name' | 'target' | 'drift' | 'enabled' | 'actions';
 
 export type PolicySleeveSelectOption = { value: string; label: string };
 
@@ -255,9 +224,11 @@ const props = defineProps<{
   sleeve: EditableSleeve;
   rowIndex: number;
   sectionId: string;
-  parentOptions: readonly PolicySleeveSelectOption[];
+  targetBasis: string;
+  hierarchyDepth: number;
+  hasChildren: boolean;
+  isExpanded: boolean;
   reassignmentOptions: readonly PolicySleeveSelectOption[];
-  parentValue: string;
   reassignmentValue: string;
   canMoveUp: boolean;
   canMoveDown: boolean;
@@ -269,18 +240,13 @@ const emit = defineEmits<{
     field: 'display_name' | 'target_pct' | 'drift_band_pp',
     value: string,
   ];
-  'edit-parent': [sleeveKey: string, optionValue: string];
-  'edit-container': [sleeveKey: string, enabled: boolean];
-  'edit-role': [
-    sleeveKey: string,
-    role: 'is_direct_index_sleeve' | 'is_cash_sleeve',
-    enabled: boolean,
-  ];
-  'edit-transition': [sleeveKey: string, enabled: boolean];
   'edit-enabled': [sleeveKey: string, enabled: boolean];
   'edit-reassignment': [sleeveKey: string, optionValue: string];
   move: [sleeveKey: string, direction: -1 | 1];
   delete: [sleeveKey: string];
+  'add-child': [parentKey: string];
+  'open-settings': [sleeveKey: string];
+  'toggle-expand': [sleeveKey: string];
 }>();
 
 function controlId(field: string): string {

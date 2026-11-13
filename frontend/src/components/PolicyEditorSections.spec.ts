@@ -61,12 +61,10 @@ function expectSleeveTable(wrapper: ReturnType<typeof mount>, caption: string): 
   const table = region.get('table');
   expect(table.find('caption').text().replace(/\s+/g, ' ').trim()).toBe(caption);
   expect(table.findAll('thead th[scope="col"]').map((header) => header.text().trim())).toEqual([
-    'Order / sleeve key',
+    'Allocation',
     'Name',
-    'Parent',
-    'Target (%)',
+    'Target (% of portfolio / parent)',
     'Drift band (pp)',
-    'Designations',
     'Enabled',
     'Actions',
   ]);
@@ -78,14 +76,23 @@ function expectSleeveTable(wrapper: ReturnType<typeof mount>, caption: string): 
   expect(new Set(ids).size).toBe(ids.length);
 }
 
-function sleeveCheckbox(wrapper: ReturnType<typeof mount>, labelText: string) {
-  const label = wrapper
-    .findAll('label')
-    .find((candidate) => candidate.text().replace(/\s+/g, ' ').trim() === labelText);
+function sleeveCheckbox(wrapper: ReturnType<typeof mount>, labelText: string): HTMLButtonElement {
+  const labels = [
+    ...wrapper.element.querySelectorAll('label'),
+    ...document.body.querySelectorAll('label'),
+  ];
+  const label = labels.find(
+    (candidate) => candidate.textContent?.replace(/\s+/g, ' ').trim() === labelText,
+  );
   if (!label) throw new Error(`Sleeve checkbox label not found: ${labelText}`);
-  const id = label.attributes('for');
+  const id = label.getAttribute('for');
   if (!id) throw new Error(`Sleeve checkbox label is not associated: ${labelText}`);
-  return wrapper.get(`[data-slot="checkbox"][id="${id}"]`);
+  const checkbox =
+    (wrapper.element as HTMLElement).querySelector<HTMLButtonElement>(
+      `[data-slot="checkbox"][id="${id}"]`,
+    ) ?? document.body.querySelector<HTMLButtonElement>(`[data-slot="checkbox"][id="${id}"]`);
+  if (!checkbox) throw new Error(`Sleeve checkbox control not found: ${labelText}`);
+  return checkbox;
 }
 
 async function setSleeveCheckboxValue(
@@ -94,7 +101,33 @@ async function setSleeveCheckboxValue(
   checked: boolean,
 ): Promise<void> {
   const checkbox = sleeveCheckbox(wrapper, labelText);
-  if (checkbox.attributes('aria-checked') !== String(checked)) await checkbox.trigger('click');
+  if (checkbox.getAttribute('aria-checked') !== String(checked)) checkbox.click();
+  await nextTick();
+}
+
+async function chooseSleeveAction(
+  wrapper: ReturnType<typeof mount>,
+  displayName: string,
+  actionLabel: string,
+): Promise<void> {
+  await wrapper.get(`button[aria-label="Actions for ${displayName}"]`).trigger('click');
+  await nextTick();
+  const items = [
+    ...(wrapper.element as HTMLElement).querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    ...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+  ];
+  const action = items.find(
+    (candidate) => candidate.textContent?.replace(/\s+/g, ' ').trim() === actionLabel,
+  );
+  if (!action) throw new Error(`Sleeve action not found for ${displayName}: ${actionLabel}`);
+  action.click();
+  await nextTick();
+}
+
+async function closeSleeveSettings(): Promise<void> {
+  const close = document.body.querySelector<HTMLButtonElement>('[data-slot="sheet-close"]');
+  if (!close) throw new Error('Sleeve settings sheet close button not found');
+  close.click();
   await nextTick();
 }
 
@@ -103,11 +136,15 @@ function sleeveDeletionPanel(wrapper: ReturnType<typeof mount>) {
 }
 
 function sleeveSelect(wrapper: ReturnType<typeof mount>, labelText: string) {
-  const label = wrapper
-    .findAll('label')
-    .find((candidate) => candidate.text().replace(/\s+/g, ' ').trim() === labelText);
+  const labels = [
+    ...wrapper.element.querySelectorAll('label'),
+    ...document.body.querySelectorAll('label'),
+  ];
+  const label = labels.find(
+    (candidate) => candidate.textContent?.replace(/\s+/g, ' ').trim() === labelText,
+  );
   if (!label) throw new Error(`Sleeve select label not found: ${labelText}`);
-  const labelId = label.attributes('id');
+  const labelId = label.id;
   if (!labelId) throw new Error(`Sleeve select label has no ID: ${labelText}`);
   const select = wrapper
     .findAllComponents(Select)
@@ -117,9 +154,14 @@ function sleeveSelect(wrapper: ReturnType<typeof mount>, labelText: string) {
   if (!select) throw new Error(`Sleeve select not found: ${labelText}`);
   return {
     select,
-    triggerId: select
-      .get(`[data-slot="select-trigger"][aria-labelledby="${labelId}"]`)
-      .attributes('id'),
+    triggerId:
+      wrapper.element
+        .querySelector(`[data-slot="select-trigger"][aria-labelledby="${labelId}"]`)
+        ?.getAttribute('id') ??
+      document.body
+        .querySelector(`[data-slot="select-trigger"][aria-labelledby="${labelId}"]`)
+        ?.getAttribute('id') ??
+      '',
   };
 }
 
@@ -362,9 +404,25 @@ describe('purpose-built policy editor sections', () => {
     );
 
     await wrapper
-      .get('input[aria-label="Target percent for US equities"]')
+      .get('input[aria-label="Target percent of portfolio for US equities"]')
       .setValue('45.000000000000001');
     expect(draft.sleeves).not.toBe(originalSleeves);
+
+    expect(wrapper.findAll('tbody tr').map((row) => row.attributes('data-sleeve-key'))).toEqual([
+      'us',
+      'legacy',
+      'destination',
+      'cash',
+      'other',
+    ]);
+    expect(wrapper.get('tr[data-sleeve-key="legacy"]').attributes('data-hierarchy-depth')).toBe(
+      '1',
+    );
+    expect(
+      wrapper
+        .find('input[aria-label="Target percent within US equities for Direct indexing"]')
+        .exists(),
+    ).toBe(true);
     expect(draft.sleeves[0]?.target_pct).toBe('45.000000000000001');
     await wrapper.get('button[aria-label="Move Direct indexing down"]').trigger('click');
     expect(draft.sleeves.map((item) => item.sleeve_key)).toEqual([
@@ -377,6 +435,7 @@ describe('purpose-built policy editor sections', () => {
     await wrapper.get('button[aria-label="Move Other up"]').trigger('click');
     expect(draft.sleeves.map((item) => item.sleeve_key).slice(-2)).toEqual(['other', 'cash']);
 
+    await chooseSleeveAction(wrapper, 'Other', 'Allocation settings');
     await setSleeveCheckboxValue(wrapper, 'Direct-index container for Other', true);
     expect(draft.sleeves.find((item) => item.sleeve_key === 'us')?.is_direct_index_container).toBe(
       false,
@@ -391,16 +450,25 @@ describe('purpose-built policy editor sections', () => {
     expect(draft.sleeves.find((item) => item.sleeve_key === 'other')?.is_direct_index_sleeve).toBe(
       true,
     );
-    await setSleeveCheckboxValue(wrapper, 'Transition destination sub-sleeve for Other', true);
     expect(
       draft.sleeves.find((item) => item.sleeve_key === 'destination')?.is_transition_destination,
-    ).toBe(false);
+    ).toBe(true);
     expect(
       draft.sleeves.find((item) => item.sleeve_key === 'other')?.is_transition_destination,
-    ).toBe(true);
+    ).toBe(false);
+    expect(wrapper.find('[data-slot="checkbox"][id$="-transition-destination"]').exists()).toBe(
+      false,
+    );
+    await setSleeveCheckboxValue(wrapper, 'Cash sleeve for Other', true);
+    expect(draft.sleeves.find((item) => item.sleeve_key === 'other')?.is_cash_sleeve).toBe(true);
+    await setSleeveCheckboxValue(wrapper, 'Cash sleeve for Other', false);
+    expect(draft.sleeves.find((item) => item.sleeve_key === 'other')?.is_cash_sleeve).toBe(false);
     expect(draft.sleeves.find((item) => item.sleeve_key === 'cash')?.is_cash_sleeve).toBe(true);
 
-    await wrapper.get('button[aria-label="Delete US equities"]').trigger('click');
+    await closeSleeveSettings();
+    expect(draft.sleeves.find((item) => item.sleeve_key === 'cash')?.is_cash_sleeve).toBe(true);
+
+    await chooseSleeveAction(wrapper, 'US equities', 'Delete allocation');
     const deletePanel = sleeveDeletionPanel(wrapper)!;
     expect(deletePanel.attributes('aria-labelledby')).toBe(deletePanel.get('h3').attributes('id'));
     await setSleeveSelectValue(wrapper, 'Holding reassignment destination', 'Other');
@@ -438,7 +506,9 @@ describe('purpose-built policy editor sections', () => {
       },
     });
 
-    const addButton = wrapper.findAll('button').find((button) => button.text() === 'Add sleeve');
+    const addButton = wrapper
+      .findAll('button')
+      .find((button) => button.text() === 'Add allocation');
     expect(addButton).toBeDefined();
     await addButton!.trigger('click');
 
@@ -451,6 +521,132 @@ describe('purpose-built policy editor sections', () => {
     });
     expect(typeof draft.sleeves[1]?.target_pct).toBe('string');
     expect(typeof draft.sleeves[1]?.drift_band_pp).toBe('string');
+  });
+
+  it('renders a depth-first sleeve hierarchy with accessible collapse and sibling-only ordering', async () => {
+    const draft = reactive(createEmptyPolicyDraft());
+    draft.sleeves = [
+      sleeve('root', { display_name: 'Root', target_pct: '100' }),
+      sleeve('child-a', { display_name: 'Child A', parent_sleeve_key: 'root', target_pct: '60' }),
+      sleeve('grandchild', {
+        display_name: 'Grandchild',
+        parent_sleeve_key: 'child-a',
+        target_pct: '100',
+      }),
+      sleeve('child-b', { display_name: 'Child B', parent_sleeve_key: 'root', target_pct: '40' }),
+      sleeve('other', { display_name: 'Other', target_pct: '0' }),
+    ];
+    const wrapper = mount(PolicySleevesEditor, {
+      props: {
+        draft,
+        positions: null,
+        targetIssues: [],
+        sourceRevisionId: null,
+        'onUpdate:sleeves': (next: EditableSleeve[]) => {
+          draft.sleeves = next;
+        },
+      },
+    });
+
+    expect(wrapper.findAll('tbody tr').map((row) => row.attributes('data-sleeve-key'))).toEqual([
+      'root',
+      'child-a',
+      'grandchild',
+      'child-b',
+      'other',
+    ]);
+    expect(
+      wrapper.findAll('tbody tr').map((row) => row.attributes('data-hierarchy-depth')),
+    ).toEqual(['0', '1', '2', '1', '0']);
+    expect(wrapper.find('input[aria-label="Target percent of portfolio for Root"]').exists()).toBe(
+      true,
+    );
+    expect(
+      wrapper.find('input[aria-label="Target percent within Root for Child A"]').exists(),
+    ).toBe(true);
+    expect(
+      wrapper.find('input[aria-label="Target percent within Child A for Grandchild"]').exists(),
+    ).toBe(true);
+
+    await chooseSleeveAction(wrapper, 'Root', 'Allocation settings');
+    expect(
+      sleeveCheckbox(wrapper, 'Direct-index container for Root').getAttribute('aria-checked'),
+    ).toBe('false');
+    await closeSleeveSettings();
+
+    await wrapper.get('button[aria-label="Collapse children of Root"]').trigger('click');
+    await nextTick();
+    expect(wrapper.findAll('tbody tr').map((row) => row.attributes('data-sleeve-key'))).toEqual([
+      'root',
+      'other',
+    ]);
+    expect(
+      wrapper.get('button[aria-label="Expand children of Root"]').attributes('aria-expanded'),
+    ).toBe('false');
+    await wrapper.get('button[aria-label="Expand children of Root"]').trigger('click');
+    await nextTick();
+    await wrapper.get('button[aria-label="Move Child B up"]').trigger('click');
+    expect(wrapper.findAll('tbody tr').map((row) => row.attributes('data-sleeve-key'))).toEqual([
+      'root',
+      'child-b',
+      'child-a',
+      'grandchild',
+      'other',
+    ]);
+    expect(draft.sleeves.find((item) => item.sleeve_key === 'grandchild')?.parent_sleeve_key).toBe(
+      'child-a',
+    );
+    wrapper.unmount();
+  });
+
+  it('adds a blank child from its parent and reparents it through contextual settings', async () => {
+    const draft = reactive(createEmptyPolicyDraft());
+    draft.sleeves = [
+      sleeve('root-a', { display_name: 'Root A' }),
+      sleeve('prior', { display_name: 'Prior child', parent_sleeve_key: 'root-a' }),
+      sleeve('root-b', { display_name: 'Root B' }),
+    ];
+    const wrapper = mount(PolicySleevesEditor, {
+      props: {
+        draft,
+        positions: null,
+        targetIssues: [],
+        sourceRevisionId: null,
+        'onUpdate:sleeves': (next: EditableSleeve[]) => {
+          draft.sleeves = next;
+        },
+      },
+    });
+
+    await wrapper.get('button[aria-label="Collapse children of Root A"]').trigger('click');
+    await nextTick();
+    await chooseSleeveAction(wrapper, 'Root A', 'Add sub-sleeve');
+    const newSleeve = draft.sleeves.find((item) => item.sleeve_key === 'sleeve-new-1');
+    expect(newSleeve).toMatchObject({
+      parent_sleeve_key: 'root-a',
+      target_pct: '',
+      drift_band_pp: '',
+      enabled: true,
+    });
+    expect(
+      wrapper.get('tr[data-sleeve-key="sleeve-new-1"]').attributes('data-parent-sleeve-key'),
+    ).toBe('root-a');
+    expect(
+      wrapper.find('input[aria-label="Target percent within Root A for sleeve-new-1"]').exists(),
+    ).toBe(true);
+
+    await chooseSleeveAction(wrapper, 'sleeve-new-1', 'Allocation settings');
+    await setSleeveSelectValue(wrapper, 'Parent sleeve for sleeve-new-1', 'Root B');
+    expect(
+      draft.sleeves.find((item) => item.sleeve_key === 'sleeve-new-1')?.parent_sleeve_key,
+    ).toBe('root-b');
+    expect(
+      wrapper.get('tr[data-sleeve-key="sleeve-new-1"]').attributes('data-parent-sleeve-key'),
+    ).toBe('root-b');
+    expect(
+      wrapper.find('input[aria-label="Target percent within Root B for sleeve-new-1"]').exists(),
+    ).toBe(true);
+    wrapper.unmount();
   });
 
   it('requires an explicit holdings destination when disabling and clears reassignment on reenable', async () => {
@@ -511,7 +707,7 @@ describe('purpose-built policy editor sections', () => {
       },
     });
 
-    await wrapper.get('button[aria-label="Delete Parent"]').trigger('click');
+    await chooseSleeveAction(wrapper, 'Parent', 'Delete allocation');
     await setSleeveSelectValue(wrapper, 'Move child “Child” under', 'Other');
     const cancelButton = wrapper.findAll('button').find((button) => button.text() === 'Cancel');
     expect(cancelButton).toBeDefined();
@@ -519,7 +715,7 @@ describe('purpose-built policy editor sections', () => {
     expect(sleeveDeletionPanel(wrapper) !== undefined).toBe(false);
     expect(draft.sleeves.map((item) => item.sleeve_key)).toEqual(['parent', 'child', 'other']);
 
-    await wrapper.get('button[aria-label="Delete Parent"]').trigger('click');
+    await chooseSleeveAction(wrapper, 'Parent', 'Delete allocation');
     await setSleeveSelectValue(wrapper, 'Move child “Child” under', 'Other');
     await wrapper.setProps({ sourceRevisionId: 'revision-2' });
     expect(sleeveDeletionPanel(wrapper) !== undefined).toBe(false);
@@ -544,7 +740,7 @@ describe('purpose-built policy editor sections', () => {
       },
     });
 
-    await wrapper.get('button[aria-label="Delete Parent"]').trigger('click');
+    await chooseSleeveAction(wrapper, 'Parent', 'Delete allocation');
     const childParentLabel = 'Move child “Child” under';
     await setSleeveSelectValue(wrapper, childParentLabel, 'Top level');
 
@@ -726,7 +922,9 @@ describe('purpose-built policy editor sections', () => {
         sourceRevisionId: 'source',
       },
     });
-    await sleeveWrapper.find('input[aria-label="Target percent for us"]').setValue('0.00000001');
+    await sleeveWrapper
+      .find('input[aria-label="Target percent of portfolio for us"]')
+      .setValue('0.00000001');
     expect(sleeveDraft.sleeves).toBe(sleevesBefore);
     expect(sleeveDraft.sleeves[0]?.target_pct).toBe('0');
     const sleeveUpdate = sleeveWrapper.emitted('update:sleeves')?.[0]?.[0] as EditableSleeve[];

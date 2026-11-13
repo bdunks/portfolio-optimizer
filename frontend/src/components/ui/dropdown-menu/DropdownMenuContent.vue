@@ -1,0 +1,42 @@
+<script setup lang="ts">
+import { omitUndefinedProps } from '@/components/ui/props';
+import type { DropdownMenuContentEmits, DropdownMenuContentProps } from 'reka-ui';
+import type { HTMLAttributes } from 'vue';
+import { reactiveOmit } from '@vueuse/core';
+import { cn } from 'cn';
+import { DropdownMenuContent, DropdownMenuPortal, useForwardPropsEmits } from 'reka-ui';
+
+defineOptions({
+  inheritAttrs: false,
+});
+
+const props = withDefaults(
+  defineProps<DropdownMenuContentProps & { class?: HTMLAttributes['class'] }>(),
+  {
+    align: 'start',
+    sideOffset: 4,
+  },
+);
+const emits = defineEmits<DropdownMenuContentEmits>();
+
+const delegatedProps = reactiveOmit(props, 'class');
+
+const forwarded = useForwardPropsEmits(delegatedProps, emits);
+</script>
+
+<template>
+  <DropdownMenuPortal>
+    <DropdownMenuContent
+      data-slot="dropdown-menu-content"
+      v-bind="omitUndefinedProps({ ...$attrs, ...forwarded })"
+      :class="
+        cn(
+          'tw:data-open:animate-in tw:data-closed:animate-out tw:data-closed:fade-out-0 tw:data-open:fade-in-0 tw:data-closed:zoom-out-95 tw:data-open:zoom-in-95 tw:data-[side=bottom]:slide-in-from-top-2 tw:data-[side=left]:slide-in-from-right-2 tw:data-[side=right]:slide-in-from-left-2 tw:data-[side=top]:slide-in-from-bottom-2 tw:ring-foreground/10 tw:bg-popover tw:text-popover-foreground tw:min-w-32 tw:rounded-lg tw:p-1 tw:shadow-md tw:ring-1 tw:duration-100 tw: tw:cn-menu-translucent tw:z-50 tw:max-h-(--reka-dropdown-menu-content-available-height) tw:w-(--reka-dropdown-menu-trigger-width) tw:origin-(--reka-dropdown-menu-content-transform-origin) tw:overflow-x-hidden tw:overflow-y-auto tw:data-[state=closed]:overflow-hidden',
+          props.class,
+        )
+      "
+    >
+      <slot />
+    </DropdownMenuContent>
+  </DropdownMenuPortal>
+</template>

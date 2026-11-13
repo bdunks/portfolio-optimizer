@@ -220,46 +220,84 @@ async function expectAllocationHeadingFontSize(page: Page, viewport: string): Pr
 async function expectTransitionLayout(
   root: Locator,
   viewport: string,
-  desktop: boolean,
+  wide: boolean,
+  provenanceLabel: string,
 ): Promise<void> {
   await expect(root).toBeVisible();
-  for (const state of ['current', 'proposed', 'target']) {
-    await expect(root.locator(`article[data-state="${state}"]`)).toBeVisible();
-  }
-  const grid = await root.locator('.state-grid').evaluate((element) => {
-    const style = getComputedStyle(element);
-    return {
-      columns: style.gridTemplateColumns.split(/\s+/).filter(Boolean).length,
-      clientWidth: element.clientWidth,
-      scrollWidth: element.scrollWidth,
-    };
+  await expect(root.getByText(provenanceLabel, { exact: true })).toBeVisible();
+
+  const comparison = root.getByRole('region', {
+    name: 'US allocation transition comparison',
   });
-  expect(grid.columns, `${viewport} transition state grid columns`).toBe(desktop ? 3 : 1);
-  expect(grid.scrollWidth, `${viewport} transition grid width`).toBeLessThanOrEqual(
-    grid.clientWidth + 1,
+  await expect(comparison).toBeVisible();
+  const table = comparison.getByRole('table');
+  await expect(table).toBeVisible();
+  await expect(table.getByRole('caption')).toHaveText(
+    'Current, after selected trades, and configured target percentages within the US sleeve',
   );
 
+  const columnLabels = await table.getByRole('columnheader').allTextContents();
+  expect(
+    columnLabels.map((label) => label.trim()),
+    `${viewport} transition state columns`,
+  ).toEqual(['Allocation sleeve', 'Current', 'After selected trades', 'Target']);
+  const summaryLabels = await root
+    .locator('.whole-portfolio-summary .summary-label')
+    .allTextContents();
+  expect(
+    summaryLabels.map((label) => label.trim()),
+    `${viewport} whole-portfolio states`,
+  ).toEqual([
+    'Current US sleeve · of whole portfolio',
+    'After selected trades · of whole portfolio',
+    'Target US sleeve · of whole portfolio',
+  ]);
+  await expect(root.locator('.whole-portfolio-summary strong')).toHaveCount(3);
+
+  const bodyRows = await table.locator('tbody tr').evaluateAll((rows) =>
+    rows.map((row) => ({
+      rowHeaders: row.querySelectorAll('th[scope="row"]').length,
+      stateCellColspans: Array.from(row.querySelectorAll('td')).map((cell) => cell.colSpan),
+    })),
+  );
+  expect(bodyRows.length, `${viewport} transition component rows`).toBeGreaterThan(0);
+  for (const [index, row] of bodyRows.entries()) {
+    expect(row.rowHeaders, `${viewport} transition row ${index + 1} label`).toBe(1);
+    const hasThreeStateValues =
+      row.stateCellColspans.length === 3 && row.stateCellColspans.every((colspan) => colspan === 1);
+    const hasUnavailableStatePlaceholder =
+      row.stateCellColspans.length === 1 && row.stateCellColspans[0] === 3;
+    expect(
+      hasThreeStateValues || hasUnavailableStatePlaceholder,
+      `${viewport} transition row ${index + 1} has current, proposed, and target cells`,
+    ).toBe(true);
+  }
+
+  const comparisonLayout = await comparison.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(comparisonLayout.clientWidth, `${viewport} comparison region width`).toBeGreaterThan(0);
+  if (wide) {
+    expect(
+      comparisonLayout.scrollWidth,
+      `${viewport} transition table fits without horizontal scrolling`,
+    ).toBeLessThanOrEqual(comparisonLayout.clientWidth + 1);
+  } else {
+    expect(
+      comparisonLayout.scrollWidth,
+      `${viewport} transition table remains horizontally scrollable in its region`,
+    ).toBeGreaterThan(comparisonLayout.clientWidth);
+  }
+
   const titleSize = await root
-    .locator('h2')
+    .getByRole('heading', {
+      name: 'US Equities Transition Policy',
+      level: 2,
+      exact: true,
+    })
     .evaluate((element) => getComputedStyle(element).fontSize);
   expect(titleSize, `${viewport} transition heading computed font-size`).toBe('18px');
-  const cardTitleSizes = await root
-    .locator('.transition-state-title')
-    .evaluateAll((elements) => [
-      ...new Set(elements.map((element) => getComputedStyle(element).fontSize)),
-    ]);
-  expect(cardTitleSizes, `${viewport} transition card heading computed font-size`).toEqual([
-    '16px',
-  ]);
-  const componentTitleSizes = await root
-    .locator('.component-heading')
-    .evaluateAll((elements) => [
-      ...new Set(elements.map((element) => getComputedStyle(element).fontSize)),
-    ]);
-  expect(
-    componentTitleSizes,
-    `${viewport} transition component heading computed font-size`,
-  ).toEqual(['14px']);
 }
 
 async function expectRunSummaryHeadingSizes(root: Locator, viewport: string): Promise<void> {
@@ -1062,7 +1100,12 @@ test('FakeBroker policy, review, and lot workflows', async ({
   const overviewDesktopScreenshot = testInfo.outputPath('overview-allocation-desktop.png');
   await expectAllocationHeadingFontSize(page, 'Overview desktop');
   const overviewTransition = page.locator('.transition-panel').first();
-  await expectTransitionLayout(overviewTransition, 'Overview desktop', true);
+  await expectTransitionLayout(
+    overviewTransition,
+    'Overview desktop',
+    true,
+    'Current portfolio API context',
+  );
   const overviewTransitionDesktopScreenshot = testInfo.outputPath(
     'overview-us-transition-desktop.png',
   );
@@ -1114,7 +1157,12 @@ test('FakeBroker policy, review, and lot workflows', async ({
     )
     .toBeLessThan(desktopOverviewSvgWidth);
   await expectNoHorizontalOverflow(page, 'Overview allocation chart at mobile');
-  await expectTransitionLayout(overviewTransition, 'Overview mobile', false);
+  await expectTransitionLayout(
+    overviewTransition,
+    'Overview mobile',
+    false,
+    'Current portfolio API context',
+  );
   const overviewTransitionMobileScreenshot = testInfo.outputPath(
     'overview-us-transition-mobile.png',
   );
@@ -1273,7 +1321,12 @@ test('FakeBroker policy, review, and lot workflows', async ({
   await expect(recommendationChart).toBeVisible();
   await expect(recommendationChart.locator('.ts-chart-host svg')).toBeVisible();
   const recommendationsTransition = page.locator('.transition-panel').first();
-  await expectTransitionLayout(recommendationsTransition, 'Recommendations desktop', true);
+  await expectTransitionLayout(
+    recommendationsTransition,
+    'Recommendations desktop',
+    true,
+    'Current selected-basket API context',
+  );
   const recommendationsTransitionDesktopScreenshot = testInfo.outputPath(
     'recommendations-us-transition-desktop.png',
   );
@@ -1310,7 +1363,12 @@ test('FakeBroker policy, review, and lot workflows', async ({
     .toBeLessThan(desktopRecommendationsSvgWidth);
   await expectNoHorizontalOverflow(page, 'Recommendations allocation chart at mobile');
   await expectNoHorizontalOverflow(page, 'Recommendations page at mobile');
-  await expectTransitionLayout(recommendationsTransition, 'Recommendations mobile', false);
+  await expectTransitionLayout(
+    recommendationsTransition,
+    'Recommendations mobile',
+    false,
+    'Current selected-basket API context',
+  );
   await page.evaluate(() => window.scrollTo(0, 0));
   await expect(recommendationsHeading).toBeInViewport();
   await expect(runRecommendationsButton).toBeInViewport();

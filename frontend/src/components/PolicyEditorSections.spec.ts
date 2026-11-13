@@ -66,6 +66,7 @@ function expectSleeveTable(wrapper: ReturnType<typeof mount>, caption: string): 
     'Target (% of portfolio / parent)',
     'Drift band (pp)',
     'Enabled',
+    'Replacement sets',
     'Actions',
   ]);
   const controls = editor.findAll(
@@ -253,6 +254,7 @@ function expectReplacementTable(
     'Sub-sleeve',
     'Exposure suitability (API note)',
     'Enabled',
+
     'Actions',
   ]);
   return table.element;
@@ -360,6 +362,73 @@ describe('purpose-built policy editor sections', () => {
     expect(new Set(ids).size).toBe(2);
     expect(headings[0]?.element.closest('section')?.getAttribute('aria-labelledby')).toBe(ids[0]);
     expect(headings[1]?.element.closest('section')?.getAttribute('aria-labelledby')).toBe(ids[1]);
+  });
+
+  it('shows replacement candidates at each configured allocation without inferring New holdings', async () => {
+    const draft = reactive(createEmptyPolicyDraft());
+    draft.sleeves = [
+      sleeve('us', { display_name: 'US equities', is_direct_index_container: true }),
+      sleeve('new', { display_name: 'New destination', parent_sleeve_key: 'us' }),
+      sleeve('international', { display_name: 'International' }),
+      sleeve('remote', {
+        display_name: 'Remote destination',
+        parent_sleeve_key: 'international',
+        is_transition_destination: true,
+      }),
+    ];
+    draft.allowedSecurities = [
+      {
+        ticker: 'REMOTE',
+        sleeve_key: 'us',
+        sub_sleeve_key: 'remote',
+        replacement_set_id: 'shared-set',
+        priority: 0,
+        enabled: false,
+      },
+      {
+        ticker: 'VTI',
+        sleeve_key: 'us',
+        sub_sleeve_key: 'new',
+        replacement_set_id: 'shared-set',
+        priority: 1,
+        enabled: true,
+      },
+      {
+        ticker: 'BAD',
+        sleeve_key: 'international',
+        sub_sleeve_key: 'new',
+        replacement_set_id: 'shared-set',
+        priority: 2,
+        enabled: true,
+      },
+    ];
+    const wrapper = mount(PolicySleevesEditor, {
+      props: {
+        draft,
+        positions: null,
+        targetIssues: [],
+        sourceRevisionId: null,
+      },
+    });
+    const usRow = () => wrapper.get('tr[data-sleeve-key="us"]');
+    const newRow = () => wrapper.get('tr[data-sleeve-key="new"]');
+
+    expect(usRow().text()).toContain('shared-set · REMOTE · Disabled · Remote destination');
+    expect(usRow().text()).toContain('shared-set · VTI · Enabled · New destination');
+    expect(usRow().text()).not.toContain('New holdings');
+    expect(newRow().text()).toContain('shared-set · BAD · Enabled · New destination');
+
+    const remote = draft.sleeves.find((item) => item.sleeve_key === 'remote');
+    const newDestination = draft.sleeves.find((item) => item.sleeve_key === 'new');
+    if (!remote || !newDestination) throw new Error('Replacement destination fixture is missing');
+    remote.is_transition_destination = false;
+    newDestination.is_transition_destination = true;
+    await nextTick();
+    expect(usRow().text()).toContain('shared-set · VTI · Enabled · New holdings (New destination)');
+    expect(usRow().text()).toContain('shared-set · REMOTE · Disabled · Remote destination');
+    expect(newRow().text()).toContain('shared-set · BAD · Enabled · New destination');
+    expect(newRow().text()).not.toContain('shared-set · BAD · Enabled · New holdings');
+    wrapper.unmount();
   });
 
   it('edits nested sleeve roles, stable keys, order, and explicit holdings on deletion', async () => {
@@ -793,7 +862,7 @@ describe('purpose-built policy editor sections', () => {
     });
     const table = expectReplacementTable(
       wrapper,
-      'Configured ETF replacement candidates and policy settings',
+      'Configured replacement-set securities and policy settings',
     );
     const enabledToggle = wrapper.findAllComponents(Checkbox)[0]!;
     expect(enabledToggle.props('modelValue')).toBe(true);

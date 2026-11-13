@@ -30,7 +30,7 @@
 
   <FieldGroup v-else-if="kind === 'ticker'" class="tw:min-w-0 tw:gap-1">
     <Field>
-      <FieldLabel :for="controlId('ticker')" class="tw:sr-only">ETF ticker</FieldLabel>
+      <FieldLabel :for="controlId('ticker')" class="tw:sr-only">Security ticker</FieldLabel>
       <Input
         :id="controlId('ticker')"
         :model-value="security.ticker"
@@ -174,7 +174,7 @@
     type="button"
     variant="destructive"
     size="sm"
-    :aria-label="`Remove ${security.ticker || 'ETF candidate'}`"
+    :aria-label="`Remove ${security.ticker || 'candidate'}`"
     @click="emit('remove', rowId)"
   >
     <Trash2 aria-hidden="true" />

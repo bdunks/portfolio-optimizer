@@ -13,17 +13,22 @@
         >
           <div class="tw:min-w-0 tw:flex-1">
             <h2 :id="`${sectionId}-title`" class="replacement-editor-title">
-              Approved ETF replacement sets
+              {{
+                props.context
+                  ? `Replacement sets for ${props.context.label}`
+                  : 'All configured replacement sets'
+              }}
             </h2>
             <CardDescription class="replacement-editor-description">
-              Set ID groups candidate pairs or triplets; priority, suitability, enabled status, and
-              sleeve assignments are explicit policy data. Distinct approved funds are a user
-              assumption, not a wash-sale guarantee or automated exposure-equivalence check.
+              Replacement-set IDs group securities; priority, suitability, enabled status, and
+              allocation assignments are explicit policy data. Distinct investments are a
+              user-entered wash-sale assumption, not a guarantee or automated exposure-equivalence
+              check.
             </CardDescription>
           </div>
           <Button :id="addButtonId" type="button" variant="outline" size="sm" @click="addSecurity">
             <Plus aria-hidden="true" />
-            Add ETF candidate
+            Add security
           </Button>
         </div>
       </CardHeader>
@@ -37,7 +42,7 @@
             class="tw:min-w-[76rem]"
           >
             <TableCaption class="tw:sr-only">
-              Configured ETF replacement candidates and policy settings
+              Configured replacement-set securities and policy settings
             </TableCaption>
             <TableHeader>
               <TableRow v-for="headerGroup in table.getHeaderGroups()" :key="headerGroup.id">
@@ -66,10 +71,14 @@
                   <TableEmpty v-if="tableRows.length === 0" :colspan="9">
                     <Empty class="tw:border-0 tw:bg-transparent">
                       <EmptyHeader>
-                        <EmptyTitle>No replacement candidates</EmptyTitle>
+                        <EmptyTitle>{{
+                          props.context
+                            ? `No replacement securities for ${props.context.label}`
+                            : 'No replacement candidates'
+                        }}</EmptyTitle>
                         <EmptyDescription>
-                          Nothing is inferred or added automatically. Add a candidate to configure
-                          an approved replacement set.
+                          Nothing is inferred or added automatically. Add a security to configure a
+                          replacement set.
                         </EmptyDescription>
                       </EmptyHeader>
                     </Empty>
@@ -112,7 +121,17 @@ import type { AllowedSecurityInput } from '@/types/api';
 import type { EditablePolicyDraft, EditableSleeve } from '@/pages/policy-form';
 import { policyReplacementSetsSchema } from '@/forms/policy-replacement-sets';
 
-const props = defineProps<{ draft: EditablePolicyDraft }>();
+type ReplacementSetsContext = {
+  sleeveKey: string;
+  label: string;
+  requireSubSleeve?: boolean;
+  newSubSleeveKey?: string;
+};
+
+const props = defineProps<{
+  draft: EditablePolicyDraft;
+  context?: ReplacementSetsContext | null;
+}>();
 const emit = defineEmits<{
   'update:allowed-securities': [securities: AllowedSecurityInput[]];
 }>();
@@ -122,6 +141,7 @@ const sectionRoot = shallowRef<HTMLElement | null>(null);
 const addButtonId = `${sectionId}-add-candidate`;
 let nextRowId = 0;
 
+const pendingAddedRows = shallowRef(new Map<string, string>());
 type ReplacementFormSecurity = {
   ticker: string;
   sleeve_key: string;
@@ -322,12 +342,21 @@ function setRows(nextRows: ReplacementFormRow[]): void {
 }
 
 function updateSecurity(rowId: string, patch: Partial<AllowedSecurityInput>): void {
+  const focusTarget =
+    Object.hasOwn(patch, 'sleeve_key') || Object.hasOwn(patch, 'sub_sleeve_key')
+      ? visibleRowFocusTarget(rowId)
+      : null;
   setRows(
     rows.value.map((row) => ({
       rowId: row.rowId,
       security: row.rowId === rowId ? { ...row.security, ...patch } : { ...row.security },
     })),
   );
+  if (focusTarget) {
+    void nextTick(() => {
+      if (!tableRows.value.some((row) => row.original.rowId === rowId)) focusControl(focusTarget);
+    });
+  }
 }
 
 function setSecurityText(
@@ -375,16 +404,49 @@ function focusControl(id: string): void {
   target?.focus();
 }
 
+function visibleRowFocusTarget(rowId: string): string | null {
+  const visibleIds = tableRows.value.map((row) => row.original.rowId);
+  const index = visibleIds.indexOf(rowId);
+  if (index < 0) return null;
+  const focusRowId = visibleIds[index + 1] ?? visibleIds[index - 1];
+  return focusRowId ? `${sectionId}-${focusRowId}-remove` : addButtonId;
+}
+
+function newSecurityAssignment(): Pick<ReplacementFormSecurity, 'sleeve_key' | 'sub_sleeve_key'> {
+  const context = props.context;
+  if (!context) return { sleeve_key: '', sub_sleeve_key: null };
+
+  const contextSleeve = sleeves.value.find((sleeve) => sleeve.sleeve_key === context.sleeveKey);
+  if (contextSleeve?.parent_sleeve_key) {
+    const parent = sleeves.value.find(
+      (sleeve) => sleeve.sleeve_key === contextSleeve.parent_sleeve_key,
+    );
+    if (parent && !parent.parent_sleeve_key)
+      return { sleeve_key: parent.sleeve_key, sub_sleeve_key: contextSleeve.sleeve_key };
+    return { sleeve_key: '', sub_sleeve_key: null };
+  }
+
+  const destination = context.newSubSleeveKey
+    ? sleeves.value.find((sleeve) => sleeve.sleeve_key === context.newSubSleeveKey)
+    : undefined;
+  if (destination?.parent_sleeve_key === context.sleeveKey) {
+    return { sleeve_key: context.sleeveKey, sub_sleeve_key: destination.sleeve_key };
+  }
+  if (context.requireSubSleeve) return { sleeve_key: '', sub_sleeve_key: null };
+  return { sleeve_key: context.sleeveKey, sub_sleeve_key: null };
+}
+
 async function addSecurity(): Promise<void> {
   const currentSecurities = securitiesFromRows(rows.value);
+  const rowId = createRowId();
+  const assignment = newSecurityAssignment();
   setRows([
     ...rows.value,
     {
-      rowId: createRowId(),
+      rowId,
       security: {
         ticker: '',
-        sleeve_key: '',
-        sub_sleeve_key: null,
+        ...assignment,
         replacement_set_id: '',
         priority: currentSecurities.length,
         enabled: true,
@@ -392,17 +454,23 @@ async function addSecurity(): Promise<void> {
       },
     },
   ]);
+  if (props.context) {
+    const pending = new Map(pendingAddedRows.value);
+    pending.set(rowId, props.context.sleeveKey);
+    pendingAddedRows.value = pending;
+  }
   await nextTick();
-  const lastRow = rows.value.at(-1);
-  if (lastRow) focusControl(`${sectionId}-${lastRow.rowId}-ticker`);
+  focusControl(`${sectionId}-${rowId}-ticker`);
 }
 
 function removeSecurity(rowId: string): void {
-  const index = rows.value.findIndex((row) => row.rowId === rowId);
-  if (index < 0) return;
-  const focusRowId = rows.value[index + 1]?.rowId ?? rows.value[index - 1]?.rowId;
+  const focusTarget = visibleRowFocusTarget(rowId);
+  if (!focusTarget) return;
+  const pending = new Map(pendingAddedRows.value);
+  pending.delete(rowId);
+  pendingAddedRows.value = pending;
   setRows(rows.value.filter((row) => row.rowId !== rowId));
-  void nextTick(() => focusControl(focusRowId ? `${sectionId}-${focusRowId}-remove` : addButtonId));
+  void nextTick(() => focusControl(focusTarget));
 }
 
 function siblingTargetIndex(rowId: string, direction: -1 | 1): number | null {
@@ -414,7 +482,8 @@ function siblingTargetIndex(rowId: string, direction: -1 | 1): number | null {
     .filter(
       ({ candidate }) =>
         candidate.security.sleeve_key === row.security.sleeve_key &&
-        candidate.security.replacement_set_id === row.security.replacement_set_id,
+        candidate.security.replacement_set_id === row.security.replacement_set_id &&
+        candidate.security.sub_sleeve_key === row.security.sub_sleeve_key,
     );
   const siblingPosition = siblings.findIndex(({ candidate }) => candidate.rowId === rowId);
   return siblings[siblingPosition + direction]?.candidateIndex ?? null;
@@ -530,7 +599,21 @@ watch(
   },
   { deep: true, flush: 'sync' },
 );
-const tableRows = computed(() => (tableData.value.length === 0 ? [] : table.getRowModel().rows));
+const tableRows = computed(() => {
+  if (tableData.value.length === 0) return [];
+  return table.getRowModel().rows.filter((row) => {
+    const context = props.context;
+    if (!context) return true;
+    const security = row.original.security;
+    return (
+      security.sleeve_key === context.sleeveKey ||
+      security.sub_sleeve_key === context.sleeveKey ||
+      (pendingAddedRows.value.get(row.original.rowId) === context.sleeveKey &&
+        !security.sleeve_key &&
+        !security.sub_sleeve_key)
+    );
+  });
+});
 </script>
 
 <style scoped>

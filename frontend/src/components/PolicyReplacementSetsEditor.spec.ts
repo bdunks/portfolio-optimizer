@@ -9,6 +9,13 @@ import { createEmptyPolicyDraft } from '@/pages/policy-form';
 import type { EditableSleeve } from '@/pages/policy-form';
 import type { AllowedSecurityInput } from '@/types/api';
 
+type ReplacementSetsContext = {
+  sleeveKey: string;
+  label: string;
+  requireSubSleeve?: boolean;
+  newSubSleeveKey?: string;
+};
+
 function sleeve(key: string, values: Partial<EditableSleeve> = {}): EditableSleeve {
   return {
     sleeve_key: key,
@@ -50,10 +57,14 @@ function mountEditor(
   onUpdate: (securities: AllowedSecurityInput[]) => void = (securities) => {
     draft.allowedSecurities = securities;
   },
+  context?: ReplacementSetsContext,
+  attachTo?: Element,
 ) {
   return mount(PolicyReplacementSetsEditor, {
+    ...(attachTo ? { attachTo } : {}),
     props: {
       draft,
+      ...(context ? { context } : {}),
       'onUpdate:allowed-securities': onUpdate,
     },
   });
@@ -117,7 +128,7 @@ describe('PolicyReplacementSetsEditor', () => {
 
     expect(labeledInput(wrapper, 'Candidate priority').attributes('aria-invalid')).not.toBe('true');
 
-    await wrapper.get('button[aria-label="Remove ETF candidate"]').trigger('click');
+    await wrapper.get('button[aria-label="Remove candidate"]').trigger('click');
     await nextTick();
     expect(draft.allowedSecurities).toEqual([]);
   });
@@ -211,7 +222,7 @@ describe('PolicyReplacementSetsEditor', () => {
       draft.allowedSecurities = securities;
     });
 
-    await labeledInput(wrapper, 'ETF ticker').setValue('NULL2');
+    await labeledInput(wrapper, 'Security ticker').setValue('NULL2');
     await nextTick();
     expect(draft.allowedSecurities.map((item) => item.exposure_suitability)).toEqual([null, '']);
     expect(emissions).toHaveLength(1);
@@ -287,5 +298,151 @@ describe('PolicyReplacementSetsEditor', () => {
     expect(selectOption(wrapper, 'Current parent sleeve — missing (missing-one)')).toBeTruthy();
     await openSelect(wrapper, 2);
     expect(selectOption(wrapper, 'Current parent sleeve — missing (missing-two)')).toBeTruthy();
+  });
+  it('filters by destination while edits preserve every hidden row and optional/null field shape', async () => {
+    const draft = reactive(createEmptyPolicyDraft());
+    const missingOptional: AllowedSecurityInput = {
+      ticker: 'A',
+      sleeve_key: 'us',
+      sub_sleeve_key: 'new',
+    };
+    const nullOptional = candidate('B', 'us', 'set', 1, {
+      sub_sleeve_key: 'new',
+      exposure_suitability: null,
+    });
+    const outsideContext: AllowedSecurityInput = { ticker: 'OUT', sleeve_key: 'international' };
+    const otherDestination = candidate('OTHER', 'us', 'set', 2, { sub_sleeve_key: 'legacy' });
+    draft.allowedSecurities = [missingOptional, nullOptional, outsideContext, otherDestination];
+    const wrapper = mountEditor(draft, undefined, { sleeveKey: 'new', label: 'New holdings' });
+
+    expect(
+      wrapper
+        .findAll('input[placeholder="Ticker"]')
+        .map((input) => (input.element as HTMLInputElement).value),
+    ).toEqual(['A', 'B']);
+    await wrapper.find('input[placeholder="Ticker"]').setValue('A-EDITED');
+    await nextTick();
+
+    expect(draft.allowedSecurities[0]).toEqual({
+      ticker: 'A-EDITED',
+      sleeve_key: 'us',
+      sub_sleeve_key: 'new',
+    });
+    expect(Object.hasOwn(draft.allowedSecurities[0]!, 'replacement_set_id')).toBe(false);
+    expect(Object.hasOwn(draft.allowedSecurities[0]!, 'priority')).toBe(false);
+    expect(Object.hasOwn(draft.allowedSecurities[0]!, 'enabled')).toBe(false);
+    expect(Object.hasOwn(draft.allowedSecurities[0]!, 'exposure_suitability')).toBe(false);
+    expect(draft.allowedSecurities[1]).toEqual(nullOptional);
+    expect(draft.allowedSecurities[2]).toEqual(outsideContext);
+    expect(draft.allowedSecurities[3]).toEqual(otherDestination);
+  });
+
+  it('moves only candidates with the same explicit parent, set, and destination', async () => {
+    const draft = reactive(createEmptyPolicyDraft());
+    draft.allowedSecurities = [
+      candidate('A', 'us', 'shared', 0, { sub_sleeve_key: 'new' }),
+      candidate('B', 'us', 'shared', 1, { sub_sleeve_key: 'legacy' }),
+      candidate('C', 'us', 'shared', 2, { sub_sleeve_key: 'new' }),
+    ];
+    const wrapper = mountEditor(draft, undefined, { sleeveKey: 'us', label: 'US equities' });
+
+    expect(wrapper.get('button[aria-label="Move B up"]').attributes('disabled')).toBeDefined();
+    await wrapper.get('button[aria-label="Move C up"]').trigger('click');
+    await nextTick();
+    expect(draft.allowedSecurities.map((item) => item.ticker)).toEqual(['C', 'B', 'A']);
+    expect(draft.allowedSecurities.map((item) => item.priority)).toEqual([0, 1, 2]);
+  });
+
+  it('adds to the explicitly designated New destination without routing a US parent directly', async () => {
+    const draft = reactive(createEmptyPolicyDraft());
+    draft.sleeves = [
+      sleeve('us', { is_direct_index_container: true }),
+      sleeve('new', { parent_sleeve_key: 'us', is_transition_destination: true }),
+    ];
+    const context = {
+      sleeveKey: 'us',
+      label: 'US equities',
+      requireSubSleeve: true,
+      newSubSleeveKey: 'new',
+    } satisfies ReplacementSetsContext;
+    const wrapper = mountEditor(draft, undefined, context);
+
+    await wrapper.get('button[id$="-add-candidate"]').trigger('click');
+    await nextTick();
+    expect(draft.allowedSecurities[0]).toMatchObject({
+      sleeve_key: 'us',
+      sub_sleeve_key: 'new',
+    });
+
+    const noDestinationDraft = reactive(createEmptyPolicyDraft());
+    noDestinationDraft.sleeves = [sleeve('us', { is_direct_index_container: true })];
+    const noDestination = mountEditor(noDestinationDraft, undefined, {
+      sleeveKey: 'us',
+      label: 'US equities',
+      requireSubSleeve: true,
+    });
+    await noDestination.get('button[id$="-add-candidate"]').trigger('click');
+    await nextTick();
+    expect(noDestinationDraft.allowedSecurities[0]?.sleeve_key).toBe('');
+    expect(noDestinationDraft.allowedSecurities[0]?.sub_sleeve_key).toBeNull();
+  });
+
+  it('restores focus when changing a destination filters the focused row', async () => {
+    const draft = reactive(createEmptyPolicyDraft());
+    draft.sleeves = [
+      sleeve('us', { is_direct_index_container: true }),
+      sleeve('new', { display_name: 'New holdings', parent_sleeve_key: 'us' }),
+      sleeve('legacy', { display_name: 'Legacy holdings', parent_sleeve_key: 'us' }),
+    ];
+    const first = candidate('A', 'us', 'set', 0, { sub_sleeve_key: 'new' });
+    const adjacent = candidate('B', 'us', 'set', 1, { sub_sleeve_key: 'new' });
+    const outsideContext = candidate('OUT', 'international', 'outside', 2);
+    draft.allowedSecurities = [first, adjacent, outsideContext];
+    const context = { sleeveKey: 'new', label: 'New holdings' };
+    const wrapper = mountEditor(draft, undefined, context, document.body);
+
+    await openSelect(wrapper, 1);
+    const legacyOption = wrapper
+      .findAllComponents(SelectItem)
+      .find((item) => item.text().replace(/\s+/g, ' ').trim() === 'Legacy holdings');
+    if (!legacyOption) throw new Error('Legacy holdings option not found');
+    legacyOption.element.focus();
+    await legacyOption.trigger('keydown', { key: 'Enter' });
+    await nextTick();
+
+    expect(draft.allowedSecurities[0]?.sub_sleeve_key).toBe('legacy');
+    expect(wrapper.findAll('input[placeholder="Ticker"]')).toHaveLength(1);
+    expect(document.activeElement).toBe(wrapper.get('button[aria-label="Remove B"]').element);
+    expect(
+      wrapper
+        .findAll('input[placeholder="Ticker"]')
+        .map((input) => (input.element as HTMLInputElement).value),
+    ).toEqual(['B']);
+    expect(draft.allowedSecurities).toEqual([
+      candidate('A', 'us', 'set', 0, { sub_sleeve_key: 'legacy' }),
+      adjacent,
+      outsideContext,
+    ]);
+
+    const onlyRowDraft = reactive(createEmptyPolicyDraft());
+    onlyRowDraft.sleeves = draft.sleeves;
+    onlyRowDraft.allowedSecurities = [first, outsideContext];
+    const onlyRowWrapper = mountEditor(onlyRowDraft, undefined, context, document.body);
+    await openSelect(onlyRowWrapper, 1);
+    const onlyLegacyOption = onlyRowWrapper
+      .findAllComponents(SelectItem)
+      .find((item) => item.text().replace(/\s+/g, ' ').trim() === 'Legacy holdings');
+    if (!onlyLegacyOption) throw new Error('Legacy holdings option not found');
+    onlyLegacyOption.element.focus();
+    await onlyLegacyOption.trigger('keydown', { key: 'Enter' });
+    await nextTick();
+
+    expect(document.activeElement).toBe(onlyRowWrapper.get('button[id$="-add-candidate"]').element);
+    expect(onlyRowDraft.allowedSecurities).toEqual([
+      candidate('A', 'us', 'set', 0, { sub_sleeve_key: 'legacy' }),
+      outsideContext,
+    ]);
+    onlyRowWrapper.unmount();
+    wrapper.unmount();
   });
 });

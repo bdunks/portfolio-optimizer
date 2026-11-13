@@ -21,22 +21,56 @@
             sleeve is inferred from its name, target, holdings, or ETF candidates.
           </CardDescription>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          data-transition-settings-trigger
-          @click="openSettings"
-        >
-          {{
-            unsupportedLegacyMapping
-              ? 'View preserved mappings'
-              : hasExplicitDestination
-                ? 'Edit settings'
-                : 'Set up US transition'
-          }}
-        </Button>
+        <div class="tw:flex tw:flex-wrap tw:gap-2">
+          <Button
+            v-if="explicitUsKey"
+            type="button"
+            variant="outline"
+            size="sm"
+            :data-transition-replacement-trigger="explicitUsKey"
+            @click="openReplacements"
+          >
+            Edit US replacements
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            data-transition-settings-trigger
+            @click="openSettings"
+          >
+            {{
+              unsupportedLegacyMapping
+                ? 'View preserved mappings'
+                : hasExplicitDestination
+                  ? 'Edit settings'
+                  : 'Set up US transition'
+            }}
+          </Button>
+        </div>
       </CardHeader>
+      <CardContent class="tw:grid tw:gap-2">
+        <p class="tw:m-0! tw:text-sm tw:text-muted-foreground">
+          Replacement investments on the explicitly designated US allocation retain their configured
+          destination. New holdings is named only when that sub-sleeve is explicitly designated.
+        </p>
+        <div v-if="usReplacementItems.length" class="tw:flex tw:flex-wrap tw:gap-2">
+          <span
+            v-for="(item, index) in usReplacementItems"
+            :key="`${index}:${item}`"
+            class="tw:rounded-md tw:border tw:px-2 tw:py-1 tw:text-sm"
+          >
+            {{ item }}
+          </span>
+        </div>
+        <p v-else class="tw:m-0! tw:text-sm tw:text-muted-foreground">
+          {{
+            explicitUsKey
+              ? 'No replacement investments are assigned to the US allocation.'
+              : 'No unique US allocation is designated.'
+          }}
+        </p>
+      </CardContent>
     </Card>
     <div
       v-if="unsupportedLegacyMapping"
@@ -245,7 +279,8 @@ import type {
   USTransitionSelection,
 } from '@/pages/policy-form';
 import { Button } from '@/components/ui/button';
-import { Card, CardDescription, CardHeader } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card';
+import type { AllowedSecurityInput } from '@/types/api';
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import {
@@ -268,7 +303,10 @@ type RoleOption = { value: string; label: string; disabled?: boolean };
 type BranchRole = 'legacy' | 'destination';
 
 const props = defineProps<{ draft: EditablePolicyDraft }>();
-const emit = defineEmits<{ 'update:sleeves': [sleeves: EditableSleeve[]] }>();
+const emit = defineEmits<{
+  'update:sleeves': [sleeves: EditableSleeve[]];
+  'open-replacements': [sleeveKey: string, newSubSleeveKey: string | null, trigger: HTMLElement];
+}>();
 
 const settingsId = useId();
 const settingsRoot = ref<HTMLElement | null>(null);
@@ -392,6 +430,58 @@ function explicitRoleKey(
 ): string {
   const assigned = sleeves.filter((sleeve) => sleeve[role] === true);
   return assigned.length === 1 ? (assigned[0]?.sleeve_key ?? '') : '';
+}
+
+const explicitUsKey = computed(() =>
+  explicitRoleKey(props.draft.sleeves, 'is_direct_index_container'),
+);
+const explicitNewDestinationKey = computed(() => {
+  const key = explicitRoleKey(props.draft.sleeves, 'is_transition_destination');
+  const destination = props.draft.sleeves.find((sleeve) => sleeve.sleeve_key === key);
+  return destination?.parent_sleeve_key === explicitUsKey.value ? key : null;
+});
+const usReplacementItems = computed(() => {
+  if (!explicitUsKey.value) return [];
+  const destinationKey = explicitNewDestinationKey.value;
+  const destination = props.draft.sleeves.find((sleeve) => sleeve.sleeve_key === destinationKey);
+  return props.draft.allowedSecurities
+    .filter((security: AllowedSecurityInput) => security.sleeve_key === explicitUsKey.value)
+    .map((security: AllowedSecurityInput) => {
+      const setId =
+        security.replacement_set_id === undefined
+          ? 'Set ID unset'
+          : security.replacement_set_id || 'Empty set ID';
+      const ticker = security.ticker.trim() || 'Missing ticker';
+      const enabled =
+        security.enabled === true
+          ? 'Enabled'
+          : security.enabled === false
+            ? 'Disabled'
+            : 'Enabled state unset';
+      const subSleeve =
+        security.sub_sleeve_key === undefined
+          ? 'Sub-sleeve unset'
+          : security.sub_sleeve_key === null
+            ? 'US allocation'
+            : security.sub_sleeve_key === ''
+              ? 'Empty sub-sleeve'
+              : security.sub_sleeve_key === destinationKey && destination
+                ? `New holdings (${destination.display_name || destination.sleeve_key})`
+                : (props.draft.sleeves.find(
+                    (sleeve) => sleeve.sleeve_key === security.sub_sleeve_key,
+                  )?.display_name ?? `Missing destination (${security.sub_sleeve_key})`);
+      return `${setId} · ${ticker} · ${enabled} · ${subSleeve}`;
+    });
+});
+
+function openReplacements(event: MouseEvent): void {
+  if (!explicitUsKey.value) return;
+  emit(
+    'open-replacements',
+    explicitUsKey.value,
+    explicitNewDestinationKey.value,
+    event.currentTarget as HTMLElement,
+  );
 }
 
 function openSettings(): void {

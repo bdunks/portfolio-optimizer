@@ -27,9 +27,10 @@ test('replacement candidates are accessible, keyboard-usable, and responsive', a
   });
   await expect(page.getByRole('heading', { name: 'Allocation Policy', exact: true })).toBeVisible();
 
+  await page.getByRole('button', { name: 'All configured replacement sets' }).click();
   const editor = page.locator('[data-policy-replacement-sets-root]');
   await expect(
-    editor.getByRole('heading', { name: 'Approved ETF replacement sets', level: 2 }),
+    editor.getByRole('heading', { name: 'All configured replacement sets', level: 2 }),
   ).toBeVisible();
   const table = editor.getByRole('table');
   await expect(table.getByRole('columnheader')).toHaveText([
@@ -44,7 +45,9 @@ test('replacement candidates are accessible, keyboard-usable, and responsive', a
     'Actions',
   ]);
   await expect(
-    editor.getByText(/Distinct approved funds are a user assumption, not a wash-sale guarantee/),
+    editor.getByText(
+      /Distinct investments are a user-entered wash-sale assumption, not a guarantee or automated exposure-equivalence check/,
+    ),
   ).toBeVisible();
   const region = editor.getByRole('region', { name: 'Replacement security candidates' });
   await expect(region).toHaveAttribute('tabindex', '0');
@@ -114,17 +117,53 @@ test('replacement candidates are accessible, keyboard-usable, and responsive', a
   await expect(enabledCheckbox).toBeChecked();
 
   await editor.getByRole('button', { name: 'Move ITOT up' }).click();
-  await expect(editor.getByRole('textbox', { name: 'ETF ticker' }).first()).toHaveValue('ITOT');
+  await expect(editor.getByRole('textbox', { name: 'Security ticker' }).first()).toHaveValue(
+    'ITOT',
+  );
   await expect(editor.getByRole('button', { name: 'Move ITOT up' })).toBeDisabled();
   await expect(editor.getByRole('button', { name: 'Remove ITOT' })).toBeFocused();
 
-  const addButton = editor.getByRole('button', { name: 'Add ETF candidate' });
+  const addButton = editor.getByRole('button', { name: 'Add security' });
   await addButton.click();
-  const newTicker = editor.getByRole('textbox', { name: 'ETF ticker' }).last();
+  const newTicker = editor.getByRole('textbox', { name: 'Security ticker' }).last();
   await expect(newTicker).toBeFocused();
-  await editor.getByRole('button', { name: 'Remove ETF candidate' }).click();
+  await editor.getByRole('button', { name: 'Remove candidate' }).click();
   await expect(editor.getByRole('button', { name: 'Remove VTI' })).toBeFocused();
 
+  const allConfiguredTrigger = page.locator('[data-all-replacement-sets-trigger]');
+  await page.locator('[data-slot="sheet-close"]').click();
+  await expect(editor).toHaveCount(0);
+  await expect(allConfiguredTrigger).toBeFocused();
+
+  const usTrigger = page.locator('[data-transition-replacement-trigger="us_equities"]');
+  await usTrigger.click();
+  await expect(
+    editor.getByRole('heading', { name: 'Replacement sets for DEMO US Equities' }),
+  ).toBeVisible();
+  const usTickers = editor.getByRole('textbox', { name: 'Security ticker' });
+  await expect(usTickers).toHaveCount(2);
+  await usTickers.nth(1).fill('ITOTX');
+  await page.locator('[data-slot="sheet-close"]').click();
+  await expect(usTrigger).toBeFocused();
+  await expect(page.locator('[data-us-transition-settings-root]')).toContainText('ITOTX');
+
+  await page.setViewportSize({ width: 820, height: 1024 });
+  await expectNoPageOverflow(page, 'tablet policy page');
+  await usTrigger.click();
+  await expect(
+    editor.getByRole('heading', { name: 'Replacement sets for DEMO US Equities' }),
+  ).toBeVisible();
+  await expect(editor.getByRole('textbox', { name: 'Security ticker' }).nth(1)).toHaveValue(
+    'ITOTX',
+  );
+  await page.locator('[data-slot="sheet-close"]').click();
+  await expect(usTrigger).toBeFocused();
+  await expectNoPageOverflow(page, 'tablet policy page after contextual editor');
+
+  await page.locator('[data-all-replacement-sets-trigger]').click();
+  await expect(
+    editor.getByRole('heading', { name: 'All configured replacement sets', level: 2 }),
+  ).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await expectNoPageOverflow(page, 'mobile policy page');
   const mobileHeaderLayout = await editor.evaluate((element) => {

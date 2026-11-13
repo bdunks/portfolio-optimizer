@@ -257,4 +257,42 @@ describe('PolicyUSTransitionSettings', () => {
     expect(draft.sleeves.map((item) => item.target_pct)).toEqual(['80', '25.00', '75.00', '42.5']);
     wrapper.unmount();
   });
+  it('does not relabel a destination outside the explicit US allocation as New holdings', async () => {
+    const draft = reactive(createEmptyPolicyDraft());
+    draft.sleeves = [
+      {
+        ...sleeve('us-equities', '80'),
+        display_name: 'US equities',
+        is_direct_index_container: true,
+      },
+      { ...sleeve('international', '20'), display_name: 'International' },
+      {
+        ...sleeve('remote-new', '50', 'international'),
+        display_name: 'Remote destination',
+        is_transition_destination: true,
+      },
+    ];
+    draft.allowedSecurities = [
+      {
+        ticker: 'REMOTE',
+        sleeve_key: 'us-equities',
+        sub_sleeve_key: 'remote-new',
+        replacement_set_id: 'cross-scope',
+        priority: 0,
+        enabled: true,
+      },
+    ];
+    const wrapper = mount(PolicyUSTransitionSettings, {
+      attachTo: document.body,
+      props: { draft },
+    });
+
+    const summary = wrapper.get('[data-us-transition-settings-root]');
+    expect(summary.text()).toContain('cross-scope · REMOTE · Enabled · Remote destination');
+    expect(summary.text()).not.toContain('New holdings (Remote destination)');
+    const trigger = wrapper.get('button[data-transition-replacement-trigger="us-equities"]');
+    await trigger.trigger('click');
+    expect(wrapper.emitted('open-replacements')?.[0]?.slice(0, 2)).toEqual(['us-equities', null]);
+    wrapper.unmount();
+  });
 });

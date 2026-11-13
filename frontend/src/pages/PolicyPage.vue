@@ -9,7 +9,7 @@
       eyebrow="Allocation and tax profile"
       title="Allocation Policy"
       title-id="policy-title"
-      subtitle="Configure versioned sleeve targets, replacement ETF candidates, holding overrides, and every persisted tax and batch setting. Target values remain exact decimal strings."
+      subtitle="Configure versioned sleeve targets, replacement-set securities, holding overrides, and every persisted tax and batch setting. Target values remain exact decimal strings."
     >
       <template #actions>
         <Button
@@ -215,7 +215,11 @@
       </Card>
     </section>
 
-    <PolicyUSTransitionSettings :draft="editorState.draft" @update:sleeves="updateSleeves" />
+    <PolicyUSTransitionSettings
+      :draft="editorState.draft"
+      @update:sleeves="updateSleeves"
+      @open-replacements="openUSReplacements"
+    />
 
     <PolicySleevesEditor
       :draft="editorState.draft"
@@ -224,13 +228,56 @@
       :source-revision-id="sourceRevisionId"
       @update:sleeves="updateSleeves"
       @update:reassignments="updateReassignments"
+      @open-replacements="openSleeveReplacements"
     />
 
-    <PolicyReplacementSetsEditor
-      :draft="editorState.draft"
-      @update:allowed-securities="updateAllowedSecurities"
-    />
+    <section
+      class="tw:flex tw:flex-col tw:gap-2 tw:rounded-md tw:border tw:p-4 tw:md:flex-row tw:md:items-center tw:md:justify-between"
+    >
+      <div class="tw:space-y-1">
+        <h2 class="tw:m-0! tw:text-base tw:font-semibold">Replacement sets</h2>
+        <p class="tw:m-0! tw:text-sm tw:text-muted-foreground">
+          Open all configured candidates to reach custom, disabled, unassigned, or otherwise
+          unavailable assignments.
+        </p>
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        data-all-replacement-sets-trigger
+        @click="openAllReplacementSets"
+      >
+        All configured replacement sets
+      </Button>
+    </section>
 
+    <Sheet v-model:open="replacementEditorOpen">
+      <SheetContent
+        side="right"
+        class="tw:w-full tw:max-w-[96vw] tw:gap-4 tw:overflow-y-auto tw:sm:max-w-[96vw]"
+        @close-auto-focus="restoreReplacementFocus"
+      >
+        <SheetHeader class="tw:sr-only">
+          <SheetTitle>
+            {{
+              replacementContext
+                ? `Replacement sets for ${replacementContext.label}`
+                : 'All configured replacement sets'
+            }}
+          </SheetTitle>
+          <SheetDescription>
+            Edit the current policy draft's replacement-set securities. Other configured candidates
+            remain unchanged.
+          </SheetDescription>
+        </SheetHeader>
+        <PolicyReplacementSetsEditor
+          :draft="editorState.draft"
+          :context="replacementContext"
+          @update:allowed-securities="updateAllowedSecurities"
+        />
+      </SheetContent>
+    </Sheet>
     <PolicyHoldingOverridesEditor
       :draft="editorState.draft"
       :positions="portfolio?.positions ?? null"
@@ -314,8 +361,8 @@
             </ul>
           </template>
           <p class="tw:m-0! tw:border-t tw:pt-4 tw:text-sm tw:text-muted-foreground">
-            The accepted policy API persists sleeves, ETF candidate metadata, overrides and the
-            fields shown above. It does not expose per-sleeve tracking/exposure tolerances,
+            The accepted policy API persists sleeves, replacement-set security metadata, overrides
+            and the fields shown above. It does not expose per-sleeve tracking/exposure tolerances,
             liquidity limits, or ETF-consolidation preference; those controls are not invented here.
             Portfolio look-through suitability is stored only as the API's user-entered text.
           </p>
@@ -326,7 +373,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, toRef, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, toRef, watch } from 'vue';
 import { useForm } from '@tanstack/vue-form';
 import type { AllowedSecurityInput, OverrideInput } from '@/types/api';
 import ApiActionError from '@/components/ApiActionError.vue';
@@ -352,6 +399,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
 import { useWorkspace } from '@/composables/use-workspace';
 import type { EditablePolicyDraft, EditablePolicySettings, EditableSleeve } from './policy-form';
 import {
@@ -359,12 +413,22 @@ import {
   type PolicyRevisionFormValues,
 } from '@/forms/policy-revision';
 
+type ReplacementSetsContext = {
+  sleeveKey: string;
+  label: string;
+  requireSubSleeve?: boolean;
+  newSubSleeveKey?: string;
+};
+
 const store = useWorkspace();
 const editor = store.policyEditor;
 const editorState = editor.state;
 const settings = editorState.draft.settings;
 const sleeves = computed(() => editorState.draft.sleeves);
 const allowedSecurities = computed(() => editorState.draft.allowedSecurities);
+const replacementEditorOpen = ref(false);
+const replacementContext = ref<ReplacementSetsContext | null>(null);
+const replacementTrigger = ref<HTMLElement | null>(null);
 const overrides = computed(() => editorState.draft.overrides);
 const reassignments = computed(() => editorState.draft.reassignments);
 const sourceRevisionId = toRef(editorState, 'sourceRevisionId');
@@ -445,10 +509,10 @@ const formIssues = computed(() => {
     )
   )
     issues.push(
-      'Each ETF candidate needs a ticker, parent sleeve, and replacement-set ID before saving.',
+      'Each replacement-set security needs a ticker, parent sleeve, and replacement-set ID before saving.',
     );
   if (allowedSecurities.value.some((security) => !Number.isSafeInteger(security.priority)))
-    issues.push('ETF candidate priorities must be whole numbers.');
+    issues.push('Replacement-set security priorities must be whole numbers.');
   if (
     allowedSecurities.value.some(
       (security) =>
@@ -460,7 +524,9 @@ const formIssues = computed(() => {
         ),
     )
   )
-    issues.push('Each ETF sub-sleeve must be a direct child of its selected parent sleeve.');
+    issues.push(
+      'Each replacement-set security sub-sleeve must be a direct child of its selected parent sleeve.',
+    );
   if (overrides.value.some((override) => !override.ticker.trim() || !override.sleeve_key.trim()))
     issues.push('Each explicit holding override needs a ticker and destination sleeve.');
   if (
@@ -503,6 +569,58 @@ function updateSleeves(sleeves: EditableSleeve[]): void {
 
 function updateAllowedSecurities(securities: AllowedSecurityInput[]): void {
   editorState.draft.allowedSecurities = securities;
+}
+
+function openAllReplacementSets(event: MouseEvent): void {
+  replacementContext.value = null;
+  replacementTrigger.value = event.currentTarget as HTMLElement;
+  replacementEditorOpen.value = true;
+}
+
+function openSleeveReplacements(sleeveKey: string, trigger: HTMLElement): void {
+  const sleeve = sleeves.value.find((item) => item.sleeve_key === sleeveKey);
+  if (!sleeve) return;
+  const destinations = sleeves.value.filter((item) => item.is_transition_destination === true);
+  const newDestination =
+    destinations.length === 1 && destinations[0]?.parent_sleeve_key === sleeveKey
+      ? destinations[0].sleeve_key
+      : undefined;
+  replacementContext.value = {
+    sleeveKey,
+    label: sleeve.display_name.trim() || sleeve.sleeve_key,
+    ...(sleeve.is_direct_index_container === true ? { requireSubSleeve: true } : {}),
+    ...(newDestination ? { newSubSleeveKey: newDestination } : {}),
+  };
+  replacementTrigger.value = trigger;
+  replacementEditorOpen.value = true;
+}
+
+function openUSReplacements(
+  sleeveKey: string,
+  newSubSleeveKey: string | null,
+  trigger: HTMLElement,
+): void {
+  const sleeve = sleeves.value.find((item) => item.sleeve_key === sleeveKey);
+  if (!sleeve) return;
+  const destination = newSubSleeveKey
+    ? sleeves.value.find((item) => item.sleeve_key === newSubSleeveKey)
+    : undefined;
+  replacementContext.value = {
+    sleeveKey,
+    label: `${sleeve.display_name.trim() || sleeve.sleeve_key} (US allocation)`,
+    requireSubSleeve: true,
+    ...(newSubSleeveKey && destination?.parent_sleeve_key === sleeveKey ? { newSubSleeveKey } : {}),
+  };
+  replacementTrigger.value = trigger;
+  replacementEditorOpen.value = true;
+}
+
+function restoreReplacementFocus(event: Event): void {
+  event.preventDefault();
+  void nextTick(() => {
+    if (replacementTrigger.value?.isConnected) replacementTrigger.value.focus();
+    else document.querySelector<HTMLButtonElement>('[data-all-replacement-sets-trigger]')?.focus();
+  });
 }
 
 function updateOverrides(overrides: OverrideInput[]): void {

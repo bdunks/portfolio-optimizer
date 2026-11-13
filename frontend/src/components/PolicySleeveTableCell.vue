@@ -155,6 +155,32 @@
     </Field>
   </FieldGroup>
 
+  <div
+    v-else-if="kind === 'replacements'"
+    class="tw:flex tw:min-w-[15rem] tw:flex-col tw:items-start tw:gap-2"
+  >
+    <div v-if="replacementChips.length" class="tw:flex tw:flex-wrap tw:gap-1">
+      <span
+        v-for="(chip, index) in replacementChips"
+        :key="`${index}:${chip}`"
+        class="tw:rounded-md tw:border tw:px-2 tw:py-1 tw:text-xs"
+      >
+        {{ chip }}
+      </span>
+    </div>
+    <span v-else class="tw:text-xs tw:text-muted-foreground">No assigned replacements</span>
+    <Button
+      :id="controlId('replacements')"
+      type="button"
+      variant="outline"
+      size="sm"
+      :aria-label="`Edit replacements for ${sleeve.display_name || sleeve.sleeve_key}`"
+      :data-replacement-trigger-key="sleeve.sleeve_key"
+      @click="emit('open-replacements', sleeve.sleeve_key, $event.currentTarget as HTMLElement)"
+    >
+      Edit replacements
+    </Button>
+  </div>
   <DropdownMenu v-else>
     <DropdownMenuTrigger as-child>
       <Button
@@ -215,7 +241,8 @@ import {
 } from '@/components/ui/select';
 import type { EditableSleeve } from '@/pages/policy-form';
 
-export type PolicySleeveColumnKind = 'order' | 'name' | 'target' | 'drift' | 'enabled' | 'actions';
+export type PolicySleeveColumnKind =
+  'order' | 'name' | 'target' | 'drift' | 'enabled' | 'replacements' | 'actions';
 
 export type PolicySleeveSelectOption = { value: string; label: string };
 
@@ -230,6 +257,7 @@ const props = defineProps<{
   isExpanded: boolean;
   reassignmentOptions: readonly PolicySleeveSelectOption[];
   reassignmentValue: string;
+  replacementChips: readonly string[];
   canMoveUp: boolean;
   canMoveDown: boolean;
 }>();
@@ -246,6 +274,7 @@ const emit = defineEmits<{
   delete: [sleeveKey: string];
   'add-child': [parentKey: string];
   'open-settings': [sleeveKey: string];
+  'open-replacements': [sleeveKey: string, trigger: HTMLElement];
   'toggle-expand': [sleeveKey: string];
 }>();
 

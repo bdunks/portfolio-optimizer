@@ -824,4 +824,127 @@ describe('PolicyPage', () => {
     window.dispatchEvent(unload);
     expect(unload.defaultPrevented).toBe(true);
   });
+  it('shares one contextual editor with US destination and all-configured draft views', async () => {
+    const destination = {
+      sleeve_key: 'new',
+      display_name: 'Future holdings',
+      sort_order: 0,
+      parent_sleeve_key: 'us',
+      target_pct: '100.0000',
+      drift_band_pp: '0.0000',
+      is_direct_index_container: false,
+      is_direct_index_sleeve: false,
+      is_transition_destination: true,
+      is_cash_sleeve: false,
+      enabled: true,
+    };
+    const contextualRevision: PolicyRevisionResponse = {
+      ...activeRevision,
+      sleeves: [...activeRevision.sleeves, destination],
+      allowed_securities: [
+        ...activeRevision.allowed_securities,
+        {
+          ticker: 'ITOT',
+          sleeve_key: 'us',
+          sub_sleeve_key: 'new',
+          replacement_set_id: 'us-core',
+          priority: 1,
+          enabled: true,
+          exposure_suitability: null,
+        },
+        {
+          ticker: 'VEA',
+          sleeve_key: 'custom-parent',
+          sub_sleeve_key: null,
+          replacement_set_id: 'custom-set',
+          priority: 0,
+          enabled: false,
+          exposure_suitability: 'Preserved custom destination',
+        },
+      ],
+    };
+    const fetcher = vi.fn<typeof fetch>((input) => {
+      const url = requestAddress(input);
+      if (url.pathname === '/api/v1/policy') {
+        const response: PolicyResponse = { active: contextualRevision, drafts: [], superseded: [] };
+        return Promise.resolve(jsonResponse(response));
+      }
+      if (url.pathname === '/api/v1/portfolio')
+        return Promise.resolve(jsonResponse(notSyncedPortfolioResponse()));
+      return Promise.reject(new Error(`Unhandled local API request: ${url.pathname}`));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const pinia = createPinia();
+    const wrapper = mountWithWorkspace(PolicyPage, {
+      attachTo: document.body,
+      global: { plugins: [pinia] },
+    });
+    await flushPromises();
+
+    const transition = wrapper.get('[data-us-transition-settings-root]');
+    expect(transition.text()).toContain('New holdings (Future holdings)');
+    const usTrigger = wrapper.get('button[data-transition-replacement-trigger="us"]');
+    await usTrigger.trigger('click');
+    await flushPromises();
+    let editorRoot = document.body.querySelector<HTMLElement>(
+      '[data-policy-replacement-sets-root]',
+    );
+    expect(editorRoot).not.toBeNull();
+    expect(editorRoot?.querySelectorAll('input[placeholder="Ticker"]').length).toBe(2);
+    const itotInput = [
+      ...(editorRoot?.querySelectorAll<HTMLInputElement>('input[placeholder="Ticker"]') ?? []),
+    ].find((input) => input.value === 'ITOT');
+    if (!itotInput) throw new Error('Contextual US candidate ITOT was not rendered');
+    itotInput.value = 'ITOT-EDITED';
+    itotInput.dispatchEvent(new Event('input', { bubbles: true }));
+    await flushPromises();
+    expect(useWorkspaceStore(pinia).policyEditor.state.draft.allowedSecurities[1]?.ticker).toBe(
+      'ITOT-EDITED',
+    );
+    const closeButton = document.body.querySelector<HTMLButtonElement>(
+      'button[data-slot="sheet-close"]',
+    );
+    if (!closeButton) throw new Error('Replacement editor close button was not rendered');
+    closeButton.click();
+    await flushPromises();
+    expect(document.activeElement).toBe(usTrigger.element);
+    expect(transition.text()).toContain('ITOT-EDITED');
+
+    const destinationTrigger = wrapper.get('button[data-replacement-trigger-key="new"]');
+    await destinationTrigger.trigger('click');
+    await flushPromises();
+    editorRoot = document.body.querySelector<HTMLElement>('[data-policy-replacement-sets-root]');
+    expect(editorRoot?.querySelector('h2')?.textContent).toContain('Future holdings');
+    expect(
+      [...document.body.querySelectorAll<HTMLInputElement>('input[placeholder="Ticker"]')].map(
+        (input) => input.value,
+      ),
+    ).toEqual(['ITOT-EDITED']);
+    const childCloseButton = document.body.querySelector<HTMLButtonElement>(
+      'button[data-slot="sheet-close"]',
+    );
+    if (!childCloseButton) throw new Error('Replacement editor close button was not rendered');
+    childCloseButton.click();
+    await flushPromises();
+    expect(document.activeElement).toBe(destinationTrigger.element);
+
+    const allConfiguredTrigger = wrapper.get('button[data-all-replacement-sets-trigger]');
+    await allConfiguredTrigger.trigger('click');
+    await flushPromises();
+    editorRoot = document.body.querySelector<HTMLElement>('[data-policy-replacement-sets-root]');
+    expect(editorRoot).not.toBeNull();
+    expect(
+      [...document.body.querySelectorAll<HTMLInputElement>('input[placeholder="Ticker"]')].map(
+        (input) => input.value,
+      ),
+    ).toEqual(['VTI', 'ITOT-EDITED', 'VEA']);
+    const allCloseButton = document.body.querySelector<HTMLButtonElement>(
+      'button[data-slot="sheet-close"]',
+    );
+    if (!allCloseButton) throw new Error('Replacement editor close button was not rendered');
+    allCloseButton.click();
+    await flushPromises();
+    expect(document.activeElement).toBe(allConfiguredTrigger.element);
+    wrapper.unmount();
+  });
 });

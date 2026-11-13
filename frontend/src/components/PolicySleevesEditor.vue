@@ -66,7 +66,7 @@
           role="region"
           aria-label="Sleeve allocation policy settings"
           tabindex="0"
-          class="tw:min-w-[70rem]"
+          class="tw:min-w-[88rem]"
         >
           <TableCaption class="tw:sr-only">
             Configured sleeves and their allocation policy settings
@@ -101,7 +101,7 @@
                     </TableCell>
                   </template>
                 </TableRow>
-                <TableEmpty v-if="tableRows.length === 0" :colspan="6">
+                <TableEmpty v-if="tableRows.length === 0" :colspan="7">
                   <Empty class="tw:border-0 tw:bg-transparent">
                     <EmptyHeader>
                       <EmptyTitle>No sleeves configured</EmptyTitle>
@@ -380,7 +380,7 @@ import {
 import { policySleevesFormSchema } from '@/forms/policy-sleeves';
 import type { PolicySleeveFormRow, PolicySleevesFormValues } from '@/forms/policy-sleeves';
 import type { EditablePolicyDraft, EditableSleeve } from '@/pages/policy-form';
-import type { PositionResponse } from '@/types/api';
+import type { AllowedSecurityInput, PositionResponse } from '@/types/api';
 
 const props = defineProps<{
   draft: EditablePolicyDraft;
@@ -394,6 +394,7 @@ const emit = defineEmits<{
     reassignments: Record<string, string>,
     reassignmentHoldings: Record<string, string[]>,
   ];
+  'open-replacements': [sleeveKey: string, trigger: HTMLElement];
 }>();
 
 const sectionId = useId();
@@ -864,6 +865,53 @@ function cancelDeleteSleeve(): void {
   sleeveForm.setFieldValue('deletion', { sleeveKey: '', targetKey: '', childReparents: {} });
   deleteError.value = '';
 }
+function replacementChipsForSleeve(sleeveKey: string): string[] {
+  const transitionDestinations = props.draft.sleeves.filter(
+    (sleeve) => sleeve.is_transition_destination === true,
+  );
+  const directIndexContainers = props.draft.sleeves.filter(
+    (sleeve) => sleeve.is_direct_index_container === true,
+  );
+  const newDestination =
+    transitionDestinations.length === 1 &&
+    directIndexContainers.length === 1 &&
+    transitionDestinations[0]?.parent_sleeve_key === directIndexContainers[0]?.sleeve_key
+      ? transitionDestinations[0]
+      : undefined;
+  return props.draft.allowedSecurities.flatMap((security: AllowedSecurityInput) => {
+    if (security.sleeve_key !== sleeveKey && security.sub_sleeve_key !== sleeveKey) return [];
+
+    let destination = 'Parent allocation';
+    if (security.sub_sleeve_key === undefined) destination = 'Sub-sleeve unset';
+    else if (security.sub_sleeve_key === '') destination = 'Empty sub-sleeve';
+    else if (security.sub_sleeve_key !== null) {
+      const child = props.draft.sleeves.find(
+        (sleeve) => sleeve.sleeve_key === security.sub_sleeve_key,
+      );
+      if (!child) destination = `Missing destination (${security.sub_sleeve_key})`;
+      else if (
+        newDestination?.sleeve_key === child.sleeve_key &&
+        security.sleeve_key === newDestination.parent_sleeve_key
+      ) {
+        destination = `New holdings (${child.display_name || child.sleeve_key})`;
+      } else destination = child.display_name || child.sleeve_key;
+    }
+
+    const setId =
+      security.replacement_set_id === undefined
+        ? 'Set ID unset'
+        : security.replacement_set_id || 'Empty set ID';
+    const ticker = security.ticker.trim() || 'Missing ticker';
+    const enabled =
+      security.enabled === true
+        ? 'Enabled'
+        : security.enabled === false
+          ? 'Disabled'
+          : 'Enabled state unset';
+    return [`${setId} · ${ticker} · ${enabled} · ${destination}`];
+  });
+}
+
 function cellProps(kind: PolicySleeveColumnKind, sleeve: PolicySleeveFormRow, rowIndex: number) {
   const reassignments = kind === 'enabled' ? reassignmentOptions(sleeve.sleeve_key) : [];
   const displayRow = displayRowByKey.value.get(sleeve.sleeve_key);
@@ -877,6 +925,7 @@ function cellProps(kind: PolicySleeveColumnKind, sleeve: PolicySleeveFormRow, ro
     hasChildren: displayRow?.hasChildren ?? false,
     isExpanded: displayRow ? !collapsedSleeveKeys.value.has(sleeve.sleeve_key) : false,
     reassignmentOptions: reassignments,
+    replacementChips: kind === 'replacements' ? replacementChipsForSleeve(sleeve.sleeve_key) : [],
     reassignmentValue: selectedOptionValue(
       reassignments,
       'reassignment',
@@ -901,6 +950,8 @@ function renderSleeveCell(
     onDelete: beginDeleteSleeve,
     onAddChild: addSleeve,
     onOpenSettings: openSleeveSettings,
+    onOpenReplacements: (sleeveKey: string, trigger: HTMLElement) =>
+      emit('open-replacements', sleeveKey, trigger),
     onToggleExpand: toggleSleeveExpansion,
   });
 }
@@ -970,6 +1021,7 @@ const columns: Array<ColumnDef<typeof sleeveTableFeatures, PolicySleeveFormRow>>
   makeColumn('target', 'Target (% of portfolio / parent)', (sleeve) => sleeve.target_pct),
   makeColumn('drift', 'Drift band (pp)', (sleeve) => sleeve.drift_band_pp),
   makeColumn('enabled', 'Enabled', (sleeve) => sleeve.enabled),
+  makeColumn('replacements', 'Replacement sets', (sleeve) => sleeve.sleeve_key),
   makeColumn('actions', 'Actions', (sleeve) => sleeve.sleeve_key),
 ];
 const tableData = shallowRef(visibleSleeveRows.value.map((row) => row.sleeve));

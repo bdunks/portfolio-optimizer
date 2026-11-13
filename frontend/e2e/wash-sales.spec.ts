@@ -189,3 +189,63 @@ test('Wash Sales responsive controls and table behavior', async ({ page, seededA
     .toBeGreaterThan(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
+
+test('Wash-sale guidance journey stays explicit and usable across keyboard and mobile', async ({
+  page,
+  seededApp,
+}) => {
+  await page.route('**/api/v1/wash-sales', (route) => route.fulfill({ json: washSalesResponse }));
+  await page.goto(new URL('/#/wash-sales', seededApp.baseUrl).toString());
+
+  const restrictions = page.getByRole('region', { name: 'Wash-sale purchase restrictions' });
+  await expect(restrictions.getByRole('rowheader', { name: 'Current' })).toBeVisible();
+  await expect(restrictions.getByRole('rowheader', { name: 'Proposed' })).toBeVisible();
+  await expect(restrictions.getByText('synthetic-proposed-loss')).toBeVisible();
+  await expect(page.getByText(/not represented as executed sales/i)).toBeVisible();
+  await expect(page.locator('[aria-label="Wash-sale coverage limitations"]')).toContainText(
+    'missing required managed-account history must block affected recommendations',
+  );
+  await expect(page.getByRole('heading', { name: 'API coverage' })).toBeVisible();
+  expect(
+    await page.evaluate(() => {
+      const restriction = document.querySelector('[aria-label="Wash-sale purchase restrictions"]');
+      const coverage = document.querySelector('section[aria-labelledby="coverage-title"]');
+      if (restriction && coverage && coverage.contains(restriction)) return false;
+      return Boolean(
+        restriction &&
+        coverage &&
+        restriction.compareDocumentPosition(coverage) & Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+    }),
+  ).toBe(true);
+
+  const replacementLink = page.getByRole('link', {
+    name: 'Review configured replacement-set assumptions in Policy',
+  });
+  await replacementLink.focus();
+  await expect(replacementLink).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(/#\/policy#replacement-sets/);
+  const replacementHeading = page.getByRole('heading', { name: 'Replacement sets' });
+  await expect(replacementHeading).toBeFocused();
+
+  await page.goto(new URL('/#/wash-sales', seededApp.baseUrl).toString());
+  const search = page.getByRole('searchbox', { name: 'Filter records' });
+  await search.fill('BROWSER-BUY-1');
+  const history = page.getByRole('region', { name: 'Wash-sale transaction history' });
+  await expect(history.getByText('BROWSER-BUY-1')).toBeVisible();
+  await expect(history.getByText('BROWSER-SELL-2')).not.toBeVisible();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Wash Sales', exact: true })).toBeVisible();
+  const mobile = await page.evaluate(() => ({
+    viewportWidth: document.documentElement.clientWidth,
+    documentWidth: document.documentElement.scrollWidth,
+    assumptionFontSize: getComputedStyle(document.querySelector('[data-wash-sales-root] p')!)
+      .fontSize,
+  }));
+  expect(mobile.documentWidth).toBeLessThanOrEqual(mobile.viewportWidth);
+  expect(Number.parseFloat(mobile.assumptionFontSize)).toBeGreaterThanOrEqual(14);
+  await expect(page.getByText(/prior 30 calendar days/)).toBeVisible();
+});

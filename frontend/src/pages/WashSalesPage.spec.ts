@@ -91,7 +91,13 @@ const emptyResponse: WashSalesResponse = {
 const mountedWrappers: VueWrapper[] = [];
 
 function mountWashSalesPage(): VueWrapper {
-  const wrapper = mount(WashSalesPage);
+  const wrapper = mount(WashSalesPage, {
+    global: {
+      stubs: {
+        RouterLink: { template: '<a href="/#/policy#replacement-sets"><slot /></a>' },
+      },
+    },
+  });
   mountedWrappers.push(wrapper);
   return wrapper;
 }
@@ -137,16 +143,16 @@ describe('WashSalesPage', () => {
     expect(wrapper.get('[data-wash-sales-root]').attributes('aria-labelledby')).toBe('wash-title');
     const tables = Array.from(rootElement(wrapper).querySelectorAll('table'));
     expect(tables.map((table) => table.caption?.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
+      'Current and proposed purchase restrictions',
       'Acquisition history with API-provided lookback dates',
       'Managed-account transaction history returned by the API',
-      'Current and proposed purchase restrictions',
     ]);
 
     const regions = Array.from(rootElement(wrapper).querySelectorAll('[role="region"]'));
     expect(regions.map((region) => region.getAttribute('aria-label'))).toEqual([
+      'Wash-sale purchase restrictions',
       'Wash-sale acquisition rows',
       'Wash-sale transaction history',
-      'Wash-sale purchase restrictions',
     ]);
     for (const region of regions) expect(region.getAttribute('tabindex')).toBe('0');
     for (const table of tables) {
@@ -191,6 +197,25 @@ describe('WashSalesPage', () => {
     );
     expect(wrapper.get('[aria-label="API coverage warnings"]').text()).toContain(
       'Synthetic coverage warning; no live validation.',
+    );
+    const pageText = wrapper.text();
+    expect(pageText).toContain('Overall coverage is unknown beyond returned rows.');
+    expect(pageText).toContain('DRIP is assumed disabled');
+    expect(pageText).toContain('broker-authoritative adjusted basis and tacked acquisition dates');
+    expect(pageText).toContain('prior 30 calendar days and in the proposed basket');
+    expect(pageText).toContain('sold in full in the same trade group');
+    expect(pageText).toContain('through day +30; day +31 is eligible');
+    expect(pageText).toContain(
+      'Different configured replacement tickers are assumed non-substantially-identical',
+    );
+    expect(pageText).toContain('same-ticker repurchases remain restricted');
+    expect(wrapper.find('a[href="/#/policy#replacement-sets"]').exists()).toBe(true);
+    const restrictionsHeading = rootElement(wrapper).querySelector('#restrictions-title');
+    const historyHeading = rootElement(wrapper).querySelector('#history-title');
+    expect(restrictionsHeading).not.toBeNull();
+    expect(historyHeading).not.toBeNull();
+    expect(restrictionsHeading!.compareDocumentPosition(historyHeading!)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
     );
     expect(wrapper.get('[data-slot="badge"]').text()).toBe('DEMO');
   });

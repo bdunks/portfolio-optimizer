@@ -30,6 +30,50 @@
 
     <ResourceFreshnessNotice :resources="['washSales']" />
 
+    <template v-if="washSales">
+      <Alert role="status" aria-live="polite" aria-label="Wash-sale coverage limitations">
+        <AlertTitle>Coverage is not complete or independently validated</AlertTitle>
+        <AlertDescription>
+          Overall coverage is unknown beyond returned rows. The API omits conflicting-transaction
+          links and affected tax-lot IDs; missing required managed-account history must block
+          affected recommendations, not be treated as a pass.
+        </AlertDescription>
+      </Alert>
+      <Card class="tw:min-w-0">
+        <CardHeader>
+          <CardTitle>Policy assumptions and safeguards</CardTitle>
+          <CardDescription
+            >These are requirements and configured policy assumptions, not wash-sale
+            clearance.</CardDescription
+          >
+        </CardHeader>
+        <CardContent class="tw:flex tw:flex-col tw:gap-3">
+          <p class="tw:m-0 tw:text-sm tw:leading-relaxed">
+            Scope is the single managed brokerage account; outside or spouse-account transactions
+            are assumed absent, and DRIP is assumed disabled. Existing lots require
+            broker-authoritative adjusted basis and tacked acquisition dates.
+          </p>
+          <p class="tw:m-0 tw:text-sm tw:leading-relaxed">
+            Before a loss sale, inspect same-ticker acquisitions during the prior 30 calendar days
+            and in the proposed basket. A recent acquisition blocks all loss sales of that ticker
+            unless every share acquired in that window is sold in full in the same trade group, with
+            no retained replacement lot.
+          </p>
+          <p class="tw:m-0 tw:text-sm tw:leading-relaxed">
+            An executed or proposed loss sale restricts purchases of that ticker through day +30;
+            day +31 is eligible. Revalidate the full basket before any order and check each order
+            individually when authorization becomes available. Different configured replacement
+            tickers are assumed non-substantially-identical, not legally cleared; same-ticker
+            repurchases remain restricted.
+          </p>
+          <p class="tw:m-0 tw:text-sm tw:leading-relaxed">
+            <RouterLink :to="{ path: '/policy', hash: '#replacement-sets' }"
+              >Review configured replacement-set assumptions in Policy</RouterLink
+            >. This is not broker approval: individual order authorization is not available here.
+          </p>
+        </CardContent>
+      </Card>
+    </template>
     <form aria-label="Wash-sale filters" class="tw:min-w-0" @submit.prevent>
       <Card class="tw:min-w-0">
         <CardHeader class="tw:sr-only">
@@ -135,6 +179,71 @@
     </Empty>
 
     <template v-else>
+      <section aria-labelledby="restrictions-title" class="tw:min-w-0">
+        <Card class="tw:min-w-0">
+          <CardHeader>
+            <CardTitle id="restrictions-title" role="heading" aria-level="2">
+              Purchase restrictions
+            </CardTitle>
+            <CardDescription>
+              Current and proposed restrictions are separate API lists. Proposed records are not
+              represented as executed sales.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <WorkspaceTableFrame
+              v-if="filteredRestrictions.length"
+              label="Wash-sale purchase restrictions"
+            >
+              <Table class="tw:min-w-[940px]">
+                <TableCaption class="tw:sr-only">
+                  Current and proposed purchase restrictions
+                </TableCaption>
+                <TableHeader>
+                  <TableRow
+                    v-for="headerGroup in restrictionTable.getHeaderGroups()"
+                    :key="headerGroup.id"
+                  >
+                    <TableHead v-for="header in headerGroup.headers" :key="header.id" scope="col">
+                      <FlexRender v-if="!header.isPlaceholder" :header="header" />
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <TableRow v-for="row in restrictionTable.getRowModel().rows" :key="row.id">
+                    <template v-for="cell in row.getAllCells()" :key="cell.id">
+                      <TableHead
+                        v-if="cell.column.id === 'statusLabel'"
+                        scope="row"
+                        class="tw:text-left tw:font-medium"
+                      >
+                        <FlexRender :cell="cell" />
+                      </TableHead>
+                      <TableCell
+                        v-else
+                        :class="cell.column.id === 'runSource' ? 'wash-sales-wrap-cell' : undefined"
+                      >
+                        <FlexRender :cell="cell" />
+                      </TableCell>
+                    </template>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </WorkspaceTableFrame>
+            <Empty v-else class="tw:border tw:border-border" role="status" aria-live="polite">
+              <EmptyHeader>
+                <EmptyTitle>
+                  {{
+                    allRestrictions.length
+                      ? 'No restrictions match these filters.'
+                      : 'The API returned no current or proposed restrictions.'
+                  }}
+                </EmptyTitle>
+              </EmptyHeader>
+            </Empty>
+          </CardContent>
+        </Card>
+      </section>
       <section aria-labelledby="coverage-title" class="tw:min-w-0">
         <Card class="tw:min-w-0">
           <CardHeader class="tw:flex tw:flex-row tw:items-start tw:justify-between tw:gap-4">
@@ -336,78 +445,13 @@
           </CardContent>
         </Card>
       </section>
-
-      <section aria-labelledby="restrictions-title" class="tw:min-w-0">
-        <Card class="tw:min-w-0">
-          <CardHeader>
-            <CardTitle id="restrictions-title" role="heading" aria-level="2">
-              Purchase restrictions
-            </CardTitle>
-            <CardDescription>
-              Current and proposed restrictions are separate API lists. Proposed records are not
-              represented as executed sales.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <WorkspaceTableFrame
-              v-if="filteredRestrictions.length"
-              label="Wash-sale purchase restrictions"
-            >
-              <Table class="tw:min-w-[940px]">
-                <TableCaption class="tw:sr-only">
-                  Current and proposed purchase restrictions
-                </TableCaption>
-                <TableHeader>
-                  <TableRow
-                    v-for="headerGroup in restrictionTable.getHeaderGroups()"
-                    :key="headerGroup.id"
-                  >
-                    <TableHead v-for="header in headerGroup.headers" :key="header.id" scope="col">
-                      <FlexRender v-if="!header.isPlaceholder" :header="header" />
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  <TableRow v-for="row in restrictionTable.getRowModel().rows" :key="row.id">
-                    <template v-for="cell in row.getAllCells()" :key="cell.id">
-                      <TableHead
-                        v-if="cell.column.id === 'statusLabel'"
-                        scope="row"
-                        class="tw:text-left tw:font-medium"
-                      >
-                        <FlexRender :cell="cell" />
-                      </TableHead>
-                      <TableCell
-                        v-else
-                        :class="cell.column.id === 'runSource' ? 'wash-sales-wrap-cell' : undefined"
-                      >
-                        <FlexRender :cell="cell" />
-                      </TableCell>
-                    </template>
-                  </TableRow>
-                </TableBody>
-              </Table>
-            </WorkspaceTableFrame>
-            <Empty v-else class="tw:border tw:border-border" role="status" aria-live="polite">
-              <EmptyHeader>
-                <EmptyTitle>
-                  {{
-                    allRestrictions.length
-                      ? 'No restrictions match these filters.'
-                      : 'The API returned no current or proposed restrictions.'
-                  }}
-                </EmptyTitle>
-              </EmptyHeader>
-            </Empty>
-          </CardContent>
-        </Card>
-      </section>
     </template>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted } from 'vue';
+import { RouterLink } from 'vue-router';
 import { FlexRender, tableFeatures, useTable } from '@tanstack/vue-table';
 import type { ColumnDef } from '@tanstack/vue-table';
 import { useForm } from '@tanstack/vue-form';

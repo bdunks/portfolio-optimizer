@@ -35,7 +35,7 @@ from app.domain.financial_inputs import (
 )
 from tests.optimizer_quality_reference import BuyTickerBound, CandidateUniverse, SellLotBound
 
-FIXTURE_VERSION = "offline-small-cases-v1"
+FIXTURE_VERSION = "offline-small-cases-v2"
 TRADE_DATE = date(2026, 11, 13)
 AS_OF = datetime(2026, 11, 13, 16, tzinfo=UTC)
 CASE_FAMILIES = (
@@ -280,22 +280,15 @@ def _inputs_for_case(family: str, seed: int) -> FinancialInputs:
             LookThroughExposureInput(ticker, "sector", key, weight, "manual_csv", TRADE_DATE)
             for key, weight in weights
         )
-    exposures.extend(
-        (
-            LookThroughExposureInput(
-                "ETF_A", "security", "EQ1", Decimal("0.80"), "manual_csv", TRADE_DATE
-            ),
-            LookThroughExposureInput(
-                "ETF_A", "security", "EQ2", Decimal("0.20"), "manual_csv", TRADE_DATE
-            ),
-            LookThroughExposureInput(
-                "ETF_B", "security", "EQ1", Decimal("0.50"), "manual_csv", TRADE_DATE
-            ),
-            LookThroughExposureInput(
-                "ETF_B", "security", "EQ2", Decimal("0.50"), "manual_csv", TRADE_DATE
-            ),
+    security_for_sector = {"technology": "EQ1", "healthcare": "EQ2"}
+    for ticker, sector_weights in (("ETF_A", etf_a_sectors), ("ETF_B", etf_b_sectors)):
+        security_weights = {
+            security_for_sector[sector]: weight for sector, weight in sector_weights
+        }
+        exposures.extend(
+            LookThroughExposureInput(ticker, "security", security, weight, "manual_csv", TRADE_DATE)
+            for security, weight in security_weights.items()
         )
-    )
     transactions = ()
     if allow_gain_sales:
         prior_time = datetime(2026, 10, 1, 15, tzinfo=UTC)

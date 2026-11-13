@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from scripts.compare_optimizer_quality import (
     _build_summaries,
+    _compare_case,
     _git_value,
     _production_domain_check,
     nearest_rank,
@@ -89,6 +90,137 @@ def test_out_of_domain_legs_are_not_clipped_or_counted_in_exact_denominators() -
     assert summary["missed_improvement"]["numerator"] == 0
     assert summary["missed_improvement"]["denominator"] == 1
 
+
+def test_production_worker_failures_count_against_complete_reference() -> None:
+
+    case = build_small_quality_case("fee-consolidation", 20261113)
+
+    class FailingSupervisor:
+        def __init__(self, error: Exception) -> None:
+            self.error = error
+
+        async def run(self, *args: object, **kwargs: object) -> object:
+            raise self.error
+
+    for error in (TimeoutError("supervisor deadline"), RuntimeError("worker failed")):
+        row = asyncio.run(
+            _compare_case(
+                case, FailingSupervisor(error), max_assignments=64,
+                reference_time_limit_seconds=2, production_timeout_seconds=1,
+                validation_reserve_seconds=0,
+            )
+        )
+        assert row["reference"]["complete"] is True
+        assert row["production"]["reported_input_checksum"] is None
+        assert row["submitted_request_input_checksum"] == case.inputs.source_checksum
+        assert row["comparison"]["exact_small_case_denominator_eligible"] is True
+        assert row["comparison"]["missed_feasibility_case"] is True
+        assert row["comparison"]["economic_metrics"]["production"] is None
+        assert row["comparison"]["economic_metrics"]["reference"] is not None
+
+
+def test_owner_validation_deadline_failure_counts_as_missed_feasibility() -> None:
+    import time
+
+    case = build_small_quality_case("fee-consolidation", 20261113)
+    metadata = SimpleNamespace(source_checksum=case.inputs.source_checksum)
+
+    class LateResultSupervisor:
+        async def run(self, *args: object, **kwargs: object) -> object:
+            return SimpleNamespace(
+                value=SimpleNamespace(status="no_trade", legs=(), metadata=metadata),
+                overall_deadline=time.monotonic() - 1,
+            )
+
+    row = asyncio.run(
+        _compare_case(
+            case, LateResultSupervisor(), max_assignments=64,
+            reference_time_limit_seconds=2, production_timeout_seconds=1,
+            validation_reserve_seconds=0,
+        )
+    )
+    assert row["reference"]["complete"] is True
+    assert row["production"]["error_type"] == "TimeoutError"
+    assert row["comparison"]["exact_small_case_denominator_eligible"] is True
+    assert row["comparison"]["missed_feasibility_case"] is True
+
+
+def test_malformed_worker_output_is_production_failure_and_reference_still_runs() -> None:
+    case = build_small_quality_case("fee-consolidation", 20261113)
+    malformed_leg = SimpleNamespace(side="SELL", shares=Decimal(1), selected_lots=())
+    metadata = SimpleNamespace(source_checksum=case.inputs.source_checksum)
+
+    class ReturningSupervisor:
+        async def run(self, *args: object, **kwargs: object) -> object:
+            return SimpleNamespace(
+                value=SimpleNamespace(status="ready", legs=(malformed_leg,), metadata=metadata),
+                overall_deadline=10**9,
+            )
+
+    row = asyncio.run(
+        _compare_case(
+            case, ReturningSupervisor(), max_assignments=64,
+            reference_time_limit_seconds=2, production_timeout_seconds=1,
+            validation_reserve_seconds=0,
+        )
+    )
+    assert row["reference"]["complete"] is True
+    assert "fixture_error" not in row
+    assert row["production"]["status"] == "failed"
+    assert row["production"]["malformed_output"] is True
+    assert row["production"]["error_type"] is not None
+    assert row["comparison"]["out_of_domain_production_candidate"] is False
+    assert row["comparison"]["exact_small_case_denominator_eligible"] is True
+    assert row["comparison"]["missed_feasibility_case"] is True
+
+def test_checksum_mismatch_and_actual_out_of_domain_output_remain_excluded() -> None:
+    case = build_small_quality_case("fee-consolidation", 20261113)
+
+    def result(legs: tuple[object, ...], checksum: str) -> object:
+        metadata = SimpleNamespace(source_checksum=checksum)
+        value = SimpleNamespace(status="failed", legs=legs, metadata=metadata)
+        return SimpleNamespace(value=value, overall_deadline=10**9)
+
+    class FixedSupervisor:
+        def __init__(self, worker_result: object) -> None:
+            self.worker_result = worker_result
+
+        async def run(self, *args: object, **kwargs: object) -> object:
+            return self.worker_result
+
+    oversized_leg = SimpleNamespace(
+        leg_id="sell-eq1", side="SELL", ticker="EQ1", shares=Decimal(2),
+        estimated_unit_price_usd=Decimal(10),
+        selected_lots=(SimpleNamespace(broker_lot_id="EQ1-L1", shares=Decimal(2)),),
+        depends_on_leg_ids=(), sequence=1,
+    )
+    for worker_result in (
+        result((), "different-checksum"),
+        result((oversized_leg,), case.inputs.source_checksum),
+    ):
+        row = asyncio.run(
+            _compare_case(
+                case, FixedSupervisor(worker_result), max_assignments=64,
+                reference_time_limit_seconds=2, production_timeout_seconds=1,
+                validation_reserve_seconds=0,
+            )
+        )
+        assert row["reference"]["complete"] is True
+        assert row["comparison"]["exact_small_case_denominator_eligible"] is False
+        assert row["comparison"]["missed_feasibility_case"] is False
+
+
+def test_sector_fixture_security_and_sector_dimensions_are_consistent() -> None:
+    case = build_small_quality_case("sector-constraints", 20261113)
+    for ticker in ("ETF_A", "ETF_B"):
+        exposure = [row for row in case.inputs.exposures if row.ticker == ticker]
+        sectors = {row.exposure_key: row.weight for row in exposure if row.dimension == "sector"}
+        securities = {row.exposure_key: row.weight for row in exposure if row.dimension == "security"}
+        from_security = {
+            "technology": securities.get("EQ1", Decimal(0)),
+            "healthcare": securities.get("EQ2", Decimal(0)),
+        }
+        assert from_security == sectors
 
 def test_one_real_spawned_production_comparison_is_provisional_and_bounded() -> None:
     report = asyncio.run(

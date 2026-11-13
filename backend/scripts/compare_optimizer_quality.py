@@ -377,19 +377,29 @@ def _production_json(
     error: Exception | None,
     metadata: OptimizerMetadata | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    domain = _production_domain_check(case, legs)
+    domain: dict[str, Any] = {"in_domain": False, "reasons": [], "check_completed": False}
+    serialized_legs: list[dict[str, Any]] = []
+    malformed_error: Exception | None = None
+    try:
+        domain = _production_domain_check(case, legs)
+        domain["check_completed"] = True
+        serialized_legs = _leg_json(legs)
+    except Exception as caught:  # noqa: BLE001 — retain malformed worker payload as production failure.
+        malformed_error = caught
+        error = error or caught
+        status = "failed"
     owner_valid = bool(validation and validation_completed and validation.accepted)
     output_candidate = status in {"ready", "no_trade"} and owner_valid
-    in_domain_candidate = output_candidate and domain["in_domain"]
+    in_domain_candidate = output_candidate and domain["in_domain"] and malformed_error is None
     production = {
         "status": status,
-        "legs": _leg_json(legs),
+        "legs": serialized_legs,
         "independently_revalidated": validation_completed,
-        "owner_validation": _validation_json(validation, validation_completed)
-        if validation
-        else None,
-        "returned_legs_in_declared_domain": domain["in_domain"],
-        "domain_exclusion_reasons": domain["reasons"],
+        "owner_validation": _validation_json(validation, validation_completed) if validation else None,
+        "returned_legs_in_declared_domain": domain["in_domain"] if malformed_error is None else None,
+        "domain_check_completed": domain["check_completed"],
+        "domain_exclusion_reasons": domain["reasons"] if malformed_error is None else [],
+        "malformed_output": malformed_error is not None,
         "owner_valid_candidate": owner_valid,
         "candidate_comparable_in_domain": in_domain_candidate,
         "supervisor_wall_seconds": wall_seconds,
@@ -405,6 +415,7 @@ def _production_json(
     }
     internal = {
         "domain": domain,
+        "malformed_output": malformed_error is not None,
         "candidate": in_domain_candidate,
         "owner_validation": validation,
         "validation_completed": validation_completed,
@@ -512,8 +523,12 @@ async def _compare_case(
     production_validation = production_internal["owner_validation"]
     denominator_eligible = bool(
         exact
-        and production_internal["domain"]["in_domain"]
-        and production.get("reported_input_checksum") == case.inputs.source_checksum
+        and production.get("reported_input_checksum") in (None, case.inputs.source_checksum)
+        and (
+            not production_internal["domain"].get("check_completed")
+            or production_internal["domain"]["in_domain"]
+            or production_internal.get("malformed_output")
+        )
     )
     production_candidate = denominator_eligible and production_internal["candidate"]
     missed_feasibility = (
@@ -522,16 +537,18 @@ async def _compare_case(
     no_reference_feasible = exact and reference_feasible_count == 0
     missed_improvement: bool | None = None
     deltas: dict[str, str | None] = {}
+    production_metrics: dict[str, Decimal | None] | None = None
+    reference_metrics: dict[str, Decimal | None] | None = None
+    if production_internal["candidate"] and production_validation is not None:
+        production_metrics = _economic_metrics(case.inputs, production_validation)
+    if reference_optimum is not None and optimum_validation is not None:
+        reference_metrics = _economic_metrics(case.inputs, optimum_validation)
     objective_gap_pct: Decimal | None = None
     if (
         denominator_eligible
-        and reference_optimum is not None
-        and production_candidate
-        and production_validation is not None
-        and optimum_validation is not None
+        and reference_metrics is not None
+        and production_metrics is not None
     ):
-        production_metrics = _economic_metrics(case.inputs, production_validation)
-        reference_metrics = _economic_metrics(case.inputs, optimum_validation)
         for name, production_value in production_metrics.items():
             reference_value = reference_metrics[name]
             deltas[name] = (
@@ -545,7 +562,6 @@ async def _compare_case(
             objective_delta = prod_objective - ref_objective
             objective_gap_pct = objective_gap_percent(objective_delta, ref_objective)
             missed_improvement = prod_objective > ref_objective
-
     return {
         "case_id": case.case_id,
         "fixture_version": case.fixture_version,
@@ -564,7 +580,12 @@ async def _compare_case(
         "reference": reference_json,
         "reference_wall_seconds": reference_wall_seconds,
         "production": production,
+        "submitted_request_input_checksum": case.inputs.source_checksum,
         "comparison": {
+            "submitted_request_identity_known": True,
+            "returned_result_provenance_matches_request": (
+                production.get("reported_input_checksum") in (None, case.inputs.source_checksum)
+            ),
             "frozen_inputs_match": (
                 production.get("reported_input_checksum") == case.inputs.source_checksum
             ),
@@ -577,6 +598,14 @@ async def _compare_case(
             "missed_feasibility_case": missed_feasibility,
             "reference_has_no_feasible_basket": no_reference_feasible,
             "missed_improvement_case": missed_improvement,
+            "economic_metrics": {
+                "production": {
+                    key: _decimal(value) for key, value in production_metrics.items()
+                } if production_metrics is not None else None,
+                "reference": {
+                    key: _decimal(value) for key, value in reference_metrics.items()
+                } if reference_metrics is not None else None,
+            },
             "deltas_production_minus_exact_reference": deltas,
             "objective_gap_percent": _decimal(objective_gap_pct),
             "objective_gap_percent_suppressed_nonpositive_reference": bool(
@@ -585,7 +614,11 @@ async def _compare_case(
                 and optimum_validation.objective_value is not None
                 and optimum_validation.objective_value <= 0
             ),
-            "out_of_domain_production_candidate": not production_internal["domain"]["in_domain"],
+            "out_of_domain_production_candidate": (
+                production_internal["domain"].get("check_completed") is True
+                and not production_internal["domain"]["in_domain"]
+                and not production_internal.get("malformed_output")
+            ),
             "reference_cutoff": bool(reference_result and not reference_result.complete),
             "reference_error": reference_error is not None,
         },

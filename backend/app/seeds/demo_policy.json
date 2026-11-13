@@ -1,4 +1,9 @@
 {
+  "sector_bands": [
+    {"sector_key": "DEMO Technology", "target_weight_pct": "35", "band_pct": "5"},
+    {"sector_key": "DEMO Health Care", "target_weight_pct": "20", "band_pct": "5"},
+    {"sector_key": "DEMO Other", "target_weight_pct": "45", "band_pct": "10"}
+  ],
   "settings": {
     "short_term_tax_rate": null,
     "long_term_tax_rate": null,

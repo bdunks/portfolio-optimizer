@@ -14,6 +14,12 @@ export type EditableSleeve = Omit<SleeveInput, 'target_pct' | 'drift_band_pp'> &
   drift_band_pp: string;
 };
 
+export type EditableSectorBand = {
+  sector_key: string;
+  target_weight_pct: string;
+  band_pct: string;
+};
+
 type EditorSettingValue<T> =
   Exclude<T, undefined> extends boolean
     ? boolean | null
@@ -29,6 +35,7 @@ export type EditablePolicySettings = {
 export type EditablePolicyDraft = {
   settings: EditablePolicySettings;
   sleeves: EditableSleeve[];
+  sectorBands: EditableSectorBand[];
   allowedSecurities: AllowedSecurityInput[];
   overrides: OverrideInput[];
   reassignments: Record<string, string>;
@@ -167,6 +174,7 @@ export function createEmptyPolicyDraft(): EditablePolicyDraft {
   return {
     settings: createEmptyPolicySettings(),
     sleeves: [],
+    sectorBands: [],
     allowedSecurities: [],
     overrides: [],
     reassignments: {},
@@ -212,6 +220,11 @@ export function revisionToDraft(revision: PolicyRevisionResponse): EditablePolic
   return {
     settings: editableSettingsFromRevision(revision.settings),
     sleeves: editableSleevesFromRevision(revision.sleeves),
+    sectorBands: (revision.sector_bands ?? []).map((row) => ({
+      sector_key: row.sector_key,
+      target_weight_pct: normalizeServerDecimalNotation(row.target_weight_pct),
+      band_pct: normalizeServerDecimalNotation(row.band_pct),
+    })),
     allowedSecurities: revision.allowed_securities.map((security) => ({ ...security })),
     overrides: revision.overrides.map((override) => ({ ...override })),
     reassignments: {},
@@ -529,6 +542,7 @@ export function policySettingsToInput(settings: EditablePolicySettings): {
 export function policyDraftSignature(draft: EditablePolicyDraft): string {
   return JSON.stringify({
     settings: draft.settings,
+    sectorBands: draft.sectorBands,
     sleeves: draft.sleeves,
     allowedSecurities: draft.allowedSecurities,
     overrides: draft.overrides,
@@ -551,11 +565,31 @@ export function policyDraftToPayload(
       issues.push('Sleeve drift bands must be exact decimal strings.');
     }
   }
+  const sectorKeys = draft.sectorBands.map((band) => band.sector_key.trim());
+  if (new Set(sectorKeys).size !== sectorKeys.length) issues.push('Sector keys must be unique.');
+  for (const band of draft.sectorBands) {
+    if (!band.sector_key.trim()) issues.push('Sector keys are required.');
+    if (!decimalPattern.test(band.target_weight_pct.trim()) || !decimalPattern.test(band.band_pct.trim())) {
+      issues.push('Sector targets and bands must be exact decimal strings.');
+    }
+    if ([band.target_weight_pct, band.band_pct].some((value) => {
+      const number = Number(value);
+      return !Number.isFinite(number) || number < 0 || number > 100;
+    })) issues.push('Sector targets and bands must be between 0 and 100.');
+  }
+  if (draft.sectorBands.length && !exactDecimalSumIsHundred(draft.sectorBands.map((band) => band.target_weight_pct))) {
+    issues.push('Configured sector targets must total exactly 100% of invested look-through security exposure.');
+  }
   if (issues.length || !settings.value) return { payload: null, issues: [...new Set(issues)] };
   return {
     payload: {
       source_revision_id: sourceRevisionId,
       settings: settings.value,
+      sector_bands: draft.sectorBands.map((band) => ({
+        sector_key: band.sector_key.trim(),
+        target_weight_pct: band.target_weight_pct.trim(),
+        band_pct: band.band_pct.trim(),
+      })),
       sleeves: draft.sleeves.map((sleeve, index) => ({
         ...sleeve,
         sort_order: index,

@@ -261,6 +261,7 @@ export type OverrideInput = {
 };
 
 export type PolicyDraftInput = {
+  "sector_bands"?: Array<SectorBandInput>;
   "settings": PolicySettingsInput;
   "sleeves": Array<SleeveInput>;
   "allowed_securities"?: Array<AllowedSecurityInput>;
@@ -282,6 +283,7 @@ export type PolicyResponse = {
 };
 
 export type PolicyRevisionResponse = {
+  "sector_bands"?: Array<PolicySectorBandResponse>;
   "id": string;
   "revision_number": number;
   "status": "DRAFT" | "ACTIVE" | "SUPERSEDED";
@@ -292,6 +294,12 @@ export type PolicyRevisionResponse = {
   "allowed_securities": Array<AllowedSecurityResponse>;
   "overrides": Array<PolicyOverrideResponse>;
   "activation_errors"?: Array<PolicyValidationErrorResponse> | null;
+};
+
+export type PolicySectorBandResponse = {
+  "sector_key": string;
+  "target_weight_pct": string;
+  "band_pct": string;
 };
 
 export type PolicySettingsInput = {
@@ -512,6 +520,12 @@ export type RunPolicySleeveResponse = {
   "is_direct_index_sleeve": boolean;
   "is_transition_destination": boolean;
   "is_cash_sleeve": boolean;
+};
+
+export type SectorBandInput = {
+  "sector_key": string;
+  "target_weight_pct": string;
+  "band_pct": string;
 };
 
 export type SelectedLotResponse = {

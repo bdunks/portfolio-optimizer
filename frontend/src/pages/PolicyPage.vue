@@ -346,6 +346,10 @@
       @update:reassignments="updateReassignments"
       @open-replacements="openSleeveReplacements"
     />
+    <PolicySectorBandsEditor
+      :sector-bands="editorState.draft.sectorBands"
+      @update:sector-bands="updateSectorBands"
+    />
 
     <section
       class="tw:flex tw:flex-col tw:gap-2 tw:rounded-md tw:border tw:p-4 tw:md:flex-row tw:md:items-center tw:md:justify-between"
@@ -504,6 +508,7 @@ import PolicyReplacementSetsEditor from '@/components/PolicyReplacementSetsEdito
 import USAllocationTransition from '@/components/USAllocationTransition.vue';
 import PolicyUSTransitionSettings from '@/components/PolicyUSTransitionSettings.vue';
 import PolicySleevesEditor from '@/components/PolicySleevesEditor.vue';
+import PolicySectorBandsEditor from '@/components/PolicySectorBandsEditor.vue';
 import PolicyTaxBatchSettings from '@/components/PolicyTaxBatchSettings.vue';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -949,6 +954,10 @@ const canSave = computed(
 
 function updateSleeves(sleeves: EditableSleeve[]): void {
   editorState.draft.sleeves = sleeves;
+}
+
+function updateSectorBands(sectorBands: EditableSectorBand[]): void {
+  editorState.draft.sectorBands = sectorBands;
 }
 
 function updateAllowedSecurities(securities: AllowedSecurityInput[]): void {

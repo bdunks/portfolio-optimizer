@@ -1705,6 +1705,13 @@
             "title": "Reassignments",
             "type": "object"
           },
+          "sector_bands": {
+            "items": {
+              "$ref": "#/components/schemas/SectorBandInput"
+            },
+            "title": "Sector Bands",
+            "type": "array"
+          },
           "settings": {
             "$ref": "#/components/schemas/PolicySettingsInput"
           },
@@ -1857,6 +1864,13 @@
             "title": "Revision Number",
             "type": "integer"
           },
+          "sector_bands": {
+            "items": {
+              "$ref": "#/components/schemas/PolicySectorBandResponse"
+            },
+            "title": "Sector Bands",
+            "type": "array"
+          },
           "settings": {
             "$ref": "#/components/schemas/PolicySettingsResponse"
           },
@@ -1889,6 +1903,30 @@
           "overrides"
         ],
         "title": "PolicyRevisionResponse",
+        "type": "object"
+      },
+      "PolicySectorBandResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "band_pct": {
+            "title": "Band Pct",
+            "type": "string"
+          },
+          "sector_key": {
+            "title": "Sector Key",
+            "type": "string"
+          },
+          "target_weight_pct": {
+            "title": "Target Weight Pct",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sector_key",
+          "target_weight_pct",
+          "band_pct"
+        ],
+        "title": "PolicySectorBandResponse",
         "type": "object"
       },
       "PolicySettingsInput": {
@@ -3341,6 +3379,32 @@
           "is_cash_sleeve"
         ],
         "title": "RunPolicySleeveResponse",
+        "type": "object"
+      },
+      "SectorBandInput": {
+        "additionalProperties": false,
+        "properties": {
+          "band_pct": {
+            "title": "Band Pct",
+            "type": "string"
+          },
+          "sector_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Sector Key",
+            "type": "string"
+          },
+          "target_weight_pct": {
+            "title": "Target Weight Pct",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sector_key",
+          "target_weight_pct",
+          "band_pct"
+        ],
+        "title": "SectorBandInput",
         "type": "object"
       },
       "SelectedLotResponse": {

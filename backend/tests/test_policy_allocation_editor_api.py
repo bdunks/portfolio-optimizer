@@ -31,6 +31,11 @@ def test_allocation_editor_draft_round_trip_preserves_configuration_and_roles(
     assert before_assignments["VB"] == ("us_equities", "direct_indexing")
 
     payload = _draft_payload(client)
+    payload["sector_bands"] = [
+        {"sector_key": "Technology", "target_weight_pct": "30", "band_pct": "5"},
+        {"sector_key": "Health Care", "target_weight_pct": "20", "band_pct": "5"},
+        {"sector_key": "Other", "target_weight_pct": "50", "band_pct": "10"},
+    ]
     sleeves = {row["sleeve_key"]: row for row in payload["sleeves"]}
     legacy_target = "33.3333333333333333333333333333333"
     new_target = "66.6666666666666666666666666666667"
@@ -94,6 +99,7 @@ def test_allocation_editor_draft_round_trip_preserves_configuration_and_roles(
     draft = created.json()
     assert draft["status"] == "DRAFT"
     assert draft["activation_errors"] == []
+    assert draft["sector_bands"] == sorted(payload["sector_bands"], key=lambda row: row["sector_key"])
     after_draft = client.get("/api/v1/policy").json()
     assert after_draft["active"]["id"] == active_id
     assert after_draft["active"]["status"] == "ACTIVE"

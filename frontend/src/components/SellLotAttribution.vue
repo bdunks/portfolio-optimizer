@@ -32,7 +32,10 @@
         <TableBody>
           <TableRow v-for="row in table.getRowModel().rows" :key="row.id">
             <template v-for="cell in row.getAllCells()" :key="cell.id">
-              <TableCell v-if="cell.column.id === 'selection'" class="tw:whitespace-normal">
+              <TableCell
+                v-if="cell.column.id === 'selection' && showSelectionControls"
+                class="tw:whitespace-normal"
+              >
                 <Field orientation="horizontal" class="tw:items-center tw:gap-2">
                   <Checkbox
                     :id="`${selectionIdPrefix}-${row.original.broker_lot_id}`"
@@ -77,7 +80,7 @@
             </template>
           </TableRow>
           <TableRow v-if="leg.selected_lots.length === 0">
-            <TableCell colspan="8" class="tw:whitespace-normal">
+            <TableCell :colspan="showSelectionControls ? 8 : 7" class="tw:whitespace-normal">
               No broker-lot rows were returned for this SELL leg.
             </TableCell>
           </TableRow>
@@ -108,13 +111,17 @@ import type { LotSelectionIntent } from '@/components/trade-review-types';
 import type { RecommendationLegResponse } from '@/types/api';
 import { formatUsd } from '@/utils/display-values';
 
-const props = defineProps<{
-  leg: RecommendationLegResponse;
-  groupId: string;
-  canChangeSelection: boolean;
-  pending?: boolean;
-  rejected?: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    leg: RecommendationLegResponse;
+    groupId?: string;
+    canChangeSelection: boolean;
+    pending?: boolean;
+    rejected?: boolean;
+    showSelectionControls?: boolean;
+  }>(),
+  { showSelectionControls: true },
+);
 const emit = defineEmits<{
   lotSelection: [intent: LotSelectionIntent];
 }>();
@@ -125,7 +132,7 @@ type SelectedLot = RecommendationLegResponse['selected_lots'][number];
 const features = tableFeatures({ rowSelectionFeature });
 type SellLotTableFeatures = typeof features;
 
-const columns: Array<ColumnDef<SellLotTableFeatures, SelectedLot>> = [
+const allColumns: Array<ColumnDef<SellLotTableFeatures, SelectedLot>> = [
   { id: 'selection', header: 'Review selection', cell: () => '' },
   {
     accessorKey: 'broker_lot_id',
@@ -147,6 +154,11 @@ const columns: Array<ColumnDef<SellLotTableFeatures, SelectedLot>> = [
   { id: 'term', header: 'Term', cell: ({ row }) => row.original.st_lt },
   { id: 'realized_pl', header: 'Realized P/L', cell: ({ row }) => row.original.realized_pl_usd },
 ];
+const columns = computed(() =>
+  props.showSelectionControls
+    ? allColumns
+    : allColumns.filter((column) => column.id !== 'selection'),
+);
 
 const rowSelection = computed<RowSelectionState>(() =>
   Object.fromEntries(
@@ -154,13 +166,14 @@ const rowSelection = computed<RowSelectionState>(() =>
   ),
 );
 const selectionDisabled = computed(() =>
-  Boolean(props.pending || !props.canChangeSelection || props.rejected),
+  Boolean(!props.groupId || props.pending || !props.canChangeSelection || props.rejected),
 );
 const table = useTable({
   features,
   columns,
   data: computed(() => props.leg.selected_lots),
-  enableRowSelection: () => props.canChangeSelection && !props.pending && !props.rejected,
+  enableRowSelection: () =>
+    Boolean(props.groupId && props.canChangeSelection && !props.pending && !props.rejected),
   getRowId: (lot: SelectedLot) => lot.broker_lot_id,
   state: computed(() => ({ rowSelection: rowSelection.value })),
   onRowSelectionChange: (updater) => {
@@ -176,10 +189,13 @@ const table = useTable({
 });
 
 function lotSelectionLabel(brokerLotId: string): string {
-  return `Select SELL lot ${brokerLotId} in group ${props.groupId}`;
+  return props.groupId
+    ? `Select SELL lot ${brokerLotId} in group ${props.groupId}`
+    : `SELL lot ${brokerLotId} selection unavailable`;
 }
 
 function changeLotSelection(brokerLotId: string, selected: boolean): void {
+  if (!props.groupId) return;
   emit('lotSelection', { groupId: props.groupId, brokerLotId, selected });
 }
 

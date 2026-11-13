@@ -482,7 +482,7 @@ import type {
   OptimizerRunResponse,
 } from '@/types/api';
 import { formatPercent, formatUsd } from '@/utils/display-values';
-import { normalizeServerDecimalNotation } from '@/pages/policy-form';
+import { sumExactUsd } from '@/utils/exact-usd';
 
 import { canonicalLegs } from '@/pages/recommendations-state';
 
@@ -530,7 +530,7 @@ const basketSummary = computed(() => {
   );
   const st = run.estimated_realized_st_usd;
   const lt = run.estimated_realized_lt_usd;
-  const net = addUsd(st, lt);
+  const net = sumExactUsd([st, lt]);
   return {
     groups: run.groups.filter((group) => group.selected && !group.rejected).length,
     lots: selectedLots.size,
@@ -540,33 +540,6 @@ const basketSummary = computed(() => {
     net,
   };
 });
-
-const maxExactUsdTextLength = 4096;
-
-function addUsd(left: string | null | undefined, right: string | null | undefined): string | null {
-  if (left == null || right == null) return null;
-  const values = [left, right];
-  if (values.some((value) => value.length > maxExactUsdTextLength)) return null;
-  const normalizedValues = values.map(normalizeServerDecimalNotation);
-  if (
-    normalizedValues.some(
-      (value) => value.length > maxExactUsdTextLength || !/^[+-]?\d+(?:\.\d+)?$/.test(value),
-    )
-  )
-    return null;
-  const scale = Math.max(...normalizedValues.map((value) => value.split('.')[1]?.length ?? 0));
-  const units = normalizedValues.map((value) => {
-    const negative = value.startsWith('-');
-    const unsigned = value.replace(/^[+-]/, '');
-    const [whole = '0', fraction = ''] = unsigned.split('.');
-    const magnitude = BigInt(`${whole}${fraction.padEnd(scale, '0')}`);
-    return negative ? -magnitude : magnitude;
-  });
-  const total = units[0]! + units[1]!;
-  const sign = total < 0n ? '-' : '';
-  const digits = (total < 0n ? -total : total).toString().padStart(scale + 1, '0');
-  return scale ? `${sign}${digits.slice(0, -scale)}.${digits.slice(-scale)}` : `${sign}${digits}`;
-}
 
 function money(value: string | null | undefined): string {
   return formatUsd(

@@ -203,6 +203,7 @@
       <template v-else>
         Run a DEMO analysis from Overview or this page, or reopen a saved run by its API run ID.
       </template>
+
       <template #details>
         <p
           v-if="store.actionState.runOptimizer.error || store.actionState.openSavedRun.error"
@@ -210,6 +211,11 @@
         >
           The request failed. Retry only after reviewing the API error above.
         </p>
+      </template>
+      <template #action>
+        <Button as-child variant="outline" size="sm">
+          <RouterLink to="/review">Review selected trades</RouterLink>
+        </Button>
       </template>
     </WorkspaceEmptyState>
 
@@ -224,6 +230,11 @@
         :view="store.currentRunView"
         :provenance-label="provenanceLabel"
       />
+      <p class="tw:m-0 tw:mt-3">
+        <Button as-child variant="outline" size="sm">
+          <RouterLink to="/review">Review selected trades</RouterLink>
+        </Button>
+      </p>
 
       <section
         v-if="!runPresentation.reviewMutationPending"
@@ -678,6 +689,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, watch } from 'vue';
+import { RouterLink } from 'vue-router';
 import { useForm } from '@tanstack/vue-form';
 import type { AcceptableValue } from 'reka-ui';
 import ApiActionError from '@/components/ApiActionError.vue';

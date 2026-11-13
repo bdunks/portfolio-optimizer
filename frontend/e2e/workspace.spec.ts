@@ -28,6 +28,7 @@ type RecommendationResponse = {
   }>;
   consolidated_legs: Array<{
     leg_id: string;
+    sequence: number;
     group_ids: string[];
     side: string;
     shares: string;
@@ -2473,6 +2474,56 @@ test('FakeBroker policy, review, and lot workflows', async ({
   await expect(emptyBasket.getByText('Realized ST P/L', { exact: true })).toBeVisible();
   await expect(emptyBasket.getByText('Realized LT P/L', { exact: true })).toBeVisible();
   await expect(emptyBasket.getByText('Net realized P/L (ST + LT)', { exact: true })).toBeVisible();
+  const expectedSelectedLegs = selectedRecommendations.consolidated_legs
+    .filter((leg) => leg.selected)
+    .sort((left, right) => left.sequence - right.sequence);
+  const expectedSelectedSellLots = expectedSelectedLegs
+    .filter((leg) => leg.side === 'SELL')
+    .flatMap((leg) => leg.selected_lots.filter((lot) => lot.selected));
+  const expectedUnselectedSellLots = selectedRecommendations.consolidated_legs
+    .filter((leg) => leg.side === 'SELL' && leg.selected)
+    .flatMap((leg) => leg.selected_lots.filter((lot) => !lot.selected));
+  const reviewFromSummary = page.getByRole('link', { name: 'Review selected trades', exact: true });
+  await reviewFromSummary.focus();
+  await expect(reviewFromSummary).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(/#\/review$/);
+  await expect(page.getByRole('heading', { name: 'Selected trades', exact: true })).toBeFocused();
+  await expect(page.locator('[data-review-state="current"]')).toContainText(
+    'Current run and selection are confirmed by the API',
+  );
+  await expect(page.locator('article.leg-card')).toHaveCount(expectedSelectedLegs.length);
+  await expect(page.locator('#selected-basket-financials-title')).toBeVisible();
+  await expect(
+    page.getByText('Gross losses (selected SELL lots only)', { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText('Signed net realized P/L (ST + LT)', { exact: true })).toBeVisible();
+  for (const lot of expectedSelectedSellLots) {
+    await expect(page.getByText(lot.broker_lot_id, { exact: true })).toBeVisible();
+  }
+  for (const lot of expectedUnselectedSellLots) {
+    await expect(page.getByText(lot.broker_lot_id, { exact: true })).toHaveCount(0);
+  }
+  for (const leg of expectedSelectedLegs.filter((candidate) => candidate.side === 'BUY')) {
+    await expect(page.getByText(leg.leg_id, { exact: true })).toHaveCount(1);
+  }
+  await page.goBack();
+  await expect(page.getByRole('heading', { name: 'Ranked trade groups' })).toBeVisible();
+  if ((await navigationToggle.getAttribute('aria-expanded')) !== 'true') {
+    await navigationToggle.click();
+  }
+  const reviewFromSidebar = page.getByRole('link', { name: 'Selected basket' });
+  await reviewFromSidebar.focus();
+  await expect(reviewFromSidebar).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(/#\/review$/);
+  await expect(page.getByRole('heading', { name: 'Selected trades', exact: true })).toBeFocused();
+  await expect(page.locator('article.leg-card')).toHaveCount(expectedSelectedLegs.length);
+  for (const lot of expectedSelectedSellLots) {
+    await expect(page.getByText(lot.broker_lot_id, { exact: true })).toBeVisible();
+  }
+  await page.goBack();
+  await expect(page.getByRole('heading', { name: 'Ranked trade groups' })).toBeVisible();
   if ((await groupHeader.getAttribute('aria-expanded')) !== 'true') {
     await groupHeader.click();
   }

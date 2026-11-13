@@ -15,6 +15,12 @@ export const workspaceLinks = [
     icon: SparklesIcon,
     to: '/recommendations',
   },
+  {
+    label: 'Selected basket',
+    caption: 'Read-only basket review',
+    icon: ListChecksIcon,
+    to: '/review',
+  },
   { label: 'Tax Lots', caption: 'Lot-level holdings', icon: ListChecksIcon, to: '/lots' },
   {
     label: 'Allocation Policy',

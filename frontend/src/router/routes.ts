@@ -18,6 +18,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: 'Recommendations' },
       },
       {
+        path: 'review',
+        name: 'selected-basket-review',
+        component: () => import('@/pages/SelectedBasketReviewPage.vue'),
+        meta: { title: 'Selected Basket Review' },
+      },
+      {
         path: 'lots',
         name: 'lots',
         component: () => import('@/pages/TaxLotsPage.vue'),

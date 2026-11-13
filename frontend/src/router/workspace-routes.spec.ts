@@ -3,7 +3,7 @@ import { workspaceLinks } from '@/navigation/workspace-navigation';
 import routes from './routes';
 
 describe('workspace routes and navigation', () => {
-  it('provides the six intended local workspace destinations', () => {
+  it('provides the seven intended local workspace destinations', () => {
     const root = routes.find((route) => route.path === '/');
     const children = root?.children ?? [];
     const routePaths = children.map((route) => (route.path === '' ? '/' : `/${route.path}`));
@@ -11,6 +11,7 @@ describe('workspace routes and navigation', () => {
     expect(routePaths).toEqual([
       '/',
       '/recommendations',
+      '/review',
       '/lots',
       '/policy',
       '/wash-sales',
@@ -25,6 +26,7 @@ describe('workspace routes and navigation', () => {
     const children = routes.find((route) => route.path === '/')?.children ?? [];
     const expected = [
       ['recommendations', 'RecommendationsPage'],
+      ['review', 'SelectedBasketReviewPage'],
       ['lots', 'TaxLotsPage'],
       ['policy', 'PolicyPage'],
       ['wash-sales', 'WashSalesPage'],

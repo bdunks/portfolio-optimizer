@@ -10,6 +10,7 @@ import MainLayout from './MainLayout.vue';
 const workspaceRoutes = [
   '/',
   '/recommendations',
+  '/review',
   '/lots',
   '/policy',
   '/wash-sales',
@@ -73,6 +74,7 @@ describe('MainLayout', () => {
     expect(links.map((link) => link.attributes('href'))).toEqual([
       '/',
       '/recommendations',
+      '/review',
       '/lots',
       '/policy',
       '/wash-sales',

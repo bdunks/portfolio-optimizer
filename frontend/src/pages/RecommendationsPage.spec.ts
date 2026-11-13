@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMemoryHistory, createRouter } from 'vue-router';
 import { createPinia, setActivePinia } from 'pinia';
 import type { OptimizerRecommendationsResponse, USTransitionResponse } from '@/types/api';
 
@@ -517,7 +518,11 @@ function mountRecommendationsPage(pinia: ReturnType<typeof createPinia>) {
     drafts: [],
     superseded: [],
   });
-  return mount(RecommendationsPage, { global: { plugins: [pinia] } });
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: '/:pathMatch(.*)*', component: { template: '<div />' } }],
+  });
+  return mount(RecommendationsPage, { global: { plugins: [pinia, router] } });
 }
 
 async function openRecommendationGroup(
@@ -1643,5 +1648,21 @@ describe('RecommendationsPage', () => {
     expect(nextNote.value).toBe('new saved note');
     expect((nextGroup.get('input').element as HTMLInputElement).value).toBe('new saved rejection');
     wrapper.unmount();
+  });
+
+  it('links both populated and empty recommendation views to the shared read-only review route', async () => {
+    const populated = setup(makeRun());
+    const populatedWrapper = mountRecommendationsPage(populated.pinia);
+    await flushPromises();
+    expect(populatedWrapper.findAll('a[href="/review"]')).toHaveLength(1);
+    expect(populatedWrapper.get('a[href="/review"]').text()).toBe('Review selected trades');
+    populatedWrapper.unmount();
+
+    const empty = setup(null);
+    const emptyWrapper = mountRecommendationsPage(empty.pinia);
+    await flushPromises();
+    expect(emptyWrapper.findAll('a[href="/review"]')).toHaveLength(1);
+    expect(emptyWrapper.get('a[href="/review"]').text()).toBe('Review selected trades');
+    emptyWrapper.unmount();
   });
 });

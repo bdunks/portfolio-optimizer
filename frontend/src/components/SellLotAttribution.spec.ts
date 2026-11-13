@@ -149,4 +149,30 @@ describe('SellLotAttribution', () => {
     });
     expect(buy.find('section').exists()).toBe(false);
   });
+
+  it('renders exact selected lot details without selection controls in readonly mode', () => {
+    const wrapper = mount(SellLotAttribution, {
+      props: {
+        leg: sellLeg([proposedLot]),
+        canChangeSelection: false,
+        showSelectionControls: false,
+      },
+    });
+
+    expect(wrapper.get('table').element.querySelectorAll('thead th')).toHaveLength(7);
+    expect(wrapper.text()).toContain('BROKER-A1');
+    expect(wrapper.find('[role="checkbox"]').exists()).toBe(false);
+    expect(wrapper.find('label[for]').exists()).toBe(false);
+    expect(wrapper.emitted('lotSelection')).toBeUndefined();
+
+    const empty = mount(SellLotAttribution, {
+      props: {
+        leg: sellLeg([]),
+        canChangeSelection: false,
+        showSelectionControls: false,
+      },
+    });
+    expect(empty.get('td').attributes('colspan')).toBe('7');
+    expect(empty.find('[role="checkbox"]').exists()).toBe(false);
+  });
 });

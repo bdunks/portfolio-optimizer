@@ -3,6 +3,7 @@
 The optimizer never supplies account totals, realized gains, wash-sale results, or objective values
 trusted by this module. Every value is recomputed from the frozen FinancialInputs and canonical legs.
 """
+
 from __future__ import annotations
 
 import time
@@ -32,7 +33,11 @@ _OBJECTIVE_WEIGHT_KEYS = (
     "objective_turnover_weight",
     "objective_cleanup_weight",
 )
-_REQUIRED_DECIMAL_KEYS = (*_OBJECTIVE_WEIGHT_KEYS, "estimated_spread_bps", "estimated_fee_per_order_usd")
+_REQUIRED_DECIMAL_KEYS = (
+    *_OBJECTIVE_WEIGHT_KEYS,
+    "estimated_spread_bps",
+    "estimated_fee_per_order_usd",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +66,9 @@ class CandidateValidation:
     objective_components: tuple[tuple[str, Decimal], ...] = ()
 
 
-def read_objective_policy(inputs: FinancialInputs) -> tuple[ObjectivePolicy | None, tuple[str, ...]]:
+def read_objective_policy(
+    inputs: FinancialInputs,
+) -> tuple[ObjectivePolicy | None, tuple[str, ...]]:
     """Read required objective/cost settings as exact Decimals, without adding policy defaults."""
     settings = inputs.policy.settings
     accessor = getattr(settings, "decimal", None)
@@ -75,7 +82,7 @@ def read_objective_policy(inputs: FinancialInputs) -> tuple[ObjectivePolicy | No
     for key in _REQUIRED_DECIMAL_KEYS:
         try:
             value = accessor(key)
-        except (KeyError, TypeError, ValueError, AttributeError):
+        except KeyError, TypeError, ValueError, AttributeError:
             value = None
         if value is None:
             missing.append(key)
@@ -93,10 +100,14 @@ def read_objective_policy(inputs: FinancialInputs) -> tuple[ObjectivePolicy | No
     if weight_sum <= 0:
         return None, ("configuration_required:positive_objective_weight_sum",)
     normalized = tuple((key, values[key] / weight_sum) for key in _OBJECTIVE_WEIGHT_KEYS)
-    return ObjectivePolicy(normalized, values["estimated_spread_bps"], values["estimated_fee_per_order_usd"]), ()
+    return ObjectivePolicy(
+        normalized, values["estimated_spread_bps"], values["estimated_fee_per_order_usd"]
+    ), ()
 
 
-def _setting_decimal(inputs: FinancialInputs, key: str, default: Decimal | None = None) -> Decimal | None:
+def _setting_decimal(
+    inputs: FinancialInputs, key: str, default: Decimal | None = None
+) -> Decimal | None:
     value = inputs.policy.settings.get(key, default)
     if value is None:
         return None
@@ -110,21 +121,90 @@ def _setting_int(inputs: FinancialInputs, key: str) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
-def _target_rows(inputs: FinancialInputs, evaluation: PortfolioEvaluation) -> tuple[tuple[str, Decimal, Decimal], ...]:
+def _frozen_leg_input_errors(
+    inputs: FinancialInputs,
+    legs: Sequence[ConsolidatedLeg],
+    config: ObjectivePolicy,
+) -> list[str]:
+    errors: list[str] = []
+    if inputs.source_metadata.sync_complete is not True:
+        errors.append("source_sync_incomplete_or_unknown")
+    for leg in legs:
+        ticker = leg.ticker.upper()
+        security = inputs.security_for(leg.ticker)
+        if security is None:
+            errors.append(f"frozen_security_unavailable:{ticker}")
+        elif security.tradable is not True:
+            errors.append(f"security_not_tradable:{ticker}")
+        quote = inputs.quote_for(leg.ticker)
+        if quote is None:
+            errors.append(f"frozen_quote_unavailable:{ticker}")
+            continue
+        try:
+            quote_current = (
+                quote.quality.lower() == "good"
+                and quote.sync_generation == inputs.source_generation
+                and quote.as_of <= inputs.account.as_of
+            )
+        except AttributeError, TypeError, ValueError:
+            quote_current = False
+        if not quote_current:
+            errors.append(f"frozen_quote_stale_or_unusable:{ticker}")
+            continue
+        mark: Decimal | None = None
+        if quote.bid_usd is not None and quote.ask_usd is not None:
+            if quote.bid_usd > 0 and quote.ask_usd > 0 and quote.bid_usd <= quote.ask_usd:
+                mark = (quote.bid_usd + quote.ask_usd) / Decimal(2)
+        elif quote.last_usd is not None and quote.last_usd > 0:
+            mark = quote.last_usd
+        elif quote.bid_usd is not None and quote.bid_usd > 0:
+            mark = quote.bid_usd
+        elif quote.ask_usd is not None and quote.ask_usd > 0:
+            mark = quote.ask_usd
+        if mark is None:
+            errors.append(f"frozen_quote_price_unusable:{ticker}")
+            continue
+        half_spread = config.estimated_spread_bps / Decimal(10000)
+        expected_price = mark * (
+            Decimal(1) - half_spread if leg.side == "SELL" else Decimal(1) + half_spread
+        )
+        if leg.estimated_unit_price_usd != expected_price:
+            errors.append(f"execution_price_not_frozen_quote_derivation:{ticker}")
+        if leg.side != "SELL":
+            continue
+        position = next((row for row in inputs.positions if row.ticker.upper() == ticker), None)
+        if position is None:
+            errors.append(f"frozen_position_unavailable:{ticker}")
+        elif (
+            position.sync_generation != inputs.source_generation
+            or position.as_of > inputs.account.as_of
+        ):
+            errors.append(f"frozen_position_stale:{ticker}")
+        lots_by_id = {row.broker_lot_id: row for row in inputs.lots}
+        for allocation in leg.selected_lots:
+            lot = lots_by_id.get(allocation.broker_lot_id)
+            if lot is None or lot.ticker.upper() != ticker:
+                errors.append(f"frozen_lot_unavailable:{ticker}:{allocation.broker_lot_id}")
+            elif (
+                lot.sync_generation != inputs.source_generation or lot.as_of > inputs.account.as_of
+            ):
+                errors.append(f"frozen_lot_stale:{ticker}:{allocation.broker_lot_id}")
+    return errors
+
+
+def _target_rows(
+    inputs: FinancialInputs,
+    evaluation: PortfolioEvaluation,
+) -> tuple[tuple[str, Decimal, Decimal, str | None], ...]:
     sleeves = {row.key: row for row in inputs.policy.allocation.sleeves if row.enabled}
-    targets: list[tuple[str, Decimal, Decimal]] = []
+    targets: list[tuple[str, Decimal, Decimal, str | None]] = []
     for row in evaluation.allocation.target.sleeves:
         sleeve = sleeves[row.sleeve_key]
-        band = sleeve.drift_band_pp or _ZERO
-        if sleeve.parent_key is not None:
-            parent_target = next(
-                (item.target_whole_portfolio_pct for item in evaluation.allocation.target.sleeves if item.sleeve_key == sleeve.parent_key),
-                _ZERO,
-            )
-            band = exact_product(band, parent_target) / _HUNDRED
-        target = row.target_whole_portfolio_pct
-
-        targets.append((row.sleeve_key, target, band))
+        parent_key = sleeve.parent_key
+        target = (
+            row.target_whole_portfolio_pct if parent_key is None else row.target_within_parent_pct
+        )
+        targets.append((row.sleeve_key, target, sleeve.drift_band_pp or _ZERO, parent_key))
     return tuple(targets)
 
 
@@ -142,11 +222,26 @@ def _distance_sum(
     allocation_distance: list[Decimal] = []
     band_distance: list[Decimal] = []
     errors: list[str] = []
-    for key, target, band in targets:
-        current = percentage(current_values.get(key, _ZERO), total_before)
-        proposed = percentage(proposed_values.get(key, _ZERO), total_after)
+    for key, target, band, parent_key in targets:
+        current_parent = (
+            total_before if parent_key is None else current_values.get(parent_key, _ZERO)
+        )
+        proposed_parent = (
+            total_after if parent_key is None else proposed_values.get(parent_key, _ZERO)
+        )
+        current = (
+            percentage(current_values.get(key, _ZERO), current_parent)
+            if current_parent > 0
+            else _ZERO
+        )
+        proposed = (
+            percentage(proposed_values.get(key, _ZERO), proposed_parent)
+            if proposed_parent > 0
+            else _ZERO
+        )
         proposed_distance = abs(proposed - target)
-        allocation_distance.append(proposed_distance / _HUNDRED)
+        normalized_distance = proposed_distance / _HUNDRED
+        allocation_distance.append(exact_product(normalized_distance, normalized_distance))
         band_distance.append(max(_ZERO, proposed_distance - band) / _HUNDRED)
         lower_bound = min(current, target - band)
         upper_bound = max(current, target + band)
@@ -220,16 +315,18 @@ def _cash_and_limits(
                 reasons.append(f"buy_order_below_minimum:{leg.ticker}")
 
     allowed = {
-        row.ticker.upper()
-        for row in inputs.policy.allocation.allowed_securities
-        if row.enabled
+        row.ticker.upper() for row in inputs.policy.allocation.allowed_securities if row.enabled
     }
     prefer_etfs = inputs.policy.settings.get("prefer_etf_buys", False) is True
     for leg in buys:
         if leg.ticker.upper() not in allowed:
             reasons.append(f"buy_not_in_enabled_allowed_securities:{leg.ticker}")
         security = inputs.security_for(leg.ticker)
-        if prefer_etfs and security is not None and security.identity.asset_type.upper() not in {"ETF", "MUTUAL_FUND"}:
+        if (
+            prefer_etfs
+            and security is not None
+            and security.identity.asset_type.upper() not in {"ETF", "MUTUAL_FUND"}
+        ):
             reasons.append(f"buy_not_preferred_etf:{leg.ticker}")
 
     positive_st: list[Decimal] = []
@@ -240,7 +337,11 @@ def _cash_and_limits(
     gross_st = exact_sum(positive_st)
     gross_lt = exact_sum(positive_lt)
     gross_gain = exact_sum((gross_st, gross_lt))
-    for key, actual in (("gain_budget_usd", gross_gain), ("st_gain_limit_usd", gross_st), ("lt_gain_limit_usd", gross_lt)):
+    for key, actual in (
+        ("gain_budget_usd", gross_gain),
+        ("st_gain_limit_usd", gross_st),
+        ("lt_gain_limit_usd", gross_lt),
+    ):
         limit = _setting_decimal(inputs, key)
         if limit is not None and (limit < 0 or actual > limit):
             reasons.append(f"{key}_exceeded")
@@ -316,7 +417,10 @@ def _wash_validation(
                     ticker = getattr(assessment, "ticker", "unknown")
                     assessment_reasons = getattr(assessment, "reasons", ())
                     if assessment_reasons:
-                        reasons.extend(f"buy_wash_sale_ineligible:{ticker}:{reason}" for reason in assessment_reasons)
+                        reasons.extend(
+                            f"buy_wash_sale_ineligible:{ticker}:{reason}"
+                            for reason in assessment_reasons
+                        )
                     else:
                         reasons.append(f"buy_wash_sale_ineligible:{ticker}")
     return reasons, sale_assessments, buy_assessments
@@ -336,7 +440,7 @@ def _exposure_validation(
         return [], None
     try:
         aggregate = aggregate_lookthrough_exposure(inputs)
-    except (ValueError, TypeError, ArithmeticError):
+    except ValueError, TypeError, ArithmeticError:
         return ["exposure_coverage_unavailable"], None
     coverage = aggregate.coverage
     reasons: list[str] = []
@@ -352,7 +456,7 @@ def _exposure_validation(
             continue
         try:
             candidate = aggregate_lookthrough_exposure(inputs, tickers=(leg.ticker,))
-        except (ValueError, TypeError, ArithmeticError):
+        except ValueError, TypeError, ArithmeticError:
             reasons.append(f"buy_exposure_unavailable:{leg.ticker}")
             continue
         if candidate.coverage.complete is not True or not candidate.values:
@@ -384,12 +488,30 @@ def _objective(
     cleanup_denominator = max(1, evaluation.position_count_before + evaluation.lot_count_before)
     cleanup_reward = Decimal(cleanup_count) / Decimal(cleanup_denominator)
     components = (
-        ("objective_band_weight", exact_product(config.weight("objective_band_weight"), band_slack)),
-        ("objective_allocation_weight", exact_product(config.weight("objective_allocation_weight"), allocation_drift)),
-        ("objective_tax_weight", exact_product(config.weight("objective_tax_weight"), tax_cost / portfolio_value)),
-        ("objective_trading_cost_weight", exact_product(config.weight("objective_trading_cost_weight"), cost_ratio)),
-        ("objective_turnover_weight", exact_product(config.weight("objective_turnover_weight"), turnover_ratio)),
-        ("objective_cleanup_weight", exact_product(config.weight("objective_cleanup_weight"), cleanup_reward.copy_negate())),
+        (
+            "objective_band_weight",
+            exact_product(config.weight("objective_band_weight"), band_slack),
+        ),
+        (
+            "objective_allocation_weight",
+            exact_product(config.weight("objective_allocation_weight"), allocation_drift),
+        ),
+        (
+            "objective_tax_weight",
+            exact_product(config.weight("objective_tax_weight"), tax_cost / portfolio_value),
+        ),
+        (
+            "objective_trading_cost_weight",
+            exact_product(config.weight("objective_trading_cost_weight"), cost_ratio),
+        ),
+        (
+            "objective_turnover_weight",
+            exact_product(config.weight("objective_turnover_weight"), turnover_ratio),
+        ),
+        (
+            "objective_cleanup_weight",
+            exact_product(config.weight("objective_cleanup_weight"), cleanup_reward.copy_negate()),
+        ),
     )
     return exact_sum(value for _, value in components), drift_reasons, components
 
@@ -409,7 +531,11 @@ def _trading_cost(
             mark = quote.last_usd
         if mark is None:
             mark = leg.estimated_unit_price_usd
-        spread_costs.append(exact_product(exact_product(leg.shares, mark), config.estimated_spread_bps / Decimal(10000)))
+        spread_costs.append(
+            exact_product(
+                exact_product(leg.shares, mark), config.estimated_spread_bps / Decimal(10000)
+            )
+        )
     spread = exact_sum(spread_costs)
     fees = exact_product(config.estimated_fee_per_order_usd, Decimal(len(legs)))
     return exact_sum((spread, fees))
@@ -422,13 +548,16 @@ def validate_candidate(
 ) -> CandidateValidation:
     """Recompute and validate a basket using only owner-frozen input and Decimal domain logic."""
     if deadline is not None and time.monotonic() >= deadline:
-        return CandidateValidation(False, ("validation_deadline_exceeded",), (), None, None, (), None, None, None, None)
+        return CandidateValidation(
+            False, ("validation_deadline_exceeded",), (), None, None, (), None, None, None, None
+        )
     config, config_errors = read_objective_policy(inputs)
     if config is None:
         return CandidateValidation(False, config_errors, (), None, None, (), None, None, None, None)
     errors: list[str] = []
     warnings: list[str] = []
     normalized_legs = tuple(legs)
+    errors.extend(_frozen_leg_input_errors(inputs, normalized_legs, config))
     for leg in normalized_legs:
         if leg.shares != leg.shares.to_integral_value():
             errors.append(f"fractional_{leg.side.lower()}_shares:{leg.ticker}")
@@ -439,15 +568,41 @@ def validate_candidate(
     if deadline is not None and time.monotonic() >= deadline:
         errors.append("validation_deadline_exceeded")
     if errors:
-        return CandidateValidation(False, tuple(errors), tuple(warnings), None, None, (), None, None, None, None)
+        return CandidateValidation(
+            False, tuple(errors), tuple(warnings), None, None, (), None, None, None, None
+        )
     try:
         evaluation = evaluate_portfolio(inputs, normalized_legs)
     except BasketValidationError as error:
-        return CandidateValidation(False, (f"accounting:{error.code}",), tuple(warnings), None, None, (), None, None, None, None)
+        return CandidateValidation(
+            False,
+            (f"accounting:{error.code}",),
+            tuple(warnings),
+            None,
+            None,
+            (),
+            None,
+            None,
+            None,
+            None,
+        )
 
     if deadline is not None and time.monotonic() >= deadline:
-        return CandidateValidation(False, ("validation_deadline_exceeded",), (), evaluation, None, (), None, None, None, None)
-    limit_errors, turnover, _fee_total = _cash_and_limits(inputs, normalized_legs, evaluation, config)
+        return CandidateValidation(
+            False,
+            ("validation_deadline_exceeded",),
+            (),
+            evaluation,
+            None,
+            (),
+            None,
+            None,
+            None,
+            None,
+        )
+    limit_errors, turnover, _fee_total = _cash_and_limits(
+        inputs, normalized_legs, evaluation, config
+    )
     errors.extend(limit_errors)
     if deadline is not None and time.monotonic() >= deadline:
         errors.append("validation_deadline_exceeded")
@@ -482,7 +637,9 @@ def validate_candidate(
             estimated_tax_benefit_usd=tax.estimated_tax_benefit_usd,
             estimated_trading_cost_usd=None,
         )
-    wash_errors, wash_assessments, buy_wash_assessments = _wash_validation(inputs, normalized_legs, evaluation)
+    wash_errors, wash_assessments, buy_wash_assessments = _wash_validation(
+        inputs, normalized_legs, evaluation
+    )
     errors.extend(wash_errors)
     if deadline is not None and time.monotonic() >= deadline:
         errors.append("validation_deadline_exceeded")
@@ -517,7 +674,9 @@ def validate_candidate(
             buy_wash_assessments=buy_wash_assessments,
         )
     trading_cost = _trading_cost(config, normalized_legs, inputs)
-    objective_value, drift_errors, objective_components = _objective(inputs, evaluation, tax, turnover, trading_cost, config)
+    objective_value, drift_errors, objective_components = _objective(
+        inputs, evaluation, tax, turnover, trading_cost, config
+    )
     errors.extend(drift_errors)
     if deadline is not None and time.monotonic() >= deadline:
         errors.append("validation_deadline_exceeded")

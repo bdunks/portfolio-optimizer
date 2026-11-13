@@ -569,16 +569,27 @@ export function policyDraftToPayload(
   if (new Set(sectorKeys).size !== sectorKeys.length) issues.push('Sector keys must be unique.');
   for (const band of draft.sectorBands) {
     if (!band.sector_key.trim()) issues.push('Sector keys are required.');
-    if (!decimalPattern.test(band.target_weight_pct.trim()) || !decimalPattern.test(band.band_pct.trim())) {
+    if (
+      !decimalPattern.test(band.target_weight_pct.trim()) ||
+      !decimalPattern.test(band.band_pct.trim())
+    ) {
       issues.push('Sector targets and bands must be exact decimal strings.');
     }
-    if ([band.target_weight_pct, band.band_pct].some((value) => {
-      const number = Number(value);
-      return !Number.isFinite(number) || number < 0 || number > 100;
-    })) issues.push('Sector targets and bands must be between 0 and 100.');
+    if (
+      [band.target_weight_pct, band.band_pct].some(
+        (value) => exactHundredComplement(value.trim()) === null,
+      )
+    ) {
+      issues.push('Sector targets and bands must be between 0 and 100.');
+    }
   }
-  if (draft.sectorBands.length && !exactDecimalSumIsHundred(draft.sectorBands.map((band) => band.target_weight_pct))) {
-    issues.push('Configured sector targets must total exactly 100% of invested look-through security exposure.');
+  if (
+    draft.sectorBands.length &&
+    !exactDecimalSumIsHundred(draft.sectorBands.map((band) => band.target_weight_pct))
+  ) {
+    issues.push(
+      'Configured sector targets must total exactly 100% of invested look-through security exposure.',
+    );
   }
   if (issues.length || !settings.value) return { payload: null, issues: [...new Set(issues)] };
   return {

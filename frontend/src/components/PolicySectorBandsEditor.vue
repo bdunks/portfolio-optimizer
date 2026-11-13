@@ -32,15 +32,22 @@ function remove(index: number): void {
 </script>
 
 <template>
-  <section class="space-y-3 rounded-lg border p-4" aria-labelledby="sector-band-heading">
+  <section
+    class="tw:space-y-3 tw:rounded-lg tw:border tw:p-4"
+    aria-labelledby="sector-band-heading"
+  >
     <div>
-      <h2 id="sector-band-heading" class="text-base font-semibold">Sector drift bands</h2>
-      <p class="text-sm text-muted-foreground">
+      <h2 id="sector-band-heading" class="tw:text-base tw:font-semibold">Sector drift bands</h2>
+      <p class="tw:text-sm tw:text-muted-foreground">
         Targets total exactly 100% of invested look-through security exposure. Cash is excluded;
         these are configurable policy values, not live sector measurements.
       </p>
     </div>
-    <div v-for="(row, index) in sectorBands" :key="index" class="grid gap-2 sm:grid-cols-4">
+    <div
+      v-for="(row, index) in sectorBands"
+      :key="index"
+      class="tw:grid tw:gap-2 tw:sm:grid-cols-4"
+    >
       <Field>
         <FieldLabel :for="`${id}-${index}-sector`">Sector key</FieldLabel>
         <Input
@@ -67,7 +74,7 @@ function remove(index: number): void {
           @update:model-value="update(index, 'band_pct', String($event))"
         />
       </Field>
-      <Button type="button" variant="outline" class="self-end" @click="remove(index)">
+      <Button type="button" variant="outline" class="tw:self-end" @click="remove(index)">
         Remove sector band
       </Button>
     </div>

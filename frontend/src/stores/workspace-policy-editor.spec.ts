@@ -52,6 +52,7 @@ function revision(
   number: number,
   status: PolicyRevisionResponse['status'] = 'ACTIVE',
   overrides: PolicyRevisionResponse['overrides'] = [],
+  sectorBands: NonNullable<PolicyRevisionResponse['sector_bands']> = [],
 ): PolicyRevisionResponse {
   return {
     id,
@@ -75,6 +76,7 @@ function revision(
         enabled: true,
       },
     ],
+    sector_bands: sectorBands,
     allowed_securities: [],
     overrides,
     activation_errors: [],
@@ -111,6 +113,27 @@ function beforeUnloadEvent(): BeforeUnloadEvent {
 }
 
 describe('workspace-owned policy editor', () => {
+  it('loads, clears, and preserves sector bands across revision changes and unrelated saves', async () => {
+    const band = { sector_key: 'Technology', target_weight_pct: '100', band_pct: '5' };
+    const source = revision('source', 1, 'ACTIVE', [], [band]);
+    const target = revision('target', 2, 'DRAFT', [], [{ ...band, sector_key: 'Health Care' }]);
+    const saved = revision('saved', 3, 'DRAFT', [], []);
+    const { editor, dispose } = scopedEditor({ saveDraft: () => Promise.resolve(saved) });
+
+    editor.initializeFromWorkspace(policy([], source));
+    expect(editor.state.draft.sectorBands).toEqual([band]);
+    expect(editor.requestRevisionChange(target.id, [source, target])).toBe('loaded');
+    expect(editor.state.draft.sectorBands).toEqual([{ ...band, sector_key: 'Health Care' }]);
+    expect(editor.requestRevisionChange('', [source, target])).toBe('loaded');
+    expect(editor.state.draft.sectorBands).toEqual([]);
+
+    expect(editor.requestRevisionChange(source.id, [source, target])).toBe('loaded');
+    editor.state.draft.settings.cash_reserve_usd = '1.00';
+    expect(await editor.saveDraft()).toBe(true);
+    expect(editor.state.draft.sectorBands).toEqual([band]);
+    dispose();
+  });
+
   it('selects the latest draft and ignores later refreshes', () => {
     const { editor, dispose } = scopedEditor();
     const draft4 = revision('draft-4', 4, 'DRAFT');

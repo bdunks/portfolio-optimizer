@@ -387,6 +387,31 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
                 malformed_sector_bundle,
                 proposed_trade_date=DEMO_PROPOSED_TRADE_DATE,
             )
+        for invalid_key in (None, 7):
+            malformed_key_bundle = inputs.to_provenance()
+            malformed_key_policy = malformed_key_bundle["policy"]
+            assert isinstance(malformed_key_policy, dict)
+            malformed_key_policy["sector_bands"] = [
+                {"sector_key": invalid_key, "target_weight_pct": "100", "band_pct": "0"}
+            ]
+            with pytest.raises(ValueError, match="frozen sector band policy data is malformed"):
+                financial_inputs_from_provenance(
+                    malformed_key_bundle,
+                    proposed_trade_date=DEMO_PROPOSED_TRADE_DATE,
+                )
+
+        duplicate_key_bundle = inputs.to_provenance()
+        duplicate_key_policy = duplicate_key_bundle["policy"]
+        assert isinstance(duplicate_key_policy, dict)
+        duplicate_key_policy["sector_bands"] = [
+            {"sector_key": "Technology", "target_weight_pct": "50", "band_pct": "0"},
+            {"sector_key": " Technology ", "target_weight_pct": "50", "band_pct": "0"},
+        ]
+        with pytest.raises(ValueError, match="frozen sector band policy data is invalid"):
+            financial_inputs_from_provenance(
+                duplicate_key_bundle,
+                proposed_trade_date=DEMO_PROPOSED_TRADE_DATE,
+            )
         frozen_sleeves = inputs.to_provenance()["policy"]["sleeves"]
         frozen_settings = inputs.to_provenance()["policy"]["settings"]
         assert isinstance(frozen_settings, dict)

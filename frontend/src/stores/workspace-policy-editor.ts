@@ -75,6 +75,7 @@ export function createWorkspacePolicyEditor(operations: PolicyEditorOperations) 
   function replaceDraft(next: EditablePolicyDraft): void {
     Object.assign(state.draft.settings, next.settings);
     state.draft.sleeves = next.sleeves;
+    state.draft.sectorBands = next.sectorBands;
     state.draft.allowedSecurities = next.allowedSecurities;
     state.draft.overrides = next.overrides;
     for (const key of Object.keys(state.draft.reassignments)) delete state.draft.reassignments[key];

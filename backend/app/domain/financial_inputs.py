@@ -498,9 +498,14 @@ def financial_inputs_from_provenance(
     sector_band_data = policy_data.get("sector_bands", [])
     if not isinstance(sector_band_data, list):
         raise TypeError("frozen sector band policy data is malformed")
+    if any(
+        not isinstance(row, dict) or not isinstance(row.get("sector_key"), str)
+        for row in sector_band_data
+    ):
+        raise ValueError("frozen sector band policy data is malformed")
     sector_bands = tuple(
         PolicySectorBandInput(
-            sector_key=str(row["sector_key"]),
+            sector_key=row["sector_key"].strip(),
             target_weight_pct=Decimal(str(row["target_weight_pct"])),
             band_pct=Decimal(str(row["band_pct"])),
         )

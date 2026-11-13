@@ -457,6 +457,24 @@ describe('central policy conversion boundary', () => {
     }
   });
 
+  it('validates sector bounds and totals with exact decimal arithmetic', () => {
+    const draft = createEmptyPolicyDraft();
+    draft.settings = validSettings();
+    draft.sectorBands = [
+      { sector_key: 'Technology', target_weight_pct: '100.000000000000000001', band_pct: '0' },
+      { sector_key: 'Other', target_weight_pct: '0', band_pct: '0' },
+    ];
+    expect(policyDraftToPayload(draft, 'source').issues).toContain(
+      'Sector targets and bands must be between 0 and 100.',
+    );
+
+    draft.sectorBands = [
+      { sector_key: 'Technology', target_weight_pct: '99.999999999999999999', band_pct: '100' },
+      { sector_key: 'Other', target_weight_pct: '0.000000000000000001', band_pct: '0' },
+    ];
+    expect(policyDraftToPayload(draft, 'source').issues).toEqual([]);
+  });
+
   it('blocks invalid exact-decimal syntax but allows a valid non-100% target draft', () => {
     const draft = createEmptyPolicyDraft();
     draft.settings = validSettings();

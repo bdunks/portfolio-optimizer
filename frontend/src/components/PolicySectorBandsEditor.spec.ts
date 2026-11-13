@@ -33,6 +33,8 @@ describe('PolicySectorBandsEditor', () => {
     expect(updated[1]).toEqual({ sector_key: '', target_weight_pct: '', band_pct: '' });
     expect(wrapper.findAll('label').map((label) => label.text())).toContain('Sector key');
     await wrapper.setProps({ sectorBands: updated });
+    expect(wrapper.get('section').classes()).toContain('tw:space-y-3');
+    expect(wrapper.find('.tw\\:sm\\:grid-cols-4').exists()).toBe(true);
 
     const remove = wrapper
       .findAll('button')

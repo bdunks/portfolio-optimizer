@@ -443,7 +443,6 @@ describe('central policy conversion boundary', () => {
     }
   });
 
-
   it('converts positive safe integer limits and rejects invalid values', () => {
     const editable = validSettings();
     expect(policySettingsToInput(editable).value?.max_sell_tickers_per_batch).toBe(

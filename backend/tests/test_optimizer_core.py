@@ -172,6 +172,158 @@ def _inputs(*, objective_settings: bool = True) -> FinancialInputs:
     )
 
 
+def _shared_funding_case() -> tuple[
+    FinancialInputs,
+    CandidateValidation,
+    core_module._Screen,
+    tuple[ConsolidatedLeg, ...],
+]:
+    inputs = _inputs()
+    settings = dict(inputs.policy.settings.values)
+    settings["max_sell_tickers_per_batch"] = 2
+    settings["max_total_orders_per_batch"] = 3
+    inputs = replace(
+        inputs,
+        policy=replace(
+            inputs.policy,
+            settings=PolicySettings(tuple(sorted(settings.items()))),
+        ),
+    )
+    msft = SecurityInput(SecurityIdentity("MSFT", "EQUITY"))
+    msft_position = PositionInput(
+        "MSFT", "EQUITY", False, Decimal(10), 1, NOW, Decimal(1000), SleeveAssignment("equity")
+    )
+    msft_lot = LotInput(
+        "MSFT",
+        "msft-loss-lot",
+        TRADE_DATE - timedelta(days=100),
+        Decimal(10),
+        Decimal(10),
+        Decimal(110),
+        None,
+        "TEST",
+        NOW,
+        False,
+        (),
+        1,
+    )
+    inputs = replace(
+        inputs,
+        securities=(*inputs.securities, msft),
+        positions=(*inputs.positions, msft_position),
+        lots=(*inputs.lots, msft_lot),
+        quotes=(
+            *inputs.quotes,
+            QuoteInput("MSFT", Decimal(100), Decimal(100), None, "TEST", NOW, "good", 1),
+        ),
+        exposures=(
+            *inputs.exposures,
+            LookThroughExposureInput("MSFT", "sector", "TEST", Decimal(1), "TEST", TRADE_DATE),
+        ),
+    )
+    baseline = validate_candidate(inputs, ())
+    assert baseline.accepted, baseline.reasons
+    assert baseline.evaluation is not None
+    sale_candidates = tuple(
+        core_module._SaleCandidate(
+            lot,
+            Decimal(10),
+            Decimal(100),
+            Decimal(100),
+            Decimal(-10),
+            "LT",
+            ("stock_tlh",),
+            Decimal(1),
+        )
+        for lot in inputs.lots
+    )
+    screen = core_module._Screen(
+        baseline.evaluation, sale_candidates, (), (), ("stock_tlh",), len(sale_candidates)
+    )
+    legs = (
+        ConsolidatedLeg(
+            "sell:AAPL",
+            "SELL",
+            "AAPL",
+            Decimal(1),
+            Decimal(100),
+            (LotAllocation("loss-lot", Decimal(1)),),
+            (),
+            0,
+            ("sale:AAPL",),
+        ),
+        ConsolidatedLeg(
+            "sell:MSFT",
+            "SELL",
+            "MSFT",
+            Decimal(1),
+            Decimal(100),
+            (LotAllocation("msft-loss-lot", Decimal(1)),),
+            (),
+            0,
+            ("sale:MSFT",),
+        ),
+        ConsolidatedLeg(
+            "buy:NEWETF",
+            "BUY",
+            "NEWETF",
+            Decimal(2),
+            Decimal(100),
+            (),
+            ("sell:AAPL", "sell:MSFT"),
+            1,
+            ("sale:AAPL", "sale:MSFT"),
+        ),
+    )
+    return inputs, baseline, screen, legs
+
+
+def _buy_only_components_case() -> tuple[
+    FinancialInputs, CandidateValidation, core_module._Screen, tuple[ConsolidatedLeg, ...]
+]:
+    inputs = _inputs()
+    other_etf = SecurityInput(SecurityIdentity("OTHERETF", "ETF"))
+    allocation = replace(
+        inputs.policy.allocation,
+        allowed_securities=(
+            *inputs.policy.allocation.allowed_securities,
+            AllowedSecurity("OTHERETF", "equity", None, 0, True, "replacement"),
+        ),
+    )
+    inputs = replace(
+        inputs,
+        account=replace(
+            inputs.account, cash_usd=Decimal(500), settled_buying_power_usd=Decimal(500)
+        ),
+        policy=replace(inputs.policy, allocation=allocation),
+        securities=(*inputs.securities, other_etf),
+        quotes=(
+            *inputs.quotes,
+            QuoteInput("OTHERETF", Decimal(100), Decimal(100), None, "TEST", NOW, "good", 1),
+        ),
+        exposures=(
+            *inputs.exposures,
+            LookThroughExposureInput(
+                "OTHERETF", "security", "US_MARKET", Decimal(1), "TEST", TRADE_DATE
+            ),
+            LookThroughExposureInput("OTHERETF", "sector", "TEST", Decimal(1), "TEST", TRADE_DATE),
+        ),
+    )
+    baseline = validate_candidate(inputs, ())
+    assert baseline.accepted, baseline.reasons
+    assert baseline.evaluation is not None
+    screen = core_module._Screen(baseline.evaluation, (), (), (), (), 0)
+    legs = (
+        ConsolidatedLeg(
+            "buy:NEWETF", "BUY", "NEWETF", Decimal(1), Decimal(100), group_ids=("buy:NEWETF",)
+        ),
+        ConsolidatedLeg(
+            "buy:OTHERETF", "BUY", "OTHERETF", Decimal(1), Decimal(100), group_ids=("buy:OTHERETF",)
+        ),
+    )
+    return inputs, baseline, screen, legs
+
+
 def _drift_test_inputs(
     equity_value: int, cash_value: int, *, nested: bool = False
 ) -> FinancialInputs:
@@ -852,6 +1004,69 @@ def test_worker_never_publishes_no_trade_when_reserve_is_unmet(
     assert all(status.endswith(f":{cp.INFEASIBLE}") for status in result.metadata.solver_statuses)
 
 
+def test_connected_sell_groups_and_shared_buy_emit_one_exactly_scored_opportunity() -> None:
+    inputs, baseline, screen, legs = _shared_funding_case()
+    deadline = time.monotonic() + 5
+    exact_validation = validate_candidate(inputs, legs, deadline)
+    assert exact_validation.accepted, exact_validation.reasons
+    assert exact_validation.objective_components
+
+    priorities, warnings = core_module._group_priorities(inputs, screen, baseline, legs, deadline)
+    assert warnings == ()
+    assert len(priorities) == 1
+    priority = priorities[0]
+    assert priority.group_id == "sale:AAPL"
+    assert priority.rank == 1
+    assert priority.priority_score == sum(
+        (
+            dict(baseline.objective_components)[key]
+            - dict(exact_validation.objective_components)[key]
+            for key, _ in baseline.objective_components
+        ),
+        Decimal(0),
+    )
+    assert any(
+        "Original member group IDs: sale:AAPL, sale:MSFT." in item for item in priority.rationale
+    )
+    assert any(
+        "Funding and replacement BUYs included: NEWETF." in item for item in priority.rationale
+    )
+
+    coherent = core_module._cohere_trade_group_legs(legs)
+    assert tuple(leg.group_ids for leg in coherent) == (("sale:AAPL",),) * 3
+    assert coherent[2].depends_on_leg_ids == ("sell:AAPL", "sell:MSFT")
+    assert tuple(leg.selected_lots for leg in coherent[:2]) == tuple(
+        leg.selected_lots for leg in legs[:2]
+    )
+    assert tuple(leg.shares for leg in coherent) == tuple(leg.shares for leg in legs)
+    assert tuple(leg.estimated_unit_price_usd for leg in coherent) == tuple(
+        leg.estimated_unit_price_usd for leg in legs
+    )
+    assert len({row.priority_score for row in priorities}) == 1
+
+
+def test_independent_buy_only_components_keep_deterministic_separate_ranks() -> None:
+    inputs, baseline, screen, legs = _buy_only_components_case()
+    deadline = time.monotonic() + 5
+    forward, forward_warnings = core_module._group_priorities(
+        inputs, screen, baseline, legs, deadline
+    )
+    reverse, reverse_warnings = core_module._group_priorities(
+        inputs, screen, baseline, tuple(reversed(legs)), deadline
+    )
+
+    assert forward_warnings == reverse_warnings == ()
+    assert len(forward) == len(reverse) == 2
+    assert [(item.group_id, item.rank, item.priority_score) for item in forward] == [
+        (item.group_id, item.rank, item.priority_score) for item in reverse
+    ]
+    assert {item.group_id for item in forward} == {"buy:NEWETF", "buy:OTHERETF"}
+    assert {item.group_id for item in forward} == {
+        leg.group_ids[0] for leg in core_module._cohere_trade_group_legs(legs)
+    }
+    assert all(item.priority_score is not None for item in forward)
+
+
 def test_joint_loss_harvest_is_independently_validated_and_prioritized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -884,6 +1099,7 @@ def test_joint_loss_harvest_is_independently_validated_and_prioritized(
     priority = result.metadata.trade_group_priorities[0]
     assert priority.group_id == "sale:AAPL"
     assert priority.rank == 1
+    assert all(leg.group_ids == (priority.group_id,) for leg in result.legs)
     assert priority.priority_score is not None
     assert dict(priority.objective_components)["objective_tax_weight"] > 0
     assert any(
@@ -900,6 +1116,11 @@ def test_joint_loss_harvest_is_independently_validated_and_prioritized(
     subset = resolve_subset(request, ("loss-lot",), time.monotonic() + 10)
     assert subset.status == "ready"
     assert subset.metadata.selected_lot_ids == ("loss-lot",)
+    assert len(subset.metadata.trade_group_priorities) == 1
+    assert all(
+        leg.group_ids == (subset.metadata.trade_group_priorities[0].group_id,)
+        for leg in subset.legs
+    )
     assert {
         allocation.broker_lot_id
         for leg in subset.legs
@@ -1355,6 +1576,10 @@ def test_buy_only_trade_group_is_ranked(monkeypatch: pytest.MonkeyPatch) -> None
     assert all(leg.side == "BUY" for leg in result.legs)
     assert len(result.metadata.trade_group_priorities) == 1
     assert result.metadata.trade_group_priorities[0].group_id == "buy:NEWETF"
+    assert all(
+        leg.group_ids == (result.metadata.trade_group_priorities[0].group_id,)
+        for leg in result.legs
+    )
     assert any(
         "Funding and replacement BUYs included" in line
         for line in result.metadata.trade_group_priorities[0].rationale

@@ -1464,17 +1464,9 @@ def _metadata(
     )
 
 
-def _group_priorities(
-    inputs: FinancialInputs,
-    screen: _Screen,
-    baseline: CandidateValidation,
+def _trade_group_components(
     legs: tuple[ConsolidatedLeg, ...],
-    deadline: float,
-) -> tuple[tuple[TradeGroupPriority, ...], tuple[str, ...]]:
-    baseline_components = dict(baseline.objective_components)
-    if not baseline_components:
-        return (), ("trade_group_priority_components_unavailable",)
-    candidates_by_lot = {row.lot.broker_lot_id: row for row in screen.sales}
+) -> tuple[tuple[tuple[str, ...], tuple[ConsolidatedLeg, ...]], ...]:
     group_ids_by_leg = {
         leg.leg_id: leg.group_ids or (f"{leg.side.lower()}:{leg.ticker}",) for leg in legs
     }
@@ -1494,28 +1486,54 @@ def _group_priorities(
         if left_root != right_root:
             roots[right_root] = left_root
 
-    leg_ids = {leg.leg_id: leg for leg in legs}
+    legs_by_id = {leg.leg_id: leg for leg in legs}
     for leg in legs:
         ids = group_ids_by_leg[leg.leg_id]
         for group_id in ids[1:]:
             union(ids[0], group_id)
         for dependency in leg.depends_on_leg_ids:
-            parent = leg_ids.get(dependency)
+            parent = legs_by_id.get(dependency)
             if parent is not None:
                 for group_id in group_ids_by_leg[parent.leg_id]:
                     union(ids[0], group_id)
+
     groups_by_root: dict[str, set[str]] = defaultdict(set)
     for group_id in roots:
         groups_by_root[find(group_id)].add(group_id)
     legs_by_root: dict[str, list[ConsolidatedLeg]] = defaultdict(list)
     for leg in legs:
         legs_by_root[find(group_ids_by_leg[leg.leg_id][0])].append(leg)
+    components = sorted(groups_by_root.items(), key=lambda item: tuple(sorted(item[1])))
+    return tuple(
+        (tuple(sorted(group_ids)), tuple(legs_by_root[root])) for root, group_ids in components
+    )
 
+
+def _cohere_trade_group_legs(legs: tuple[ConsolidatedLeg, ...]) -> tuple[ConsolidatedLeg, ...]:
+    canonical_id_by_leg: dict[str, str] = {}
+    for member_ids, component_legs in _trade_group_components(legs):
+        canonical_id = member_ids[0]
+        for leg in component_legs:
+            canonical_id_by_leg[leg.leg_id] = canonical_id
+    return tuple(replace(leg, group_ids=(canonical_id_by_leg[leg.leg_id],)) for leg in legs)
+
+
+def _group_priorities(
+    inputs: FinancialInputs,
+    screen: _Screen,
+    baseline: CandidateValidation,
+    legs: tuple[ConsolidatedLeg, ...],
+    deadline: float,
+) -> tuple[tuple[TradeGroupPriority, ...], tuple[str, ...]]:
+    baseline_components = dict(baseline.objective_components)
+    if not baseline_components:
+        return (), ("trade_group_priority_components_unavailable",)
+    candidates_by_lot = {row.lot.broker_lot_id: row for row in screen.sales}
     ranked: list[TradeGroupPriority] = []
     warnings: list[str] = []
-    components = sorted(groups_by_root.items(), key=lambda item: tuple(sorted(item[1])))
-    for root, group_ids in components:
-        component_legs = tuple(legs_by_root[root])
+    components = _trade_group_components(legs)
+    for group_ids, component_legs in components:
+        canonical_group_id = group_ids[0]
         if time.monotonic() >= deadline:
             warnings.append("trade_group_priority_deadline_incomplete")
             score = None
@@ -1526,6 +1544,7 @@ def _group_priorities(
             rationale_parts = [
                 "Score is the independently Decimal-recomputed no-trade objective minus the connected trade group's objective.",
                 f"Connected legs: {', '.join(leg.leg_id for leg in component_legs)}.",
+                f"Original member group IDs: {', '.join(group_ids)}.",
             ]
             group_types = sorted(
                 {
@@ -1565,8 +1584,7 @@ def _group_priorities(
                     f"Connected group validation: {reason}." for reason in validation.reasons
                 )
             rationale = tuple(rationale_parts)
-        for group_id in sorted(group_ids):
-            ranked.append(TradeGroupPriority(group_id, 0, score, component_deltas, rationale))
+        ranked.append(TradeGroupPriority(canonical_group_id, 0, score, component_deltas, rationale))
     ranked.sort(
         key=lambda row: (row.priority_score is None, -(row.priority_score or _ZERO), row.group_id)
     )
@@ -1937,6 +1955,7 @@ def optimize_worker(request: OptimizerRequest, computation_deadline: float) -> O
     group_priorities, group_priority_warnings = _group_priorities(
         inputs, screen, baseline_result, best_legs, computation_deadline
     )
+    best_legs = _cohere_trade_group_legs(best_legs)
     repair_validate_rank_seconds += max(0.0, time.monotonic() - group_priority_started)
     warnings.extend(group_priority_warnings)
 

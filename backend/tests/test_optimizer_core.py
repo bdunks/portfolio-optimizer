@@ -1531,6 +1531,17 @@ def test_active_policy_requires_explicit_sector_bands() -> None:
     assert "configuration_required:sector_bands" in result.reasons
 
 
+def test_optimizer_reports_missing_active_sector_bands_as_configuration_required() -> None:
+    inputs = _inputs()
+    inputs = replace(inputs, policy=replace(inputs.policy, sector_bands=()))
+
+    result = optimize_worker(OptimizerRequest(inputs), time.monotonic() + 10)
+
+    assert result.status == "configuration_required"
+    assert result.legs == ()
+    assert "configuration_required:sector_bands" in result.metadata.warnings
+
+
 def test_validator_rejects_replacement_that_worsens_sector_bands() -> None:
     inputs = _sector_constrained_inputs()
     sell = ConsolidatedLeg(

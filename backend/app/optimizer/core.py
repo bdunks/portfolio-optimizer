@@ -1716,7 +1716,11 @@ def optimize_worker(request: OptimizerRequest, computation_deadline: float) -> O
         status = (
             "deadline_exceeded"
             if any("deadline" in error for error in screen_errors)
-            else "infeasible"
+            else (
+                "configuration_required"
+                if any("configuration_required:" in error for error in screen_errors)
+                else "infeasible"
+            )
         )
         meta = _metadata(
             inputs,

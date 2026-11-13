@@ -179,3 +179,39 @@ test('allocation hierarchy supports keyboard controls and contextual settings', 
     contentType: 'image/png',
   });
 });
+
+test('US transition settings are keyboard discoverable with focus return on desktop and tablet', async ({
+  page,
+  seededApp,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(new URL('/#/policy', seededApp.baseUrl).toString(), {
+    waitUntil: 'domcontentloaded',
+  });
+  await expect(page.getByRole('heading', { name: 'US Equities Transition Policy' })).toBeVisible();
+  await expectNoPageOverflow(page, 'desktop US transition settings');
+
+  const trigger = page.getByRole('button', { name: /^(Set up US transition|Edit settings)$/ });
+  await trigger.focus();
+  await expect(trigger).toBeFocused();
+  await page.keyboard.press('Enter');
+  const dialog = page.getByRole('dialog', { name: 'US Equities Transition Policy settings' });
+  await expect(dialog).toBeVisible();
+  for (const name of ['US allocation', 'Legacy holdings', 'New holdings']) {
+    await expect(dialog.getByRole('combobox', { name })).toBeVisible();
+  }
+  await expect(dialog.getByRole('textbox', { name: 'Target in New holdings' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(trigger).toBeFocused();
+
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await expectNoPageOverflow(page, 'tablet US transition settings');
+  await trigger.focus();
+  await page.keyboard.press('Enter');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('combobox', { name: 'US allocation' })).toBeVisible();
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(trigger).toBeFocused();
+});

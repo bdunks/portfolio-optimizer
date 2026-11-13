@@ -436,29 +436,25 @@ describe('purpose-built policy editor sections', () => {
     expect(draft.sleeves.map((item) => item.sleeve_key).slice(-2)).toEqual(['other', 'cash']);
 
     await chooseSleeveAction(wrapper, 'Other', 'Allocation settings');
-    await setSleeveCheckboxValue(wrapper, 'Direct-index container for Other', true);
-    expect(draft.sleeves.find((item) => item.sleeve_key === 'us')?.is_direct_index_container).toBe(
+    expect(wrapper.find('[data-slot="checkbox"][id$="-direct-index-container"]').exists()).toBe(
       false,
+    );
+    expect(wrapper.find('[data-slot="checkbox"][id$="-direct-index-sleeve"]').exists()).toBe(false);
+    expect(wrapper.find('[data-slot="checkbox"][id$="-transition-destination"]').exists()).toBe(
+      false,
+    );
+    expect(draft.sleeves.find((item) => item.sleeve_key === 'us')?.is_direct_index_container).toBe(
+      true,
     );
     expect(
       draft.sleeves.find((item) => item.sleeve_key === 'other')?.is_direct_index_container,
-    ).toBe(true);
-    await setSleeveCheckboxValue(wrapper, 'Direct-index sleeve for Other', true);
+    ).toBe(false);
     expect(draft.sleeves.find((item) => item.sleeve_key === 'legacy')?.is_direct_index_sleeve).toBe(
-      true,
-    );
-    expect(draft.sleeves.find((item) => item.sleeve_key === 'other')?.is_direct_index_sleeve).toBe(
       true,
     );
     expect(
       draft.sleeves.find((item) => item.sleeve_key === 'destination')?.is_transition_destination,
     ).toBe(true);
-    expect(
-      draft.sleeves.find((item) => item.sleeve_key === 'other')?.is_transition_destination,
-    ).toBe(false);
-    expect(wrapper.find('[data-slot="checkbox"][id$="-transition-destination"]').exists()).toBe(
-      false,
-    );
     await setSleeveCheckboxValue(wrapper, 'Cash sleeve for Other', true);
     expect(draft.sleeves.find((item) => item.sleeve_key === 'other')?.is_cash_sleeve).toBe(true);
     await setSleeveCheckboxValue(wrapper, 'Cash sleeve for Other', false);
@@ -569,9 +565,9 @@ describe('purpose-built policy editor sections', () => {
     ).toBe(true);
 
     await chooseSleeveAction(wrapper, 'Root', 'Allocation settings');
-    expect(
-      sleeveCheckbox(wrapper, 'Direct-index container for Root').getAttribute('aria-checked'),
-    ).toBe('false');
+    expect(wrapper.find('[data-slot="checkbox"][id$="-direct-index-container"]').exists()).toBe(
+      false,
+    );
     await closeSleeveSettings();
 
     await wrapper.get('button[aria-label="Collapse children of Root"]').trigger('click');

@@ -93,6 +93,27 @@ def test_allocation_resolver_precedence_defaults_and_invalid_destinations() -> N
     )
 
 
+def test_default_equity_and_vb_vxf_routing_uses_only_direct_legacy_child() -> None:
+    policy = AllocationPolicy(
+        sleeves=(
+            AllocationSleeve("us_equities", None, True, direct_index_container=True),
+            AllocationSleeve("legacy", "us_equities", True, direct_index_sleeve=True),
+            AllocationSleeve("nested_legacy", "legacy", True, direct_index_sleeve=True),
+        ),
+        allowed_securities=(),
+        overrides=(),
+    )
+
+    for security in (
+        SecurityIdentity("XYZ", "EQUITY"),
+        SecurityIdentity("VB", "ETF", True),
+        SecurityIdentity("VXF", "ETF", True),
+    ):
+        assert resolve_holding(policy, security).assignment == SleeveAssignment(
+            "us_equities", "legacy"
+        )
+
+
 def test_trade_date_defaults_timezone_anniversary_and_leap_day() -> None:
     assert resolve_proposed_trade_date(None, demo=True) == DEMO_PROPOSED_TRADE_DATE == date(2026, 11, 5)
     assert resolve_proposed_trade_date(date(2024, 2, 29), demo=True) == date(2024, 2, 29)

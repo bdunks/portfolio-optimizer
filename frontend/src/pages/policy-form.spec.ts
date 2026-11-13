@@ -4,6 +4,8 @@ import {
   createEmptyPolicySettings,
   editableSettingsFromRevision,
   exactDecimalSumIsHundred,
+  applyExplicitUSTransitionSettings,
+  exactHundredComplement,
   policyDraftToPayload,
   policySettingsToInput,
   revisionToDraft,
@@ -55,6 +57,213 @@ describe('policy exact target validation', () => {
     expect(targetActivationIssues([sleeve('us', '100'), sleeve('us-etf', '99.9', 'us')])).toEqual([
       'Enabled child targets of “us” must total exactly 100%.',
     ]);
+  });
+});
+
+describe('explicit US transition settings', () => {
+  it('computes exact complements and rejects blank, malformed, or out-of-range targets', () => {
+    expect(exactHundredComplement('45.00000000000000000001')).toBe('54.99999999999999999999');
+    expect(exactHundredComplement('0')).toBe('100');
+    expect(exactHundredComplement('100.00')).toBe('0.00');
+    expect(exactHundredComplement('+000.10')).toBe('99.90');
+    expect(exactHundredComplement('.5')).toBe('99.5');
+    for (const invalid of ['', '   ', '-0.01', '100.0001', 'not a number', '1e2']) {
+      expect(exactHundredComplement(invalid)).toBeNull();
+    }
+  });
+
+  it('applies exact ordinary two-child targets and preserves unrelated sleeve data', () => {
+    const sleeves: EditableSleeve[] = [
+      {
+        ...sleeve('us', '70'),
+        is_direct_index_container: false,
+        is_direct_index_sleeve: false,
+        is_transition_destination: false,
+        is_cash_sleeve: false,
+      },
+      {
+        ...sleeve('legacy', '40.0000', 'us'),
+        is_direct_index_container: false,
+        is_direct_index_sleeve: true,
+        is_transition_destination: false,
+        is_cash_sleeve: false,
+      },
+      {
+        ...sleeve('destination', '60.0000', 'us'),
+        is_direct_index_container: false,
+        is_direct_index_sleeve: false,
+        is_transition_destination: true,
+        is_cash_sleeve: false,
+      },
+      {
+        ...sleeve('cash', '30'),
+        is_direct_index_container: false,
+        is_direct_index_sleeve: false,
+        is_transition_destination: false,
+        is_cash_sleeve: true,
+      },
+    ];
+    const result = applyExplicitUSTransitionSettings(sleeves, {
+      usKey: 'us',
+      legacyKey: 'legacy',
+      destinationKey: 'destination',
+      destinationTarget: '37.00000000000000000001',
+    });
+
+    expect(result.issues).toEqual([]);
+    expect(result.ordinaryTwoChild).toBe(true);
+    expect(result.sleeves?.map((item) => item.sleeve_key)).toEqual([
+      'us',
+      'legacy',
+      'destination',
+      'cash',
+    ]);
+    expect(result.sleeves?.map((item) => item.target_pct)).toEqual([
+      '70',
+      '62.99999999999999999999',
+      '37.00000000000000000001',
+      '30',
+    ]);
+    expect(result.sleeves?.map((item) => item.is_direct_index_container)).toEqual([
+      true,
+      false,
+      false,
+      false,
+    ]);
+    expect(result.sleeves?.map((item) => item.is_direct_index_sleeve)).toEqual([
+      false,
+      true,
+      false,
+      false,
+    ]);
+    expect(result.sleeves?.map((item) => item.is_transition_destination)).toEqual([
+      false,
+      false,
+      true,
+      false,
+    ]);
+    expect(result.sleeves?.[3]?.is_cash_sleeve).toBe(true);
+  });
+
+  it('refuses guided rewrites of multiple or nested Legacy mappings without changing flags or targets', () => {
+    const sleeves: EditableSleeve[] = [
+      { ...sleeve('us', '80'), is_direct_index_container: true },
+      { ...sleeve('legacy', '25.00', 'us'), is_direct_index_sleeve: true },
+      sleeve('new-group', '75.00', 'us'),
+      { ...sleeve('nested-legacy', '12.5', 'new-group'), is_direct_index_sleeve: true },
+      { ...sleeve('destination', '42.5', 'new-group'), is_transition_destination: true },
+    ];
+    const original = sleeves.map((item) => ({ ...item }));
+
+    const result = applyExplicitUSTransitionSettings(sleeves, {
+      usKey: 'us',
+      legacyKey: 'legacy',
+      destinationKey: 'destination',
+      destinationTarget: '99',
+    });
+
+    expect(result.sleeves).toBeNull();
+    expect(result.issues).toContain(
+      'Existing Legacy routing uses multiple sleeves or is not a direct child of one US allocation. Guided editing is unavailable; custom Legacy role mappings are preserved and read-only in guided settings. Existing explicit nested targets can still be edited in the allocation editor.',
+    );
+    expect(sleeves).toEqual(original);
+  });
+
+  it('allows New destinations below the US allocation but rejects a nested Legacy choice', () => {
+    const sleeves = [
+      { ...sleeve('us', '100'), is_direct_index_container: true },
+      sleeve('legacy', '50', 'us'),
+      sleeve('new-group', '50', 'us'),
+      sleeve('nested-legacy', '40', 'new-group'),
+      { ...sleeve('destination', '60', 'new-group'), is_transition_destination: true },
+    ];
+    const result = applyExplicitUSTransitionSettings(sleeves, {
+      usKey: 'us',
+      legacyKey: 'nested-legacy',
+      destinationKey: 'destination',
+      destinationTarget: '60',
+    });
+
+    expect(result.sleeves).toBeNull();
+    expect(result.issues).toContain(
+      'Legacy holdings must be a direct child of the US allocation for default equity and VB/VXF routing.',
+    );
+  });
+
+  it('preserves nested targets and validates explicit roles', () => {
+    const nested = [
+      sleeve('us', '70'),
+      sleeve('legacy', '31.25', 'us'),
+      sleeve('new-parent', '68.75', 'us'),
+      sleeve('destination', '45.5', 'new-parent'),
+      sleeve('other', '0', null, false),
+    ];
+    const custom = applyExplicitUSTransitionSettings(nested, {
+      usKey: 'us',
+      legacyKey: 'legacy',
+      destinationKey: 'destination',
+      destinationTarget: 'not-a-number',
+    });
+    expect(custom.issues).toEqual([]);
+    expect(custom.ordinaryTwoChild).toBe(false);
+    expect(custom.sleeves?.map((item) => item.target_pct)).toEqual([
+      '70',
+      '31.25',
+      '68.75',
+      '45.5',
+      '0',
+    ]);
+
+    const sameBranch = applyExplicitUSTransitionSettings(nested, {
+      usKey: 'us',
+      legacyKey: 'legacy',
+      destinationKey: 'legacy',
+      destinationTarget: '50',
+    });
+    expect(sameBranch.issues).toContain('Legacy and New holdings must be different sleeves.');
+
+    const overlapping = applyExplicitUSTransitionSettings(nested, {
+      usKey: 'us',
+      legacyKey: 'new-parent',
+      destinationKey: 'destination',
+      destinationTarget: '50',
+    });
+    expect(overlapping.issues).toContain('Legacy and New holdings branches must not overlap.');
+
+    const disabled = applyExplicitUSTransitionSettings(nested, {
+      usKey: 'us',
+      legacyKey: 'legacy',
+      destinationKey: 'other',
+      destinationTarget: '50',
+    });
+    expect(disabled.issues).toContain('Choose one enabled New holdings sleeve.');
+
+    const outside = applyExplicitUSTransitionSettings(nested, {
+      usKey: 'us',
+      legacyKey: 'other',
+      destinationKey: 'destination',
+      destinationTarget: '50',
+    });
+    expect(outside.issues).toContain('Choose one enabled Legacy holdings sleeve.');
+  });
+
+  it('does not auto-complement custom multi-child US allocations', () => {
+    const multiChild = [
+      sleeve('us', '100'),
+      sleeve('legacy', '20.0', 'us'),
+      sleeve('destination', '30.0', 'us'),
+      sleeve('other', '50.0', 'us'),
+    ];
+    const result = applyExplicitUSTransitionSettings(multiChild, {
+      usKey: 'us',
+      legacyKey: 'legacy',
+      destinationKey: 'destination',
+      destinationTarget: 'not-a-number',
+    });
+
+    expect(result.issues).toEqual([]);
+    expect(result.ordinaryTwoChild).toBe(false);
+    expect(result.sleeves?.map((item) => item.target_pct)).toEqual(['100', '20.0', '30.0', '50.0']);
   });
 });
 

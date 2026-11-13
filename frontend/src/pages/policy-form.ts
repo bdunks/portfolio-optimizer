@@ -215,6 +215,162 @@ function decimalParts(value: string): { coefficient: bigint; scale: number } | n
   return { coefficient, scale: fraction.length };
 }
 
+export type USTransitionSelection = {
+  usKey: string;
+  legacyKey: string;
+  destinationKey: string;
+  destinationTarget: string;
+};
+
+export type USTransitionApplyResult = {
+  sleeves: EditableSleeve[] | null;
+  issues: string[];
+  ordinaryTwoChild: boolean;
+};
+
+/** Return an exact 100-minus-target decimal string, preserving the input scale. */
+export function exactHundredComplement(value: string): string | null {
+  const parts = decimalParts(value);
+  if (!parts || parts.coefficient < 0n) return null;
+  const scaleFactor = 10n ** BigInt(parts.scale);
+  const hundred = 100n * scaleFactor;
+  if (parts.coefficient > hundred) return null;
+  const complement = hundred - parts.coefficient;
+  const whole = complement / scaleFactor;
+  if (parts.scale === 0) return whole.toString();
+  const fraction = (complement % scaleFactor).toString().padStart(parts.scale, '0');
+  return `${whole}.${fraction}`;
+}
+
+function isEnabledSleeve(sleeve: EditableSleeve | undefined): sleeve is EditableSleeve {
+  return sleeve !== undefined && sleeve.enabled !== false;
+}
+
+export function isStrictDescendantOf(
+  sleeves: readonly EditableSleeve[],
+  sleeveKey: string,
+  ancestorKey: string,
+): boolean {
+  if (sleeveKey === ancestorKey) return false;
+  const visited = new Set<string>();
+  let current = sleeves.find((sleeve) => sleeve.sleeve_key === sleeveKey);
+  while (current?.parent_sleeve_key) {
+    const parentKey = current.parent_sleeve_key;
+    if (parentKey === ancestorKey) return true;
+    if (visited.has(parentKey)) return false;
+    visited.add(parentKey);
+    current = sleeves.find((sleeve) => sleeve.sleeve_key === parentKey);
+  }
+  return false;
+}
+
+export function isOrdinaryTwoChildUSTransition(
+  sleeves: readonly EditableSleeve[],
+  selection: Pick<USTransitionSelection, 'usKey' | 'legacyKey' | 'destinationKey'>,
+): boolean {
+  if (!selection.usKey || !selection.legacyKey || !selection.destinationKey) return false;
+  const children = sleeves.filter(
+    (sleeve) => sleeve.enabled !== false && sleeve.parent_sleeve_key === selection.usKey,
+  );
+  return (
+    children.length === 2 &&
+    children.some((sleeve) => sleeve.sleeve_key === selection.legacyKey) &&
+    children.some((sleeve) => sleeve.sleeve_key === selection.destinationKey) &&
+    selection.legacyKey !== selection.destinationKey
+  );
+}
+
+const unsupportedLegacyMappingMessage =
+  'Existing Legacy routing uses multiple sleeves or is not a direct child of one US allocation. Guided editing is unavailable; custom Legacy role mappings are preserved and read-only in guided settings. Existing explicit nested targets can still be edited in the allocation editor.';
+
+export function unsupportedLegacyMappingIssue(
+  sleeves: readonly EditableSleeve[],
+  selectedUsKey?: string,
+): string | null {
+  const legacySleeves = sleeves.filter((sleeve) => sleeve.is_direct_index_sleeve === true);
+  if (legacySleeves.length > 1) return unsupportedLegacyMappingMessage;
+  if (legacySleeves.length === 0) return null;
+
+  const containers = sleeves.filter((sleeve) => sleeve.is_direct_index_container === true);
+  if (containers.length > 1) return unsupportedLegacyMappingMessage;
+  if (containers.length === 1) {
+    return legacySleeves[0]?.parent_sleeve_key === containers[0]?.sleeve_key
+      ? null
+      : unsupportedLegacyMappingMessage;
+  }
+  if (selectedUsKey && legacySleeves[0]?.parent_sleeve_key !== selectedUsKey) {
+    return unsupportedLegacyMappingMessage;
+  }
+  return null;
+}
+
+export function applyExplicitUSTransitionSettings(
+  sleeves: readonly EditableSleeve[],
+  selection: USTransitionSelection,
+): USTransitionApplyResult {
+  const unsupported = unsupportedLegacyMappingIssue(sleeves, selection.usKey);
+  if (unsupported) return { sleeves: null, issues: [unsupported], ordinaryTwoChild: false };
+  const issues: string[] = [];
+  const uniqueSleeve = (key: string): EditableSleeve | undefined => {
+    const matches = sleeves.filter((sleeve) => sleeve.sleeve_key === key);
+    return matches.length === 1 ? matches[0] : undefined;
+  };
+  const us = uniqueSleeve(selection.usKey);
+  const legacy = uniqueSleeve(selection.legacyKey);
+  const destination = uniqueSleeve(selection.destinationKey);
+
+  if (!isEnabledSleeve(us)) issues.push('Choose one enabled US allocation.');
+  if (!isEnabledSleeve(legacy)) issues.push('Choose one enabled Legacy holdings sleeve.');
+  if (!isEnabledSleeve(destination)) issues.push('Choose one enabled New holdings sleeve.');
+  if (
+    isEnabledSleeve(us) &&
+    isEnabledSleeve(legacy) &&
+    legacy.parent_sleeve_key !== us.sleeve_key
+  ) {
+    issues.push(
+      'Legacy holdings must be a direct child of the US allocation for default equity and VB/VXF routing.',
+    );
+  }
+  if (
+    isEnabledSleeve(us) &&
+    isEnabledSleeve(destination) &&
+    !isStrictDescendantOf(sleeves, destination.sleeve_key, us.sleeve_key)
+  ) {
+    issues.push('New holdings must be a strict descendant of the US allocation.');
+  }
+  if (selection.legacyKey && selection.legacyKey === selection.destinationKey) {
+    issues.push('Legacy and New holdings must be different sleeves.');
+  } else if (
+    isEnabledSleeve(legacy) &&
+    isEnabledSleeve(destination) &&
+    (isStrictDescendantOf(sleeves, legacy.sleeve_key, destination.sleeve_key) ||
+      isStrictDescendantOf(sleeves, destination.sleeve_key, legacy.sleeve_key))
+  ) {
+    issues.push('Legacy and New holdings branches must not overlap.');
+  }
+
+  const ordinaryTwoChild = isOrdinaryTwoChildUSTransition(sleeves, selection);
+  const complement = ordinaryTwoChild ? exactHundredComplement(selection.destinationTarget) : null;
+  if (ordinaryTwoChild && complement === null) {
+    issues.push('New holdings target must be an exact decimal from 0 to 100.');
+  }
+  if (issues.length) return { sleeves: null, issues, ordinaryTwoChild };
+
+  const destinationTarget = selection.destinationTarget.trim();
+  const next = sleeves.map((sleeve) => ({
+    ...sleeve,
+    is_direct_index_container: sleeve.sleeve_key === selection.usKey,
+    is_direct_index_sleeve: sleeve.sleeve_key === selection.legacyKey,
+    is_transition_destination: sleeve.sleeve_key === selection.destinationKey,
+    ...(ordinaryTwoChild && sleeve.sleeve_key === selection.destinationKey
+      ? { target_pct: destinationTarget }
+      : {}),
+    ...(ordinaryTwoChild && sleeve.sleeve_key === selection.legacyKey
+      ? { target_pct: complement! }
+      : {}),
+  }));
+  return { sleeves: next, issues: [], ordinaryTwoChild };
+}
 export function targetActivationIssues(sleeves: readonly EditableSleeve[]): string[] {
   const enabled = sleeves.filter((sleeve) => sleeve.enabled !== false);
   const topLevel = enabled.filter((sleeve) => !sleeve.parent_sleeve_key);

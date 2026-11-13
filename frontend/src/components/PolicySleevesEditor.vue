@@ -129,9 +129,8 @@
                 {{ contextualSettingsSleeve.display_name || contextualSettingsSleeve.sleeve_key }}
               </SheetTitle>
               <SheetDescription>
-                Choose where this allocation sits and edit its explicit cash and direct-index roles.
-                Top-level targets are percentages of the portfolio; nested targets are percentages
-                of their parent.
+                Choose where this allocation sits and edit its explicit cash role. Top-level targets
+                are percentages of the portfolio; nested targets are percentages of their parent.
               </SheetDescription>
             </SheetHeader>
 
@@ -174,57 +173,11 @@
               <FieldGroup class="tw:gap-3">
                 <Field orientation="horizontal" class="tw:items-center tw:gap-2">
                   <Checkbox
-                    :id="contextualControlId('direct-index-container')"
-                    :model-value="contextualSettingsSleeve.is_direct_index_container ?? false"
-                    :aria-labelledby="contextualControlId('direct-index-container-label')"
-                    @update:model-value="
-                      setDirectIndexContainer(contextualSettingsSleeve.sleeve_key, $event === true)
-                    "
-                  />
-                  <FieldLabel
-                    :id="contextualControlId('direct-index-container-label')"
-                    :for="contextualControlId('direct-index-container')"
-                  >
-                    Direct-index container for
-                    {{
-                      contextualSettingsSleeve.display_name || contextualSettingsSleeve.sleeve_key
-                    }}
-                  </FieldLabel>
-                </Field>
-                <Field orientation="horizontal" class="tw:items-center tw:gap-2">
-                  <Checkbox
-                    :id="contextualControlId('direct-index-sleeve')"
-                    :model-value="contextualSettingsSleeve.is_direct_index_sleeve ?? false"
-                    :aria-labelledby="contextualControlId('direct-index-sleeve-label')"
-                    @update:model-value="
-                      setSleeveRole(
-                        contextualSettingsSleeve.sleeve_key,
-                        'is_direct_index_sleeve',
-                        $event === true,
-                      )
-                    "
-                  />
-                  <FieldLabel
-                    :id="contextualControlId('direct-index-sleeve-label')"
-                    :for="contextualControlId('direct-index-sleeve')"
-                  >
-                    Direct-index sleeve for
-                    {{
-                      contextualSettingsSleeve.display_name || contextualSettingsSleeve.sleeve_key
-                    }}
-                  </FieldLabel>
-                </Field>
-                <Field orientation="horizontal" class="tw:items-center tw:gap-2">
-                  <Checkbox
                     :id="contextualControlId('cash-sleeve')"
                     :model-value="contextualSettingsSleeve.is_cash_sleeve ?? false"
                     :aria-labelledby="contextualControlId('cash-sleeve-label')"
                     @update:model-value="
-                      setSleeveRole(
-                        contextualSettingsSleeve.sleeve_key,
-                        'is_cash_sleeve',
-                        $event === true,
-                      )
+                      setCashSleeve(contextualSettingsSleeve.sleeve_key, $event === true)
                     "
                   />
                   <FieldLabel
@@ -795,26 +748,8 @@ function setSleeveEnabled(key: string, enabled: boolean): void {
   deleteError.value = '';
 }
 
-function setDirectIndexContainer(key: string, enabled: boolean): void {
-  setSleeves(
-    sleeves.value.map((sleeve) => ({
-      ...sleeve,
-      is_direct_index_container: sleeve.sleeve_key === key && enabled,
-    })),
-  );
-}
-
-function setSleeveRole(
-  key: string,
-  role: 'is_direct_index_sleeve' | 'is_cash_sleeve',
-  enabled: boolean,
-): void {
-  updateSleeve(
-    key,
-    role === 'is_direct_index_sleeve'
-      ? { is_direct_index_sleeve: enabled }
-      : { is_cash_sleeve: enabled },
-  );
+function setCashSleeve(key: string, enabled: boolean): void {
+  updateSleeve(key, { is_cash_sleeve: enabled });
 }
 
 function childrenOf(key: string): PolicySleeveFormRow[] {

@@ -215,6 +215,8 @@
       </Card>
     </section>
 
+    <PolicyUSTransitionSettings :draft="editorState.draft" @update:sleeves="updateSleeves" />
+
     <PolicySleevesEditor
       :draft="editorState.draft"
       :positions="portfolio?.positions ?? null"
@@ -334,6 +336,7 @@ import WorkspaceCapabilityNotice from '@/components/WorkspaceCapabilityNotice.vu
 import ResourceFreshnessNotice from '@/components/ResourceFreshnessNotice.vue';
 import PolicyHoldingOverridesEditor from '@/components/PolicyHoldingOverridesEditor.vue';
 import PolicyReplacementSetsEditor from '@/components/PolicyReplacementSetsEditor.vue';
+import PolicyUSTransitionSettings from '@/components/PolicyUSTransitionSettings.vue';
 import PolicySleevesEditor from '@/components/PolicySleevesEditor.vue';
 import PolicyTaxBatchSettings from '@/components/PolicyTaxBatchSettings.vue';
 import { Alert, AlertDescription } from '@/components/ui/alert';

@@ -21,7 +21,7 @@ from functools import partial
 from typing import Any
 from uuid import UUID, uuid4, uuid5
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.db.models import (
@@ -52,7 +52,7 @@ from app.schemas import (
     OptimizerSelectionInput,
     RecommendationAnnotationInput,
 )
-from app.services.demo_optimizer import _active_policy, _frozen_input, _run_display_context, get_run
+from app.services.demo_optimizer import _active_policy, _frozen_input, _run_display_context
 from app.services.errors import AppError
 
 _BATCH_LIMIT_KEYS = (
@@ -623,9 +623,25 @@ def _add_activity(session: Session, event_type: str, correlation_id: str, detail
     )
 
 
-def _existing_group_state(session: Session, run: OptimizerRun) -> tuple[dict[str, list[str]], dict[str, dict[str, object]]]:
+def _fresh_run(session: Session, run_id: str) -> OptimizerRun:
+    run = session.scalar(
+        select(OptimizerRun)
+        .where(OptimizerRun.id == run_id)
+        .execution_options(populate_existing=True)
+    )
+    if run is None:
+        raise AppError("run_not_found", "Optimizer run was not found", status_code=404)
+    return run
+
+
+def _existing_group_state(
+    session: Session, run: OptimizerRun
+) -> tuple[dict[str, list[str]], dict[str, dict[str, object]]]:
     groups = session.scalars(
-        select(RecommendationGroup).where(RecommendationGroup.run_id == run.id).order_by(RecommendationGroup.rank)
+        select(RecommendationGroup)
+        .where(RecommendationGroup.run_id == run.id)
+        .order_by(RecommendationGroup.rank)
+        .execution_options(populate_existing=True)
     ).all()
     universe: dict[str, list[str]] = {}
     annotations: dict[str, dict[str, object]] = {}
@@ -983,8 +999,10 @@ async def create_production_run(
     return run
 
 
-def _run_state(session: Session, run_id: str) -> tuple[OptimizerRun, _RunState, dict[str, dict[str, object]]]:
-    run = get_run(session, run_id)
+def _run_state(
+    session: Session, run_id: str
+) -> tuple[OptimizerRun, _RunState, dict[str, dict[str, object]]]:
+    run = _fresh_run(session, run_id)
     if run.solver_version == "DEMO" or run.frozen_input_bundle.get("mode") != "real_optimizer":
         raise AppError(
             "real_optimizer_operation_required",
@@ -1035,7 +1053,10 @@ def _run_state(session: Session, run_id: str) -> tuple[OptimizerRun, _RunState, 
                 "impact": row.impact,
             }
             for row in session.scalars(
-                select(RecommendationGroup).where(RecommendationGroup.run_id == run.id).order_by(RecommendationGroup.rank)
+                select(RecommendationGroup)
+                .where(RecommendationGroup.run_id == run.id)
+                .order_by(RecommendationGroup.rank)
+                .execution_options(populate_existing=True)
             ).all()
         ),
         selection_universe=universe,
@@ -1043,13 +1064,20 @@ def _run_state(session: Session, run_id: str) -> tuple[OptimizerRun, _RunState, 
     return run, state, annotations
 
 
-def _assert_same_run_state(session: Session, run: OptimizerRun, state: _RunState) -> None:
-    metrics = run.metrics if isinstance(run.metrics, dict) else {}
-    if (
-        run.input_fingerprint != state.input_fingerprint
-        or run.source_generation != state.source_generation
-        or int(metrics.get("basket_revision", 0)) != state.basket_revision
-    ):
+def _assert_same_run_state(session: Session, state: _RunState) -> None:
+    revision = func.coalesce(func.json_extract(OptimizerRun.metrics, "$.basket_revision"), 0)
+    result = session.execute(
+        update(OptimizerRun)
+        .where(
+            OptimizerRun.id == state.run_id,
+            OptimizerRun.input_fingerprint == state.input_fingerprint,
+            OptimizerRun.source_generation == state.source_generation,
+            revision == state.basket_revision,
+        )
+        .values(input_fingerprint=OptimizerRun.input_fingerprint)
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
         raise AppError(
             "stale_optimizer_basket",
             "The saved recommendation basket changed while the requested subset was being recomputed",
@@ -1155,8 +1183,8 @@ async def _recompute_real_basket(
                      "basket_unchanged": True},
         )
     with session.begin():
-        run = get_run(session, run_id)
-        _assert_same_run_state(session, run, state)
+        run = _fresh_run(session, run_id)
+        _assert_same_run_state(session, state)
         assert_optimizer_run_current(session, state.prepared, deadline=outcome.overall_deadline)
         _persist_candidate(
             session,
@@ -1251,13 +1279,26 @@ async def annotate_real_group(
             raise AppError("recommendation_group_not_found", "Recommendation group was not found", status_code=404)
         core_id = str(target["core_group_id"])
         current = annotations.get(core_id, {})
-        changes_rejection = request.rejected is not None and request.rejected != bool(current.get("rejected", False))
-        should_resolve = changes_rejection and request.rejected is True and bool(current.get("selected", False))
+        current_selected = bool(current.get("selected", False))
+        changes_rejection = request.rejected is not None and (
+            request.rejected != bool(current.get("rejected", False))
+            or (request.rejected and current_selected)
+        )
+        should_resolve = changes_rejection and request.rejected is True and current_selected
         if not should_resolve:
             assert_optimizer_run_current(session, state.prepared)
-            group = session.get(RecommendationGroup, group_id)
+            _assert_same_run_state(session, state)
+            group = session.scalar(
+                select(RecommendationGroup)
+                .where(RecommendationGroup.id == group_id)
+                .execution_options(populate_existing=True)
+            )
             if group is None:
                 raise AppError("recommendation_group_not_found", "Recommendation group was not found", status_code=404)
+            if changes_rejection:
+                metrics = dict(run.metrics) if isinstance(run.metrics, dict) else {}
+                metrics["basket_revision"] = state.basket_revision + 1
+                run.metrics = metrics
             if "note" in request.model_fields_set:
                 group.note = request.note
             if request.rejected is not None:

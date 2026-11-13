@@ -1935,7 +1935,8 @@ def test_wash_dependency_owner_assessment_call_count_is_bounded_for_2500_lots(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _install_objective_accessor(monkeypatch)
-    inputs = _inputs()
+    inputs = _wash_clearance_inputs()
+    recent_lot = inputs.lots[-1]
     lots = tuple(
         replace(
             inputs.lots[0],
@@ -1944,7 +1945,7 @@ def test_wash_dependency_owner_assessment_call_count_is_bounded_for_2500_lots(
             available_shares=Decimal(1),
             adjusted_unit_basis_usd=Decimal(101),
         )
-        for index in range(2500)
+        for index in range(2499)
     )
     inputs = replace(
         inputs,
@@ -1955,7 +1956,7 @@ def test_wash_dependency_owner_assessment_call_count_is_bounded_for_2500_lots(
                 market_value_usd=Decimal(250000),
             ),
         ),
-        lots=lots,
+        lots=(*lots, recent_lot),
     )
     calls: list[int] = []
 
@@ -1979,6 +1980,7 @@ def test_wash_dependency_owner_assessment_call_count_is_bounded_for_2500_lots(
 
     assert screen_errors == ()
     assert screen is not None
+    assert len(calls) == 1
     assert sum(calls) <= 2
 
 

@@ -1665,7 +1665,7 @@ test('FakeBroker policy, review, and lot workflows', async ({
     id: `presentation-event-${index + 1}`,
     created_at: `2025-01-${String((index % 28) + 1).padStart(2, '0')}T00:00:00Z`,
     event_type: index === 0 ? 'optimizer_run' : 'presentation_event',
-    status: 'completed',
+    status: index === 0 ? 'complete' : 'completed',
     correlation_id: `presentation-correlation-${index + 1}`,
     details: index === 0 ? { run_id: firstRun.run_id } : { ordinal: index + 1 },
   }));
@@ -1741,6 +1741,18 @@ test('FakeBroker policy, review, and lot workflows', async ({
     await page.keyboard.press('Enter');
     await expect(rowsPerPage).toContainText('25');
 
+    const commonFilter = page.getByLabel('Quick category selection');
+    const commonFilterRequest = page.waitForRequest((request) => {
+      const requestUrl = new URL(request.url());
+      return (
+        requestUrl.pathname === '/api/v1/activity' &&
+        requestUrl.searchParams.get('event_type') === 'sync'
+      );
+    });
+    await commonFilter.selectOption('sync');
+    await page.getByRole('button', { name: 'Apply filters' }).click();
+    expect(new URL((await commonFilterRequest).url()).searchParams.get('event_type')).toBe('sync');
+
     await eventTypeFilter.fill(' presentation_event ');
     await statusFilter.fill(' completed ');
     await correlationFilter.fill(' presentation-correlation-2 ');
@@ -1769,7 +1781,8 @@ test('FakeBroker policy, review, and lot workflows', async ({
     await expect(page.locator('.event-card')).toHaveCount(25);
     await expect(page.getByText('presentation-event-1', { exact: true })).toBeVisible();
     const firstEventCard = page.locator('.event-card').first();
-    await expect(firstEventCard.locator('h2')).toHaveText('optimizer_run');
+    await expect(firstEventCard.locator('h2')).toHaveText('Optimizer run');
+    await expect(firstEventCard.getByText('API event: optimizer_run')).toBeVisible();
     const eventDetails = firstEventCard.locator('details');
     await eventDetails.locator('summary').click();
     await expect(eventDetails).toHaveAttribute('open', '');
@@ -1810,6 +1823,21 @@ test('FakeBroker policy, review, and lot workflows', async ({
     await expect(page.locator('.event-card')).toHaveCount(25);
 
     await page.setViewportSize({ width: 390, height: 844 });
+    const mobileEventFilter = page.getByLabel('Event type');
+    await mobileEventFilter.focus();
+    await expect(mobileEventFilter).toBeFocused();
+    await page.keyboard.press('Control+A');
+    await page.keyboard.type('presentation_event');
+    await expect(mobileEventFilter).toHaveValue('presentation_event');
+    await page.keyboard.press('Control+A');
+    await page.keyboard.press('Backspace');
+    await expect(mobileEventFilter).toHaveValue('');
+    const mobileQuickFilter = page.getByLabel('Quick category selection');
+    await mobileQuickFilter.focus();
+    await expect(mobileQuickFilter).toBeFocused();
+    await page.keyboard.press('s');
+    await page.keyboard.press('Enter');
+    await expect(mobileQuickFilter).toHaveValue('sync');
     if (!(await eventDetails.evaluate((element) => element.hasAttribute('open')))) {
       await eventDetails.locator('summary').click();
     }

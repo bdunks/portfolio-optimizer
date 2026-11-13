@@ -400,6 +400,85 @@ describe('ActivityPage', () => {
     expect(calls).toBe(3);
   });
 
+  it('presents supported and unknown event summaries while common filters retain exact API codes', async () => {
+    const events: ActivityEventResponse[] = [
+      { ...errorEvent, details: { code: 'sync_failed', message: 'Snapshot unavailable' } },
+      { ...runEvent, id: 'unknown-event', event_type: 'future_event_kind', details: null },
+      {
+        ...runEvent,
+        id: 'constructor-event',
+        event_type: 'constructor',
+        status: 'constructor',
+        details: {},
+      },
+      {
+        ...runEvent,
+        id: 'to-string-event',
+        event_type: 'toString',
+        status: 'toString',
+        details: {},
+      },
+      {
+        ...runEvent,
+        id: 'pending-sync',
+        event_type: 'sync',
+        status: 'pending',
+        details: { generation: 9 },
+      },
+      {
+        ...runEvent,
+        id: 'unknown-status-sync',
+        event_type: 'sync',
+        status: 'queued',
+        details: {},
+      },
+      {
+        ...runEvent,
+        id: 'pending-policy',
+        event_type: 'policy_activation',
+        status: 'pending',
+        details: { revision_number: 8 },
+      },
+      {
+        ...runEvent,
+        id: 'pending-selection',
+        event_type: 'recommendation_selection',
+        status: 'pending',
+        details: { selected_group_ids: ['group-1'] },
+      },
+    ];
+    const fetcher = vi.fn<typeof fetch>(() => Promise.resolve(jsonResponse(activityPage(events))));
+    vi.stubGlobal('fetch', fetcher);
+    const { wrapper } = await mountActivityPage();
+
+    expect(wrapper.text()).toContain('Portfolio sync');
+    expect(wrapper.text()).toContain('Snapshot unavailable · Code: sync_failed');
+    expect(wrapper.text()).toContain('API event: sync');
+    expect(wrapper.text()).toContain('API event: future_event_kind');
+    expect(wrapper.text()).toContain('constructor-event');
+    expect(wrapper.text()).toContain('API event: constructor');
+    expect(wrapper.text()).toContain('Other activity event');
+    expect(wrapper.text()).toContain('constructor');
+    expect(wrapper.text()).toContain('toString');
+    expect(wrapper.text()).toContain('pending-sync');
+    expect(wrapper.text()).toContain(
+      'Activity recorded; see the returned details for information.',
+    );
+    expect(wrapper.text()).not.toContain('Portfolio sync completed for generation 9');
+    expect(wrapper.text()).not.toContain('Policy revision 8 was activated');
+    expect(wrapper.text()).not.toContain('Recommendation selection updated');
+    expect(wrapper.text()).toContain('additional details were not returned');
+    await wrapper.get('details summary').trigger('click');
+    expect(wrapper.text()).toContain('"message": "Snapshot unavailable"');
+
+    await wrapper.get('#activity-common-event-type').setValue('recommendation_selection');
+    await wrapper.get('form[aria-label="Activity filters"]').trigger('submit');
+    await flushPromises();
+    expect(requestUrl(fetcher.mock.calls[1]![0]).searchParams.get('event_type')).toBe(
+      'recommendation_selection',
+    );
+  });
+
   it('announces loading politely and then presents the empty result', async () => {
     let resolveActivity!: (response: Response) => void;
     const fetcher = vi.fn<typeof fetch>(

@@ -60,6 +60,23 @@
             class="tw:grid tw:min-w-0 tw:grid-cols-1 tw:gap-4 tw:md:grid-cols-2 tw:lg:grid-cols-3"
             data-activity-filter-grid
           >
+            <div class="tw:grid tw:gap-1">
+              <span class="tw:text-sm tw:font-medium">Common event filters</span>
+              <select
+                id="activity-common-event-type"
+                aria-label="Quick category selection"
+                @change="selectCommonEventType"
+              >
+                <option value="">Choose an event type</option>
+                <option
+                  v-for="choice in COMMON_ACTIVITY_EVENT_TYPES"
+                  :key="choice.code"
+                  :value="choice.code"
+                >
+                  {{ choice.label }}
+                </option>
+              </select>
+            </div>
             <filterForm.Field name="eventType">
               <template #default="{ field }">
                 <UiField :data-invalid="field.state.meta.errors.length ? 'true' : undefined">
@@ -294,8 +311,12 @@
             >
               <div class="tw:grid tw:min-w-0 tw:gap-1">
                 <h2 class="tw:m-0! tw:break-words tw:text-base tw:font-semibold tw:leading-snug">
-                  {{ event.event_type }}
+                  {{ eventCategoryLabel(event.event_type) }}
                 </h2>
+                <p class="tw:m-0 tw:break-all tw:text-xs tw:text-muted-foreground">
+                  API event: {{ event.event_type }}
+                </p>
+                <p class="tw:m-0 tw:text-sm tw:leading-relaxed">{{ eventSummary(event) }}</p>
                 <p class="tw:m-0 tw:break-all tw:text-sm tw:text-muted-foreground">
                   <time :datetime="event.created_at">{{ event.created_at }}</time>
                 </p>
@@ -306,7 +327,7 @@
                 class="tw:shrink-0"
                 :variant="statusBadgeVariant(event.status)"
               >
-                {{ event.status }}
+                {{ eventStatusLabel(event.status) }}
               </Badge>
             </CardHeader>
             <CardContent class="tw:grid tw:min-w-0 tw:gap-4">
@@ -445,6 +466,71 @@ const pageCount = computed(() => pagination.value.pageCount);
 
 type ActivityTextFilterField = 'eventType' | 'status' | 'correlationId';
 
+const COMMON_ACTIVITY_EVENT_TYPES = [
+  { code: 'policy_activation', label: 'Policy revision activated' },
+  { code: 'sync', label: 'Portfolio sync' },
+  { code: 'optimizer_run', label: 'Optimizer run' },
+  { code: 'recommendation_selection', label: 'Recommendation selection' },
+  { code: 'recommendation_lot_review_intent', label: 'Tax-lot review selection' },
+  { code: 'recommendation_annotation', label: 'Recommendation annotation' },
+] as const;
+
+const EVENT_CATEGORY_LABELS = new Map<string, string>(
+  COMMON_ACTIVITY_EVENT_TYPES.map(({ code, label }): [string, string] => [code, label]),
+);
+
+function eventCategoryLabel(code: string): string {
+  return EVENT_CATEGORY_LABELS.get(code) ?? 'Other activity event';
+}
+
+function eventSummary(event: ActivityEventResponse): string {
+  const details = event.details;
+  if (typeof details !== 'object' || details === null || Array.isArray(details)) {
+    return 'Activity recorded; additional details were not returned.';
+  }
+  const value = details as Record<string, unknown>;
+  const textValue = (key: string): string | null =>
+    typeof value[key] === 'string' && value[key].trim() ? value[key].trim() : null;
+  const numberValue = (key: string): string | null =>
+    typeof value[key] === 'number' && Number.isFinite(value[key]) ? String(value[key]) : null;
+  if (event.status.toLowerCase() === 'failed' || event.status.toLowerCase() === 'error') {
+    const code = textValue('code') ?? textValue('error_code');
+    const message = textValue('message') ?? textValue('error_summary');
+    return (
+      [message, code ? `Code: ${code}` : null].filter(Boolean).join(' · ') ||
+      'The operation failed; no readable error details were returned.'
+    );
+  }
+  if (event.event_type === 'policy_activation' && event.status.toLowerCase() === 'complete') {
+    const revision = numberValue('revision_number');
+    return revision
+      ? `Policy revision ${revision} was activated.`
+      : 'A policy revision was activated; revision number was not returned.';
+  }
+  if (event.event_type === 'sync' && event.status.toLowerCase() === 'complete') {
+    const generation = numberValue('generation');
+    const source = textValue('source');
+    return `Portfolio sync completed${generation ? ` for generation ${generation}` : ''}${source ? ` from ${source}` : ''}. This records the sync outcome, not a current-state confirmation.`;
+  }
+  if (event.event_type === 'optimizer_run') {
+    return 'An optimizer run was recorded. Recommendations are not orders or evidence of execution.';
+  }
+  if (
+    event.event_type === 'recommendation_selection' &&
+    event.status.toLowerCase() === 'complete'
+  ) {
+    const ids = Array.isArray(value.selected_group_ids) ? value.selected_group_ids : null;
+    return `Recommendation selection updated${ids ? ` (${ids.length} groups selected)` : ''}; no trade was authorized or executed.`;
+  }
+  if (event.event_type === 'recommendation_lot_review_intent') {
+    const lots = Array.isArray(value.broker_lot_ids) ? value.broker_lot_ids.length : null;
+    return `Tax-lot review selection recorded${lots === null ? '' : ` (${lots} lots)`}; this is not an order or execution.`;
+  }
+  if (event.event_type === 'recommendation_annotation') {
+    return 'A recommendation annotation was recorded; no trade was authorized or executed.';
+  }
+  return 'Activity recorded; see the returned details for information.';
+}
 function formatJson(value: unknown): string {
   return JSON.stringify(value, null, 2) ?? 'Unavailable';
 }
@@ -465,6 +551,21 @@ function statusBadgeVariant(value: string): 'destructive' | 'secondary' {
 
 function setTextFilter(field: ActivityTextFilterField, value: string | number): void {
   filterForm.setFieldValue(field, String(value));
+}
+
+function selectCommonEventType(event: Event): void {
+  const target = event.target;
+  if (!(target instanceof HTMLSelectElement)) return;
+  if (target.value) filterForm.setFieldValue('eventType', target.value);
+}
+
+function eventStatusLabel(status: string): string {
+  const labels = new Map([
+    ['complete', 'Completed'],
+    ['failed', 'Failed'],
+    ['error', 'Error'],
+  ]);
+  return labels.get(status.toLowerCase()) ?? status;
 }
 
 function setDateFilter(field: 'since' | 'until', value: string | number): void {

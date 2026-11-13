@@ -17,6 +17,9 @@ type RecommendationResponse = {
   groups: Array<{
     group_id: string;
     rank: number;
+    group_type: string;
+    rationale: string;
+    impact: { selected_sell_lots_count: number; realized_st_usd: string; realized_lt_usd: string };
     leg_ids: string[];
     selected: boolean;
     rejected: boolean;
@@ -28,6 +31,7 @@ type RecommendationResponse = {
     group_ids: string[];
     side: string;
     shares: string;
+    selected: boolean;
     selected_lots: Array<{ broker_lot_id: string; selected: boolean }>;
   }>;
 };
@@ -1034,9 +1038,11 @@ test('shared canonical leg links preserve the hash route and keyboard focus', as
   }
 
   const groupHeader = page.getByRole('button', {
-    name: `Recommendation group ${sharedGroupId}`,
+    name: `Tax-loss harvest Group ID ${sharedGroupId}`,
     exact: true,
   });
+  await expect(groupHeader).toHaveAccessibleName(`Tax-loss harvest Group ID ${sharedGroupId}`);
+  await expect(groupHeader).toHaveAccessibleDescription(/SELL AAPL.*API realized ST \/ LT:/);
   if ((await groupHeader.getAttribute('aria-expanded')) !== 'true') await groupHeader.click();
   const groupCard = page.locator('.group-card').filter({ has: groupHeader });
   const sharedLink = groupCard
@@ -2121,9 +2127,10 @@ test('FakeBroker policy, review, and lot workflows', async ({
   await page.getByRole('link', { name: /Recommendations/ }).click();
   await expect(page.getByRole('heading', { name: 'Ranked trade groups' })).toBeVisible();
   const sellGroupHeader = page.getByRole('button', {
-    name: `Recommendation group ${sellGroupId}`,
+    name: `Tax-loss harvest Group ID ${sellGroupId}`,
     exact: true,
   });
+  await expect(sellGroupHeader).toHaveAccessibleName(`Tax-loss harvest Group ID ${sellGroupId}`);
   const sellGroupCard = page.locator('.group-card').filter({ has: sellGroupHeader });
   await expect(sellGroupCard).toBeVisible();
   await expect(sellGroupHeader).toHaveAttribute('aria-expanded', 'false');
@@ -2242,7 +2249,7 @@ test('FakeBroker policy, review, and lot workflows', async ({
         descriptionScrollWidth: description.scrollWidth,
       };
     });
-  expect(mobileHeaderTextLayout.titleText).toContain(sellGroupId);
+  expect(mobileHeaderTextLayout.titleText).toContain('Tax-loss harvest');
   expect(mobileHeaderTextLayout.descriptionText.trim()).toContain('·');
   expect(
     mobileHeaderTextLayout.blockScrollWidth,
@@ -2250,12 +2257,20 @@ test('FakeBroker policy, review, and lot workflows', async ({
   ).toBeLessThanOrEqual(mobileHeaderTextLayout.blockClientWidth);
   expect(
     mobileHeaderTextLayout.titleScrollWidth,
-    'mobile long group identifier fits its text block',
+    'mobile economic-intent title fits its text block',
   ).toBeLessThanOrEqual(mobileHeaderTextLayout.titleClientWidth);
   expect(
     mobileHeaderTextLayout.descriptionScrollWidth,
     'mobile group and sleeve description fits',
   ).toBeLessThanOrEqual(mobileHeaderTextLayout.descriptionClientWidth);
+  if ((await sellGroupHeader.getAttribute('aria-expanded')) === 'true') {
+    await sellGroupHeader.focus();
+    await sellGroupHeader.press('Enter');
+  }
+  await expect(sellGroupHeader).toHaveAttribute('aria-expanded', 'false');
+  await sellGroupHeader.focus();
+  await sellGroupHeader.press('Enter');
+  await expect(sellGroupHeader).toHaveAttribute('aria-expanded', 'true');
   const mobileGroupHeaderPath = testInfo.outputPath('fakebroker-trade-group-header-mobile.png');
   await sellGroupHeader.screenshot({ path: mobileGroupHeaderPath });
   await testInfo.attach('FakeBroker trade-group header mobile', {
@@ -2377,25 +2392,90 @@ test('FakeBroker policy, review, and lot workflows', async ({
   }
   await page.getByRole('link', { name: /Recommendations/ }).click();
   await expect(page.getByRole('heading', { name: 'Ranked trade groups' })).toBeVisible();
-  const groupHeader = page.getByRole('button', { name: /^Recommendation group / }).first();
-  const groupLabel = await groupHeader.getAttribute('aria-label');
-  const groupId = groupLabel?.replace('Recommendation group ', '');
+  const groupHeader = page.getByRole('button', { name: /^Tax-loss harvest Group ID / }).first();
+  const groupId = await groupHeader.getAttribute('data-group-id');
   if (!groupId) throw new Error('The first recommendation group has no identifier');
   const groupCard = page.locator('.group-card').filter({ has: groupHeader });
+  const initialRecommendations = await readRecommendations(page, seededApp, currentRun.run_id);
+  const initialGroup = initialRecommendations.groups.find((group) => group.group_id === groupId);
+  if (!initialGroup) throw new Error(`Recommendation group ${groupId} is missing from the API`);
+  await expect(groupHeader).toHaveAttribute('aria-expanded', 'false');
+  await expect(groupHeader).toContainText(`Priority ${initialGroup.rank}`);
+  await expect(groupHeader).toContainText('Tax-loss harvest');
+  await expect(groupHeader).toContainText(initialGroup.rationale);
+  await expect(groupHeader).toContainText('API realized ST / LT:');
+  await expect(groupHeader).toContainText(
+    `${initialGroup.impact.selected_sell_lots_count} sell lots`,
+  );
   if ((await groupHeader.getAttribute('aria-expanded')) !== 'true') {
-    await groupHeader.click();
+    await groupHeader.focus();
+    await expect(groupHeader).toBeFocused();
+    await groupHeader.press('Enter');
   }
+  await expect(groupHeader).toHaveAttribute('aria-expanded', 'true');
   const groupCheckbox = groupCard.getByRole('checkbox', {
     name: `Select recommendation group ${groupId}`,
   });
-  if (!(await groupCheckbox.isChecked())) {
-    await groupCheckbox.check();
-    await expect(groupCheckbox).toBeChecked();
-  }
+  const selectionTools = page.locator('.selection-tools');
+  const clearGroups = selectionTools.getByRole('button', {
+    name: 'Clear selected groups and re-solve',
+  });
+  const clearResponsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      response.url().includes('/optimizer/runs/') &&
+      response.url().endsWith('/selection'),
+  );
+  await clearGroups.click();
+  const clearResponse = await clearResponsePromise;
+  expect(clearResponse.ok(), 'FakeBroker accepted clearing selected groups').toBe(true);
+  const emptyBasket = page.locator('.selected-basket-summary');
+  await expect(emptyBasket).toContainText('0 / 0 / 0');
+  await expect(emptyBasket).not.toContainText('Realized ST P/L');
+  await expect(emptyBasket).not.toContainText('Realized LT P/L');
+  if ((await groupHeader.getAttribute('aria-expanded')) !== 'true') await groupHeader.click();
+  await expect(groupHeader).toHaveAttribute('aria-expanded', 'true');
+  await expect(groupCheckbox).not.toBeChecked();
+
+  await groupCheckbox.focus();
+  await expect(groupCheckbox).toBeFocused();
+  const selectGroupResponsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      response.url().includes('/optimizer/runs/') &&
+      response.url().endsWith('/selection'),
+  );
+  await groupCheckbox.press('Space');
+  const selectGroupResponse = await selectGroupResponsePromise;
+  expect(
+    selectGroupResponse.ok(),
+    'FakeBroker accepted keyboard group selection and re-solve',
+  ).toBe(true);
+
+  const selectedRecommendations = await readRecommendations(page, seededApp, currentRun.run_id);
+  const selectedGroupCount = selectedRecommendations.groups.filter(
+    (group) => group.selected && !group.rejected,
+  ).length;
+  const selectedBasketLotCount = new Set(
+    selectedRecommendations.consolidated_legs
+      .filter((leg) => leg.side === 'SELL' && leg.selected)
+      .flatMap((leg) =>
+        leg.selected_lots.filter((lot) => lot.selected).map((lot) => lot.broker_lot_id),
+      ),
+  ).size;
+  const selectedBasketOrderCount = selectedRecommendations.consolidated_legs.filter(
+    (leg) => leg.selected,
+  ).length;
+  await expect(emptyBasket).toContainText(
+    `${selectedGroupCount} / ${selectedBasketLotCount} / ${selectedBasketOrderCount}`,
+  );
+  expect(selectedGroupCount).toBeGreaterThan(0);
+  await expect(emptyBasket.getByText('Realized ST P/L', { exact: true })).toBeVisible();
+  await expect(emptyBasket.getByText('Realized LT P/L', { exact: true })).toBeVisible();
+  await expect(emptyBasket.getByText('Net realized P/L (ST + LT)', { exact: true })).toBeVisible();
   if ((await groupHeader.getAttribute('aria-expanded')) !== 'true') {
     await groupHeader.click();
   }
-
   let releasePendingAnnotation!: () => void;
   let signalPendingAnnotation!: () => void;
   const pendingAnnotation = new Promise<void>((resolvePending) => {

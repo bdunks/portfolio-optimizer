@@ -94,7 +94,7 @@ function mountGroup(props: Partial<InstanceType<typeof TradeGroup>['$props']> = 
 }
 
 async function openGroup(wrapper: ReturnType<typeof mountGroup>): Promise<void> {
-  const trigger = wrapper.get('button[aria-label="Recommendation group group-a"]');
+  const trigger = wrapper.get('button[data-group-id="group-a"]');
   expect(trigger.attributes('aria-expanded')).toBe('false');
   await trigger.trigger('click');
   await flushPromises();
@@ -105,15 +105,15 @@ describe('TradeGroup', () => {
   it('keeps disclosure collapsed and priority/status noninteractive', async () => {
     const first = mountGroup({ group: group({ selected: true, rejected: true }) });
     const second = mountGroup({ group: group({ group_id: 'group-b' }) });
-    const firstTrigger = first.get('button[aria-label="Recommendation group group-a"]');
-    const secondTrigger = second.get('button[aria-label="Recommendation group group-b"]');
+    const firstTrigger = first.get('button[data-group-id="group-a"]');
+    const secondTrigger = second.get('button[data-group-id="group-b"]');
 
     expect(firstTrigger.attributes('aria-expanded')).toBe('false');
     expect(secondTrigger.attributes('aria-expanded')).toBe('false');
     expect(first.find('[aria-label="Notes and rejection for group-a"]').exists()).toBe(false);
     expect(first.text()).toContain('Priority 1');
     expect(first.findAll('[role="status"]').map((badge) => badge.text())).toEqual([
-      'Selected by API',
+      'Selected in returned run',
       'Rejected by user',
     ]);
     const priorityBadge = first.find('[data-slot="badge"]');
@@ -124,6 +124,19 @@ describe('TradeGroup', () => {
     await firstTrigger.trigger('click');
     expect(firstTrigger.attributes('aria-expanded')).toBe('true');
     expect(secondTrigger.attributes('aria-expanded')).toBe('false');
+  });
+
+  it('shows collapsed economic intent, API rationale, realized P/L, and selection impact', () => {
+    const wrapper = mountGroup({ group: group({ selected: true }) });
+    const trigger = wrapper.get('button[data-group-id="group-a"]');
+    expect(trigger.text()).toContain('Tax-loss harvest');
+    expect(trigger.text()).toContain('SELL AAPL');
+    expect(trigger.text()).toContain('API supplied rationale.');
+    expect(trigger.text()).toContain('API realized ST / LT: -4.00 USD / 0.00 USD');
+    expect(trigger.text()).toContain('Selected in returned run · 1 sell lots');
+    expect(trigger.text()).toContain('Priority 1');
+    expect(trigger.text()).not.toContain('sequence');
+    expect(trigger.attributes('aria-expanded')).toBe('false');
   });
 
   it('renders financial facts and distinct leg-reference statuses', async () => {
@@ -375,8 +388,8 @@ describe('TradeGroup', () => {
       `,
     });
 
-    await parent.get('button[aria-label="Recommendation group group-a"]').trigger('click');
-    await parent.get('button[aria-label="Recommendation group group-b"]').trigger('click');
+    await parent.get('button[data-group-id="group-a"]').trigger('click');
+    await parent.get('button[data-group-id="group-b"]').trigger('click');
     expect(parent.findAll('.group-leg-detail')).toHaveLength(0);
     expect(parent.findAll('.leg-card')).toHaveLength(1);
     expect(parent.text().match(/canonical details appear once/g)).toHaveLength(2);

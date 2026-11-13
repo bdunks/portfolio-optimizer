@@ -714,7 +714,7 @@ describe('isolated local backend smoke', () => {
 
       const groupId = store.currentRun!.groups[0]!.group_id;
 
-      const groupTriggerSelector = `[data-slot="collapsible-trigger"][aria-label="Recommendation group ${groupId}"]`;
+      const groupTriggerSelector = `[data-slot="collapsible-trigger"][data-group-id="${groupId}"]`;
       const openRecommendationGroup = async (): Promise<void> => {
         const trigger = workspace!.wrapper.get(groupTriggerSelector);
         if (trigger.attributes('aria-expanded') !== 'true') {

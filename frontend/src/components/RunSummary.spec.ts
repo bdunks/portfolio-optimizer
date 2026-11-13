@@ -85,6 +85,162 @@ const unavailableContext: FrozenRunDisplayContextResponse = {
 };
 
 describe('RunSummary', () => {
+  it('summarizes only API-confirmed canonical selections with exact net P/L', () => {
+    const run = {
+      ...fullRun,
+      estimated_realized_st_usd: '-0.10',
+      estimated_realized_lt_usd: '0.20',
+      groups: [
+        { group_id: 'g1', selected: true, rejected: false, leg_ids: ['sell-1'] },
+        { group_id: 'g2', selected: true, rejected: false, leg_ids: ['sell-2'] },
+        { group_id: 'g3', selected: false, rejected: false, leg_ids: [] },
+      ],
+      consolidated_legs: [
+        {
+          leg_id: 'sell-1',
+          group_ids: ['g1'],
+          side: 'SELL',
+          selected: true,
+          selected_lots: [{ broker_lot_id: 'lot-1', selected: true }],
+        },
+        {
+          leg_id: 'sell-2',
+          group_ids: ['g2'],
+          side: 'SELL',
+          selected: true,
+          selected_lots: [
+            { broker_lot_id: 'lot-1', selected: true },
+            { broker_lot_id: 'lot-2', selected: true },
+          ],
+        },
+        { leg_id: 'shared-buy', side: 'BUY', selected: true },
+        { leg_id: 'shared-buy', side: 'BUY', selected: true },
+      ],
+    } as unknown as OptimizerRecommendationsResponse;
+    const wrapper = mount(RunSummary, {
+      props: { mode: 'review', run, context, view: 'current', currentSelectionConfirmed: true },
+    });
+    const summary = wrapper.get('[aria-label="API-confirmed selected basket summary"]');
+    expect(summary.text()).toContain('2 / 2 / 3');
+    expect(summary.text()).toContain('Realized ST P/L-0.10 USD');
+    expect(summary.text()).toContain('Realized LT P/L0.20 USD');
+    expect(summary.text()).toContain('Net realized P/L (ST + LT)0.10 USD');
+    expect(summary.text()).toContain(
+      'Estimated tax benefit (distinct from gross losses) Unavailable (not returned by API)',
+    );
+    expect(summary.text()).toContain('Gross lossesNot separately reported by API');
+    const emptySelection = mount(RunSummary, {
+      props: {
+        mode: 'review',
+        run: {
+          ...run,
+          groups: run.groups.map((group) => ({ ...group, selected: false })),
+          consolidated_legs: run.consolidated_legs.map((leg) => ({
+            ...leg,
+            selected: false,
+            selected_lots: leg.selected_lots?.map((lot) => ({ ...lot, selected: false })) ?? [],
+          })),
+        },
+        context,
+        view: 'current',
+        currentSelectionConfirmed: true,
+      },
+    });
+    const emptySummary = emptySelection.get('[aria-label="API-confirmed selected basket summary"]');
+    expect(emptySummary.text()).toContain('0 / 0 / 0');
+    expect(emptySummary.text()).toContain('The API confirms no selected groups');
+    expect(emptySummary.text()).not.toContain('Realized ST P/L');
+    expect(emptySummary.text()).not.toContain('Estimated tax benefit');
+    const negativeNet = mount(RunSummary, {
+      props: {
+        mode: 'review',
+        run: { ...run, estimated_realized_st_usd: '-1.20', estimated_realized_lt_usd: '0.20' },
+        context,
+        view: 'current',
+        currentSelectionConfirmed: true,
+      },
+    });
+    expect(
+      negativeNet.get('[aria-label="API-confirmed selected basket summary"]').text(),
+    ).toContain('Net realized P/L (ST + LT)-1.00 USD');
+    const cancellation = mount(RunSummary, {
+      props: {
+        mode: 'review',
+        run: { ...run, estimated_realized_st_usd: '-0.30', estimated_realized_lt_usd: '0.30' },
+        context,
+        view: 'current',
+        currentSelectionConfirmed: true,
+      },
+    });
+    expect(
+      cancellation.get('[aria-label="API-confirmed selected basket summary"]').text(),
+    ).toContain('Net realized P/L (ST + LT)0.00 USD');
+    expect(
+      mount(RunSummary, { props: { mode: 'review', run, context, view: 'stale' } })
+        .find('[aria-label="API-confirmed selected basket summary"]')
+        .exists(),
+    ).toBe(false);
+    expect(
+      mount(RunSummary, {
+        props: {
+          mode: 'review',
+          run,
+          context,
+          view: 'current',
+          currentSelectionConfirmed: true,
+          pending: true,
+        },
+      })
+        .find('[aria-label="API-confirmed selected basket summary"]')
+        .exists(),
+    ).toBe(false);
+  });
+  it('requires explicit current-run confirmation and adds scientific P/L exactly', () => {
+    const selectedRun = {
+      ...fullRun,
+      groups: [{ group_id: 'g1', selected: true, rejected: false, leg_ids: ['sell-1', 'buy-1'] }],
+      consolidated_legs: [
+        { leg_id: 'sell-1', side: 'SELL', selected: true, selected_lots: [] },
+        { leg_id: 'buy-1', side: 'BUY', selected: true },
+      ],
+    } as unknown as OptimizerRecommendationsResponse;
+    const summaryText = (st: string | null, lt: string | null): string => {
+      const wrapper = mount(RunSummary, {
+        props: {
+          mode: 'review',
+          run: {
+            ...selectedRun,
+            estimated_realized_st_usd: st as string,
+            estimated_realized_lt_usd: lt as string,
+          },
+          context,
+          view: 'current',
+          currentSelectionConfirmed: true,
+        },
+      });
+      return wrapper.get('[aria-label="API-confirmed selected basket summary"]').text();
+    };
+
+    expect(summaryText('-1E-8', '0')).toContain('Net realized P/L (ST + LT)-0.00000001 USD');
+    expect(summaryText('1e+2', '0.00000001')).toContain(
+      'Net realized P/L (ST + LT)100.00000001 USD',
+    );
+    expect(summaryText('1e0', '2')).toContain('Net realized P/L (ST + LT)3 USD');
+    expect(summaryText('-1e-2', '0.001')).toContain('Net realized P/L (ST + LT)-0.009 USD');
+    expect(summaryText('1E+999999999', '0')).toContain(
+      'Net realized P/L (ST + LT)Unavailable (not returned by API)',
+    );
+    expect(summaryText(null, '0.00')).toContain(
+      'Net realized P/L (ST + LT)Unavailable (not returned by API)',
+    );
+
+    const unconfirmed = mount(RunSummary, {
+      props: { mode: 'review', run: selectedRun, context, view: 'current' },
+    });
+    expect(unconfirmed.find('[aria-label="API-confirmed selected basket summary"]').exists()).toBe(
+      false,
+    );
+  });
   it('keeps saved summaries frozen and assigns unique heading IDs to multiple instances', () => {
     const wrapper = mount({
       components: { RunSummary },

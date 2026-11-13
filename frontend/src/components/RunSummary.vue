@@ -332,6 +332,66 @@
         </div>
       </dl>
 
+      <section
+        v-if="mode === 'review' && currentSelectionConfirmed && view === 'current' && basketSummary"
+        class="selected-basket-summary tw:min-w-0 tw:rounded-lg tw:border tw:border-border tw:p-3"
+        aria-label="API-confirmed selected basket summary"
+      >
+        <h3 class="tw:m-0! tw:text-base tw:font-semibold">
+          Confirmed selected basket · API response
+        </h3>
+        <p
+          v-if="basketSummary.groups === 0"
+          class="tw:mb-0 tw:mt-1 tw:text-sm tw:text-muted-foreground"
+        >
+          The API confirms no selected groups; there are no confirmed basket effects.
+        </p>
+        <p v-else class="tw:mb-0 tw:mt-1 tw:text-sm tw:text-muted-foreground">
+          Counts and realized P/L reflect API-confirmed selections only; shared BUY legs count once.
+        </p>
+        <dl
+          class="tw:m-0 tw:mt-3 tw:grid tw:grid-cols-1 tw:gap-2 tw:sm:grid-cols-2 tw:xl:grid-cols-3"
+        >
+          <div>
+            <dt class="tw:text-xs tw:text-muted-foreground">
+              Selected groups / SELL lots / consolidated orders
+            </dt>
+            <dd class="tw:m-0 tw:mt-1 tw:font-semibold">
+              {{ basketSummary.groups }} / {{ basketSummary.lots }} / {{ basketSummary.orders }}
+            </dd>
+          </div>
+          <div v-if="basketSummary.groups > 0">
+            <dt class="tw:text-xs tw:text-muted-foreground">Realized ST P/L</dt>
+            <dd class="tw:m-0 tw:mt-1 tw:font-semibold tw:tabular-nums">
+              {{ money(basketSummary.st) }}
+            </dd>
+          </div>
+          <div v-if="basketSummary.groups > 0">
+            <dt class="tw:text-xs tw:text-muted-foreground">Realized LT P/L</dt>
+            <dd class="tw:m-0 tw:mt-1 tw:font-semibold tw:tabular-nums">
+              {{ money(basketSummary.lt) }}
+            </dd>
+          </div>
+          <div v-if="basketSummary.groups > 0">
+            <dt class="tw:text-xs tw:text-muted-foreground">Net realized P/L (ST + LT)</dt>
+            <dd class="tw:m-0 tw:mt-1 tw:font-semibold tw:tabular-nums">
+              {{ money(basketSummary.net) }}
+            </dd>
+          </div>
+          <div v-if="basketSummary.groups > 0">
+            <dt class="tw:text-xs tw:text-muted-foreground">
+              Estimated tax benefit (distinct from gross losses)
+            </dt>
+            <dd class="tw:m-0 tw:mt-1 tw:font-semibold tw:tabular-nums">
+              {{ money(record?.estimated_tax_benefit_usd) }}
+            </dd>
+          </div>
+          <div v-if="basketSummary.groups > 0">
+            <dt class="tw:text-xs tw:text-muted-foreground">Gross losses</dt>
+            <dd class="tw:m-0 tw:mt-1 tw:font-semibold">Not separately reported by API</dd>
+          </div>
+        </dl>
+      </section>
       <template v-if="mode === 'review'">
         <p
           v-if="record.no_trade_reason != null"
@@ -422,6 +482,9 @@ import type {
   OptimizerRunResponse,
 } from '@/types/api';
 import { formatPercent, formatUsd } from '@/utils/display-values';
+import { normalizeServerDecimalNotation } from '@/pages/policy-form';
+
+import { canonicalLegs } from '@/pages/recommendations-state';
 
 const props = withDefaults(
   defineProps<{
@@ -430,6 +493,7 @@ const props = withDefaults(
     summary?: OptimizerRunResponse | null;
     context?: FrozenRunDisplayContextResponse | null;
     pending?: boolean;
+    currentSelectionConfirmed?: boolean;
     showMetrics?: boolean;
     view?: string | null;
     provenanceLabel?: string;
@@ -439,6 +503,7 @@ const props = withDefaults(
     summary: null,
     context: null,
     pending: false,
+    currentSelectionConfirmed: false,
     showMetrics: true,
     view: null,
     provenanceLabel: '',
@@ -449,6 +514,59 @@ const record = computed(() => props.run ?? props.summary);
 const context = computed(() => props.context ?? record.value?.frozen_display_context ?? null);
 const groupCount = computed(() => (props.run ? props.run.groups.length : null));
 const headingId = `run-summary-${useId()}`;
+const basketSummary = computed(() => {
+  const run =
+    props.mode === 'review' && props.currentSelectionConfirmed && props.view === 'current'
+      ? props.run
+      : null;
+  if (!run || !Array.isArray(run.groups) || !Array.isArray(run.consolidated_legs)) return null;
+  const legs = canonicalLegs(run);
+  const selectedLots = new Set(
+    legs
+      .filter((leg) => leg.side === 'SELL' && leg.selected)
+      .flatMap((leg) =>
+        leg.selected_lots.filter((lot) => lot.selected).map((lot) => lot.broker_lot_id),
+      ),
+  );
+  const st = run.estimated_realized_st_usd;
+  const lt = run.estimated_realized_lt_usd;
+  const net = addUsd(st, lt);
+  return {
+    groups: run.groups.filter((group) => group.selected && !group.rejected).length,
+    lots: selectedLots.size,
+    orders: legs.filter((leg) => leg.selected).length,
+    st,
+    lt,
+    net,
+  };
+});
+
+const maxExactUsdTextLength = 4096;
+
+function addUsd(left: string | null | undefined, right: string | null | undefined): string | null {
+  if (left == null || right == null) return null;
+  const values = [left, right];
+  if (values.some((value) => value.length > maxExactUsdTextLength)) return null;
+  const normalizedValues = values.map(normalizeServerDecimalNotation);
+  if (
+    normalizedValues.some(
+      (value) => value.length > maxExactUsdTextLength || !/^[+-]?\d+(?:\.\d+)?$/.test(value),
+    )
+  )
+    return null;
+  const scale = Math.max(...normalizedValues.map((value) => value.split('.')[1]?.length ?? 0));
+  const units = normalizedValues.map((value) => {
+    const negative = value.startsWith('-');
+    const unsigned = value.replace(/^[+-]/, '');
+    const [whole = '0', fraction = ''] = unsigned.split('.');
+    const magnitude = BigInt(`${whole}${fraction.padEnd(scale, '0')}`);
+    return negative ? -magnitude : magnitude;
+  });
+  const total = units[0]! + units[1]!;
+  const sign = total < 0n ? '-' : '';
+  const digits = (total < 0n ? -total : total).toString().padStart(scale + 1, '0');
+  return scale ? `${sign}${digits.slice(0, -scale)}.${digits.slice(-scale)}` : `${sign}${digits}`;
+}
 
 function money(value: string | null | undefined): string {
   return formatUsd(

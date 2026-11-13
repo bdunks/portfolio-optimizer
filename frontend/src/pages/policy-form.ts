@@ -69,7 +69,7 @@ const decimalSettingKeys = new Set<keyof EditablePolicySettings>([
 const maxNormalizedDecimalLength = 4096;
 const scientificDecimalPattern = /^([+-]?)(?:(\d+)(?:\.(\d*))?|\.(\d+))[eE]([+-]?\d+)$/;
 
-function normalizeServerDecimalNotation(value: string): string {
+export function normalizeServerDecimalNotation(value: string): string {
   if (value.length > maxNormalizedDecimalLength) return value;
   const match = scientificDecimalPattern.exec(value);
   if (!match) return value;

@@ -7,7 +7,9 @@
             variant="ghost"
             type="button"
             class="group-header tw:flex tw:h-auto tw:w-full tw:flex-col tw:items-stretch tw:justify-start tw:gap-3 tw:rounded-none tw:px-4 tw:py-4 tw:text-left tw:sm:flex-row tw:sm:items-center tw:sm:justify-between tw:sm:px-6"
-            :aria-label="`Recommendation group ${group.group_id}`"
+            :aria-labelledby="`${groupTitleId} ${groupIdentityId}`"
+            :aria-describedby="`${groupIntentId} ${groupImpactId}`"
+            :data-group-id="group.group_id"
           >
             <div class="tw:flex tw:min-w-0 tw:items-center tw:gap-3">
               <Badge variant="secondary" class="tw:shrink-0 tw:!text-xs tw:!font-semibold">
@@ -16,19 +18,38 @@
               <div
                 class="group-header-text tw:min-w-0 tw:flex-1 tw:!whitespace-normal tw:break-words"
               >
-                <CardTitle class="group-title tw:!text-sm tw:!font-semibold tw:!text-foreground">
-                  Recommendation group {{ group.group_id }}
+                <CardTitle
+                  :id="groupTitleId"
+                  class="group-title tw:!text-sm tw:!font-semibold tw:!text-foreground"
+                >
+                  {{ groupPurpose }}
                 </CardTitle>
                 <CardDescription
                   class="group-description tw:mt-1 tw:!text-xs tw:!font-normal tw:!text-muted-foreground"
                 >
                   {{ group.group_type }} · {{ sleeveLabel }}
                 </CardDescription>
+                <p
+                  :id="groupIntentId"
+                  class="tw:m-0 tw:mt-1 tw:!text-xs tw:!leading-relaxed tw:!text-muted-foreground"
+                >
+                  {{ collapsedIntent }} · {{ group.rationale }}
+                </p>
+                <p
+                  :id="groupImpactId"
+                  class="tw:m-0 tw:mt-1 tw:!text-xs tw:!leading-relaxed tw:!text-muted-foreground"
+                >
+                  API realized ST / LT: {{ formatUsd(group.impact.realized_st_usd) }} /
+                  {{ formatUsd(group.impact.realized_lt_usd) }} ·
+                  {{ group.selected ? 'Selected in returned run' : 'Not selected in returned run' }}
+                  · {{ group.impact.selected_sell_lots_count }} sell lots
+                </p>
+                <span :id="groupIdentityId" class="tw:sr-only">Group ID {{ group.group_id }}</span>
               </div>
             </div>
             <div class="tw:flex tw:flex-wrap tw:items-center tw:gap-2 tw:sm:justify-end">
               <Badge v-if="group.selected" variant="secondary" role="status">
-                Selected by API
+                Selected in returned run
               </Badge>
               <Badge v-if="group.rejected" variant="destructive" role="status">
                 Rejected by user
@@ -57,9 +78,7 @@
                 :for="selectionId"
                 class="tw:!text-sm tw:!font-medium tw:!text-foreground"
               >
-                {{
-                  group.selected ? 'API-confirmed selected group' : 'Select this group and re-solve'
-                }}
+                {{ group.selected ? 'Selected in returned run' : 'Select this group and re-solve' }}
               </FieldLabel>
             </Field>
           </FieldGroup>
@@ -413,7 +432,7 @@
 <script setup lang="ts">
 import { useForm } from '@tanstack/vue-form';
 import { ChevronDown } from '@lucide/vue';
-import { useId, watch } from 'vue';
+import { computed, useId, watch } from 'vue';
 import RecommendationLegDetails from '@/components/RecommendationLegDetails.vue';
 import SellLotAttribution from '@/components/SellLotAttribution.vue';
 import { Badge } from '@/components/ui/badge';
@@ -474,6 +493,10 @@ const emit = defineEmits<{
 
 const idPrefix = `trade-group-${useId()}`;
 const selectionId = `${idPrefix}-selection`;
+const groupTitleId = `${idPrefix}-title`;
+const groupIntentId = `${idPrefix}-intent`;
+const groupImpactId = `${idPrefix}-impact`;
+const groupIdentityId = `${idPrefix}-identity`;
 const noteId = `${idPrefix}-note`;
 const noteHintId = `${idPrefix}-note-hint`;
 const noteErrorId = `${idPrefix}-note-error`;
@@ -481,6 +504,18 @@ const rejectionId = `${idPrefix}-rejection`;
 const rejectionHintId = `${idPrefix}-rejection-hint`;
 const rejectionErrorId = `${idPrefix}-rejection-error`;
 
+const groupPurpose = computed(() =>
+  props.group.group_type === 'demo_loss_harvest'
+    ? 'Tax-loss harvest'
+    : `Recommendation · ${String(props.group.group_type)}`,
+);
+const collapsedIntent = computed(
+  () =>
+    props.legReferences
+      .map((reference) => reference.label.match(/\b(SELL|BUY)\s+([A-Z0-9.-]+)/)?.[0])
+      .filter((label): label is string => Boolean(label))
+      .join(' · ') || `${props.sleeveLabel} activity`,
+);
 const form = useForm({
   formId: `${idPrefix}-annotations`,
   defaultValues: {

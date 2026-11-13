@@ -524,7 +524,7 @@ async function openRecommendationGroup(
   wrapper: ReturnType<typeof mountRecommendationsPage>,
   groupId: string,
 ): Promise<void> {
-  const trigger = wrapper.get(`button[aria-label="Recommendation group ${groupId}"]`);
+  const trigger = wrapper.get(`button[data-group-id="${groupId}"]`);
   if (trigger.attributes('aria-expanded') !== 'true') await trigger.trigger('click');
   expect(trigger.attributes('aria-expanded')).toBe('true');
   await flushPromises();
@@ -649,9 +649,12 @@ describe('RecommendationsPage', () => {
     wrapper.unmount();
   });
   it('uses shared policy freshness and run provenance selectors before displaying effects', async () => {
-    const { pinia } = setup();
+    const { pinia, store } = setup(makeRun('run-current', ['group-a']));
     const wrapper = mountRecommendationsPage(pinia);
     const queryClient = getTestQueryClient(wrapper);
+    await flushPromises();
+    expect(wrapper.get('.selected-basket-summary').text()).toContain('1 / 1 / 2');
+    expect(store.currentRunView).toBe('current');
     await queryClient
       .fetchQuery({
         queryKey: workspaceQueryKeys.policy,
@@ -661,6 +664,10 @@ describe('RecommendationsPage', () => {
       })
       .catch(() => undefined);
     await flushPromises();
+    store.currentRunView = 'current';
+    await flushPromises();
+    expect(store.currentRunView).toBe('current');
+    expect(wrapper.find('.selected-basket-summary').exists()).toBe(false);
 
     expect(wrapper.get('.provenance-banner').text()).toContain('Stale/unverified run · read-only');
     const selectionTools = wrapper.get('.selection-tools');
@@ -674,6 +681,51 @@ describe('RecommendationsPage', () => {
       'Current portfolio API values with active-policy labels',
     );
     expect(wrapper.text()).toContain('cached data is being shown');
+    wrapper.unmount();
+  });
+
+  it('withholds current basket provenance during policy refresh and preserves saved context', async () => {
+    const { pinia, store } = setup(makeRun('run-current', ['group-a']));
+    const wrapper = mountRecommendationsPage(pinia);
+    const queryClient = getTestQueryClient(wrapper);
+    await flushPromises();
+    expect(wrapper.get('.selected-basket-summary').text()).toContain('1 / 1 / 2');
+
+    const currentPolicy = store.policy;
+    if (!currentPolicy?.active) throw new Error('The current-policy fixture was not loaded');
+    const refresh = deferred<Response>();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => refresh.promise),
+    );
+    const loading = store.loadPolicy();
+    expect(store.actionState.loadPolicy.pending).toBe(true);
+    await flushPromises();
+    expect(store.currentRunView).toBe('current');
+    expect(wrapper.find('.selected-basket-summary').exists()).toBe(false);
+    expect(wrapper.get('.provenance-banner').text()).toContain('Stale/unverified run · read-only');
+
+    refresh.resolve(jsonResponse(currentPolicy));
+    await loading;
+    await flushPromises();
+    expect(wrapper.get('.selected-basket-summary').text()).toContain('1 / 1 / 2');
+
+    queryClient.setQueryData(workspaceQueryKeys.policy, {
+      ...currentPolicy,
+      active: { ...currentPolicy.active, id: 'policy-r99' },
+    });
+    await flushPromises();
+    store.currentRunView = 'current';
+    await flushPromises();
+    expect(store.currentRunView).toBe('current');
+    expect(wrapper.find('.selected-basket-summary').exists()).toBe(false);
+    expect(wrapper.get('.provenance-banner').text()).toContain('Stale/unverified run · read-only');
+
+    store.currentRunView = 'saved';
+    await flushPromises();
+    expect(wrapper.find('.selected-basket-summary').exists()).toBe(false);
+    expect(wrapper.get('.frozen-context').text()).toContain('Frozen US equity');
+    expect(wrapper.get('.provenance-banner').text()).toContain('Saved run · frozen API context');
     wrapper.unmount();
   });
 

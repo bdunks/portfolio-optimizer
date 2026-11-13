@@ -220,6 +220,7 @@
         :summary="savedRunSummary"
         :context="runDisplayContext"
         :pending="runPresentation.reviewMutationPending"
+        :current-selection-confirmed="runPresentation.currentRunMatches"
         :view="store.currentRunView"
         :provenance-label="provenanceLabel"
       />

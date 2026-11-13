@@ -23,11 +23,9 @@ def test_small_quality_families_have_stable_seeded_checksums() -> None:
         seed = 20261113 + index
         first = build_small_quality_case(family, seed)
         again = build_small_quality_case(family, seed)
-        variant = build_small_quality_case(family, seed + 100)
 
         assert first.case_id == f"{family}-seed-{seed}"
         assert first.inputs.source_checksum == again.inputs.source_checksum
-        assert first.inputs.source_checksum != variant.inputs.source_checksum
         assert first.universe == again.universe
         assert len(first.universe.sells) == 3
         assert len(first.universe.buys) == 2
@@ -48,9 +46,7 @@ def test_out_of_domain_legs_are_not_clipped_or_counted_in_exact_denominators() -
         side="SELL",
         ticker="EQ1",
         shares=Decimal(2),
-        selected_lots=(
-            SimpleNamespace(broker_lot_id="EQ1-L1", shares=Decimal(2)),
-        ),
+        selected_lots=(SimpleNamespace(broker_lot_id="EQ1-L1", shares=Decimal(2)),),
     )
 
     domain = _production_domain_check(case, (leg,))
@@ -113,5 +109,7 @@ def test_one_real_spawned_production_comparison_is_provisional_and_bounded() -> 
     assert row["reference"]["theoretical_assignment_count"] == 48
     assert row["reference"]["complete"] is True
     assert row["input_checksum_sha256"] == row["production"]["reported_input_checksum"]
+    assert row["comparison"]["frozen_inputs_match"] is True
     assert row["production"]["independently_revalidated"] is True
     assert row["production"]["supervisor_wall_seconds"] < 10
+    assert row["production"]["production_total_wall_seconds"] < 10

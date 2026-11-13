@@ -75,7 +75,12 @@ def _inputs_for_case(family: str, seed: int) -> FinancialInputs:
                 "equity", None, True, target_pct=Decimal(70), drift_band_pp=Decimal(10)
             ),
             AllocationSleeve(
-                "cash", None, True, cash_sleeve=True, target_pct=Decimal(30), drift_band_pp=Decimal(10)
+                "cash",
+                None,
+                True,
+                cash_sleeve=True,
+                target_pct=Decimal(30),
+                drift_band_pp=Decimal(10),
             ),
             AllocationSleeve(
                 "growth", "equity", True, target_pct=Decimal(50), drift_band_pp=Decimal(10)
@@ -96,7 +101,9 @@ def _inputs_for_case(family: str, seed: int) -> FinancialInputs:
     allocation = AllocationPolicy(
         sleeves=sleeves,
         allowed_securities=(
-            AllowedSecurity("ETF_A", "equity", "growth" if nested else None, 0, True, "replacement"),
+            AllowedSecurity(
+                "ETF_A", "equity", "growth" if nested else None, 0, True, "replacement"
+            ),
             AllowedSecurity("ETF_B", "equity", "value" if nested else None, 1, True, "replacement"),
         ),
         overrides=(),
@@ -171,11 +178,23 @@ def _inputs_for_case(family: str, seed: int) -> FinancialInputs:
     )
     positions = (
         PositionInput(
-            "EQ1", "EQUITY", False, Decimal(2), 1, AS_OF, Decimal(20),
+            "EQ1",
+            "EQUITY",
+            False,
+            Decimal(2),
+            1,
+            AS_OF,
+            Decimal(20),
             SleeveAssignment("equity", "growth" if nested else None),
         ),
         PositionInput(
-            "EQ2", "EQUITY", False, Decimal(2), 1, AS_OF, Decimal(20),
+            "EQ2",
+            "EQUITY",
+            False,
+            Decimal(2),
+            1,
+            AS_OF,
+            Decimal(20),
             SleeveAssignment("equity", "value" if nested else None),
         ),
     )
@@ -195,16 +214,46 @@ def _inputs_for_case(family: str, seed: int) -> FinancialInputs:
     )
     lots = (
         LotInput(
-            "EQ1", "EQ1-L1", acquired_dates[0], Decimal(1), Decimal(1), bases[0], None,
-            "SYNTHETIC_TEST", AS_OF, False, (), 1,
+            "EQ1",
+            "EQ1-L1",
+            acquired_dates[0],
+            Decimal(1),
+            Decimal(1),
+            bases[0],
+            None,
+            "SYNTHETIC_TEST",
+            AS_OF,
+            False,
+            (),
+            1,
         ),
         LotInput(
-            "EQ1", "EQ1-L2", acquired_dates[1], Decimal(1), Decimal(1), bases[1], None,
-            "SYNTHETIC_TEST", AS_OF, False, (), 1,
+            "EQ1",
+            "EQ1-L2",
+            acquired_dates[1],
+            Decimal(1),
+            Decimal(1),
+            bases[1],
+            None,
+            "SYNTHETIC_TEST",
+            AS_OF,
+            False,
+            (),
+            1,
         ),
         LotInput(
-            "EQ2", "EQ2-L1", acquired_dates[2], Decimal(2), Decimal(2), bases[2], None,
-            "SYNTHETIC_TEST", AS_OF, False, (), 1,
+            "EQ2",
+            "EQ2-L1",
+            acquired_dates[2],
+            Decimal(2),
+            Decimal(2),
+            bases[2],
+            None,
+            "SYNTHETIC_TEST",
+            AS_OF,
+            False,
+            (),
+            1,
         ),
     )
     quotes = (
@@ -233,10 +282,18 @@ def _inputs_for_case(family: str, seed: int) -> FinancialInputs:
         )
     exposures.extend(
         (
-            LookThroughExposureInput("ETF_A", "security", "EQ1", Decimal("0.80"), "manual_csv", TRADE_DATE),
-            LookThroughExposureInput("ETF_A", "security", "EQ2", Decimal("0.20"), "manual_csv", TRADE_DATE),
-            LookThroughExposureInput("ETF_B", "security", "EQ1", Decimal("0.50"), "manual_csv", TRADE_DATE),
-            LookThroughExposureInput("ETF_B", "security", "EQ2", Decimal("0.50"), "manual_csv", TRADE_DATE),
+            LookThroughExposureInput(
+                "ETF_A", "security", "EQ1", Decimal("0.80"), "manual_csv", TRADE_DATE
+            ),
+            LookThroughExposureInput(
+                "ETF_A", "security", "EQ2", Decimal("0.20"), "manual_csv", TRADE_DATE
+            ),
+            LookThroughExposureInput(
+                "ETF_B", "security", "EQ1", Decimal("0.50"), "manual_csv", TRADE_DATE
+            ),
+            LookThroughExposureInput(
+                "ETF_B", "security", "EQ2", Decimal("0.50"), "manual_csv", TRADE_DATE
+            ),
         )
     )
     transactions = ()
@@ -244,15 +301,31 @@ def _inputs_for_case(family: str, seed: int) -> FinancialInputs:
         prior_time = datetime(2026, 10, 1, 15, tzinfo=UTC)
         transactions = (
             TransactionInput(
-                "history-eq2-realized-gain", "EQ2", "SELL", prior_time, date(2026, 10, 1),
-                Decimal(1), Decimal(15), False, None, "SYNTHETIC_TEST", Decimal(5),
+                "history-eq2-realized-gain",
+                "EQ2",
+                "SELL",
+                prior_time,
+                date(2026, 10, 1),
+                Decimal(1),
+                Decimal(15),
+                False,
+                None,
+                "SYNTHETIC_TEST",
+                Decimal(5),
             ),
         )
 
     inputs = FinancialInputs(
         account=AccountInput(
-            1, f"synthetic-quality-{family}", f"Synthetic {family} fixture", "BROKERAGE",
-            "taxable", "SYNTHETIC_TEST", AS_OF, cash, cash,
+            1,
+            f"synthetic-quality-{family}",
+            f"Synthetic {family} fixture",
+            "BROKERAGE",
+            "taxable",
+            "SYNTHETIC_TEST",
+            AS_OF,
+            cash,
+            cash,
         ),
         source_generation=1,
         proposed_trade_date=TRADE_DATE,
@@ -278,6 +351,7 @@ def _inputs_for_case(family: str, seed: int) -> FinancialInputs:
         json.dumps(inputs.to_provenance(), sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     return replace(inputs, source_checksum=checksum)
+
 
 def build_small_quality_case(family: str, seed: int) -> SmallQualityCase:
     """Build one registered family, isolating fixture failures to that case."""
@@ -313,6 +387,5 @@ def build_small_quality_case(family: str, seed: int) -> SmallQualityCase:
 def build_small_quality_cases(seed: int = 20261113) -> tuple[SmallQualityCase, ...]:
     """Build all registered families with recorded, deterministic parameter-variant seeds."""
     return tuple(
-        build_small_quality_case(family, seed + index)
-        for index, family in enumerate(CASE_FAMILIES)
+        build_small_quality_case(family, seed + index) for index, family in enumerate(CASE_FAMILIES)
     )

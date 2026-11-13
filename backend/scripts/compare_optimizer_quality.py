@@ -26,7 +26,13 @@ import cvxpy
 
 from app.domain.decimal_math import exact_sum
 from app.domain.exposure import aggregate_lookthrough_exposure
-from app.optimizer.core import OPTIMIZER_IMPLEMENTATION_VERSION, OptimizerRequest, optimize_worker
+from app.domain.financial_inputs import FinancialInputs
+from app.optimizer.core import (
+    OPTIMIZER_IMPLEMENTATION_VERSION,
+    OptimizerMetadata,
+    OptimizerRequest,
+    optimize_worker,
+)
 from app.optimizer.runtime import ProcessSupervisor
 from app.optimizer.validation import CandidateValidation, validate_candidate
 from tests.optimizer_quality_cases import (
@@ -113,7 +119,9 @@ def _git_value(*args: str) -> str | None:
             text=True,
             cwd=_repo_root(),
         )
-    except (OSError, subprocess.CalledProcessError):
+    except OSError:
+        return None
+    except subprocess.CalledProcessError:
         return None
     return completed.stdout.strip() or None
 
@@ -252,10 +260,8 @@ def _production_domain_check(case: SmallQualityCase, legs: tuple[Any, ...]) -> d
     return {"in_domain": not reasons, "reasons": reasons}
 
 
-
-
 def _allocation_drift_for_inputs(
-    inputs: Any, validation: CandidateValidation
+    inputs: FinancialInputs, validation: CandidateValidation
 ) -> Decimal | None:
     evaluation = validation.evaluation
     if evaluation is None:
@@ -279,7 +285,7 @@ def _allocation_drift_for_inputs(
     return max(drifts) if drifts else Decimal(0)
 
 
-def _sector_drift_pp(inputs: Any, validation: CandidateValidation) -> Decimal | None:
+def _sector_drift_pp(inputs: FinancialInputs, validation: CandidateValidation) -> Decimal | None:
     evaluation = validation.evaluation
     if evaluation is None:
         return None
@@ -308,7 +314,9 @@ def _sector_drift_pp(inputs: Any, validation: CandidateValidation) -> Decimal | 
     return max(drifts) if drifts else None
 
 
-def _economic_metrics(inputs: Any, validation: CandidateValidation) -> dict[str, Decimal | None]:
+def _economic_metrics(
+    inputs: FinancialInputs, validation: CandidateValidation
+) -> dict[str, Decimal | None]:
     tax = validation.tax
     return {
         "objective": validation.objective_value,
@@ -332,7 +340,10 @@ def _metric_summary(rows: list[tuple[str, Decimal]]) -> dict[str, Any]:
         "min_signed_delta": _decimal(min(values)) if values else None,
         "median_signed_delta": _decimal(median(values)),
         "nearest_rank_rule": "sorted absolute deltas; rank=ceil(n*0.95), one-indexed",
-        "case_deltas": [{"case_id": case_id, "production_minus_reference": str(value)} for case_id, value in rows],
+        "case_deltas": [
+            {"case_id": case_id, "production_minus_reference": str(value)}
+            for case_id, value in rows
+        ],
     }
 
 
@@ -361,9 +372,10 @@ def _production_json(
     validation: CandidateValidation | None,
     validation_completed: bool,
     wall_seconds: float,
+    total_wall_seconds: float,
     validation_seconds: float | None,
     error: Exception | None,
-    metadata: Any | None,
+    metadata: OptimizerMetadata | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     domain = _production_domain_check(case, legs)
     owner_valid = bool(validation and validation_completed and validation.accepted)
@@ -373,12 +385,15 @@ def _production_json(
         "status": status,
         "legs": _leg_json(legs),
         "independently_revalidated": validation_completed,
-        "owner_validation": _validation_json(validation, validation_completed) if validation else None,
+        "owner_validation": _validation_json(validation, validation_completed)
+        if validation
+        else None,
         "returned_legs_in_declared_domain": domain["in_domain"],
         "domain_exclusion_reasons": domain["reasons"],
         "owner_valid_candidate": owner_valid,
         "candidate_comparable_in_domain": in_domain_candidate,
         "supervisor_wall_seconds": wall_seconds,
+        "production_total_wall_seconds": total_wall_seconds,
         "independent_validation_seconds": validation_seconds,
         "reported_input_checksum": getattr(metadata, "source_checksum", None),
         "implementation_version": getattr(metadata, "implementation_version", None),
@@ -413,7 +428,8 @@ async def _compare_case(
     validation_completed = False
     validation_seconds: float | None = None
     production_error: Exception | None = None
-    metadata: Any | None = None
+    metadata: OptimizerMetadata | None = None
+    production_total_elapsed = 0.0
     process_elapsed = 0.0
 
     try:
@@ -438,11 +454,14 @@ async def _compare_case(
             and time.monotonic() < worker_result.overall_deadline
         )
         if not validation_completed:
-            production_error = TimeoutError("owner revalidation did not complete before overall deadline")
+            production_error = TimeoutError(
+                "owner revalidation did not complete before overall deadline"
+            )
     except Exception as error:  # noqa: BLE001 — preserve per-case production failures in the report.
         production_error = error
         process_elapsed = time.perf_counter() - production_started
 
+    production_total_elapsed = time.perf_counter() - production_started
     production, production_internal = _production_json(
         case,
         production_status,
@@ -450,6 +469,7 @@ async def _compare_case(
         production_validation,
         validation_completed,
         process_elapsed,
+        production_total_elapsed,
         validation_seconds,
         production_error,
         metadata,
@@ -472,30 +492,34 @@ async def _compare_case(
     exact = bool(reference_result and reference_result.complete)
     reference_optimum = reference_result.exact_optimum if exact and reference_result else None
     reference_feasible_count = reference_result.feasible_basket_count if reference_result else 0
-    reference_json = _reference_json(reference_result) if reference_result else {
-        "complete": False,
-        "stop_reason": "error",
-        "error_type": type(reference_error).__name__ if reference_error else "unknown",
-        "error": str(reference_error) if reference_error else "reference result unavailable",
-        "elapsed_seconds": reference_wall_seconds,
-        "theoretical_assignment_count": None,
-        "assignments_examined": None,
-        "canonical_baskets_examined": None,
-        "feasible_basket_count": None,
-        "exact_optimum": None,
-    }
+    reference_json = (
+        _reference_json(reference_result)
+        if reference_result
+        else {
+            "complete": False,
+            "stop_reason": "error",
+            "error_type": type(reference_error).__name__ if reference_error else "unknown",
+            "error": str(reference_error) if reference_error else "reference result unavailable",
+            "elapsed_seconds": reference_wall_seconds,
+            "theoretical_assignment_count": None,
+            "assignments_examined": None,
+            "canonical_baskets_examined": None,
+            "feasible_basket_count": None,
+            "exact_optimum": None,
+        }
+    )
     optimum_validation = reference_optimum.validation if reference_optimum else None
     production_validation = production_internal["owner_validation"]
     denominator_eligible = bool(
         exact
         and production_internal["domain"]["in_domain"]
-        and production.get("reported_input_checksum") in (None, case.inputs.source_checksum)
+        and production.get("reported_input_checksum") == case.inputs.source_checksum
     )
-    production_candidate = bool(denominator_eligible and production_internal["candidate"])
-    missed_feasibility = bool(
+    production_candidate = denominator_eligible and production_internal["candidate"]
+    missed_feasibility = (
         denominator_eligible and reference_feasible_count > 0 and not production_candidate
     )
-    no_reference_feasible = bool(exact and reference_feasible_count == 0)
+    no_reference_feasible = exact and reference_feasible_count == 0
     missed_improvement: bool | None = None
     deltas: dict[str, str | None] = {}
     objective_gap_pct: Decimal | None = None
@@ -541,8 +565,9 @@ async def _compare_case(
         "reference_wall_seconds": reference_wall_seconds,
         "production": production,
         "comparison": {
-            "frozen_inputs_match": production.get("reported_input_checksum")
-            in (None, case.inputs.source_checksum),
+            "frozen_inputs_match": (
+                production.get("reported_input_checksum") == case.inputs.source_checksum
+            ),
             "exact_small_case_denominator_eligible": denominator_eligible,
             "exclusion_reason": (
                 None
@@ -591,31 +616,33 @@ def _empty_case_record(family: str, seed: int, error: Exception) -> dict[str, An
 def _build_summaries(cases: list[dict[str, Any]]) -> dict[str, Any]:
     complete = [row for row in cases if row.get("reference", {}).get("complete") is True]
     eligible = [
-        row for row in cases
+        row
+        for row in cases
         if row.get("comparison", {}).get("exact_small_case_denominator_eligible") is True
     ]
     feasible_reference = [
-        row for row in eligible
-        if row.get("reference", {}).get("feasible_basket_count", 0) > 0
+        row for row in eligible if row.get("reference", {}).get("feasible_basket_count", 0) > 0
     ]
     missed_feasibility_count = sum(
-        bool(row.get("comparison", {}).get("missed_feasibility_case"))
-        for row in feasible_reference
+        bool(row.get("comparison", {}).get("missed_feasibility_case")) for row in feasible_reference
     )
     improvement_rows = [
-        row for row in eligible
+        row
+        for row in eligible
         if row.get("comparison", {}).get("missed_improvement_case") is not None
     ]
     missed_improvement_count = sum(
         bool(row["comparison"]["missed_improvement_case"]) for row in improvement_rows
     )
     out_of_domain = [
-        row for row in cases
+        row
+        for row in cases
         if row.get("comparison", {}).get("out_of_domain_production_candidate") is True
     ]
     cutoffs = [row for row in cases if row.get("comparison", {}).get("reference_cutoff") is True]
     no_feasible = [
-        row for row in cases
+        row
+        for row in cases
         if row.get("comparison", {}).get("reference_has_no_feasible_basket") is True
     ]
     metric_keys = (
@@ -630,7 +657,11 @@ def _build_summaries(cases: list[dict[str, Any]]) -> dict[str, Any]:
     for key in metric_keys:
         delta_rows: list[tuple[str, Decimal]] = []
         for row in eligible:
-            value = row.get("comparison", {}).get("deltas_production_minus_exact_reference", {}).get(key)
+            value = (
+                row.get("comparison", {})
+                .get("deltas_production_minus_exact_reference", {})
+                .get(key)
+            )
             if value is not None:
                 delta_rows.append((row["case_id"], Decimal(value)))
         metric_summaries[key] = _metric_summary(delta_rows)
@@ -668,7 +699,11 @@ def _build_summaries(cases: list[dict[str, Any]]) -> dict[str, Any]:
         },
         "metric_deltas": metric_summaries,
         "objective_percentage_suppression_count": sum(
-            bool(row.get("comparison", {}).get("objective_gap_percent_suppressed_nonpositive_reference"))
+            bool(
+                row.get("comparison", {}).get(
+                    "objective_gap_percent_suppressed_nonpositive_reference"
+                )
+            )
             for row in eligible
         ),
         "objective_percentage_available_count": sum(
@@ -690,7 +725,10 @@ def _validate_run_bounds(
         raise CaseConfigurationError(f"case_count must be in [1, {len(CASE_FAMILIES)}]")
     if isinstance(max_assignments, bool) or max_assignments < 1:
         raise CaseConfigurationError("max_assignments must be a positive integer")
-    if not math.isfinite(reference_time_limit_seconds) or not 0 < reference_time_limit_seconds <= 10:
+    if (
+        not math.isfinite(reference_time_limit_seconds)
+        or not 0 < reference_time_limit_seconds <= 10
+    ):
         raise CaseConfigurationError("reference_time_limit_seconds must be finite and in (0, 10]")
     if not math.isfinite(production_timeout_seconds) or not 0 < production_timeout_seconds <= 10:
         raise CaseConfigurationError("production_timeout_seconds must be finite and in (0, 10]")
@@ -751,7 +789,15 @@ async def run_comparison(
     reference_path = root / "tests" / "optimizer_quality_reference.py"
     validator_path = root / "app" / "optimizer" / "validation.py"
     core_path = root / "app" / "optimizer" / "core.py"
-    reference_commit = _git_value("log", "-1", "--format=%H", "--", "backend/tests/optimizer_quality_reference.py")
+    reference_commit = _git_value(
+        "log", "-1", "--format=%H", "--", "backend/tests/optimizer_quality_reference.py"
+    )
+    production_core_commit = _git_value(
+        "log", "-1", "--format=%H", "--", "backend/app/optimizer/core.py"
+    )
+    validator_commit = _git_value(
+        "log", "-1", "--format=%H", "--", "backend/app/optimizer/validation.py"
+    )
     current_commit = _git_value("rev-parse", "HEAD")
     return {
         "schema": "offline-small-quality-comparison-v1",
@@ -778,13 +824,20 @@ async def run_comparison(
             "reference_file_last_commit": reference_commit,
             "repository_head_at_report_generation": current_commit,
             "reference_protocol_source": "docs/optimizer_quality_protocol.md",
-            "reference_protocol_source_sha256": _sha256(root.parent / "docs" / "optimizer_quality_protocol.md"),
-            "pending_reference_fix_commit_reported_by_parent": "98b6efe8",
-            "known_reference_p1": {
-                "status": "pending_fix_and_fresh_review",
-                "finding": "Alphabetical SELL sequencing can miss executable bounded assignments when a fixed fee and zero cash make order sequence affect cash feasibility.",
-                "example": "AAA $1 then ZZZ $10 with $3 fee can fail cash while ZZZ then AAA leaves $5; the oracle must enumerate/order these semantics correctly.",
-                "report_interpretation": "All exact-reference comparisons remain provisional until the separate reference fix commit is present and freshly reviewed.",
+            "reference_protocol_source_sha256": _sha256(
+                root.parent / "docs" / "optimizer_quality_protocol.md"
+            ),
+            "production_core_file_last_commit": production_core_commit,
+            "owner_validator_file_last_commit": validator_commit,
+            "known_base_corrections": {
+                "sell_order_oracle": {
+                    "status": "included_in_measured_source",
+                    "evidence": "The bounded reference orders sells by descending executed notional; the source commit and SHA-256 are recorded above.",
+                },
+                "production_fee_aware_screen": {
+                    "status": "included_in_measured_source",
+                    "evidence": "The measured production core includes fee-aware screening; its source commit and SHA-256 are recorded above.",
+                },
             },
         },
         "environment": {
@@ -815,7 +868,7 @@ async def run_comparison(
             "The explicit finite candidate universe is not representative of the full trade space and can omit a better feasible basket.",
             "Reference completeness is conditional on assignment, canonicalization, owner-validation, and time caps; cutoff cases are reported separately.",
             "Owner validator is shared between production and reference; financial semantics require separate review.",
-            "Known reference SELL-order sequencing P1 and provisional convex fee/nested allocation proxies prevent acceptance claims.",
+            "Provisional convex fixed-fee and nested-allocation search proxies, plus the shared owner validator and synthetic-only scope, prevent acceptance claims.",
             "Do not use the tiny fixtures to select acceptance thresholds or claim benchmark success.",
         ],
     }
@@ -826,10 +879,18 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--case-count", type=int, default=DEFAULT_CASE_COUNT)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--max-reference-assignments", type=int, default=DEFAULT_MAX_ASSIGNMENTS)
-    parser.add_argument("--reference-time-limit-seconds", type=float, default=DEFAULT_REFERENCE_SECONDS)
-    parser.add_argument("--production-timeout-seconds", type=float, default=DEFAULT_PRODUCTION_SECONDS)
-    parser.add_argument("--validation-reserve-seconds", type=float, default=DEFAULT_VALIDATION_RESERVE_SECONDS)
-    parser.add_argument("--output", type=Path, help="Optional JSON report destination; stdout when omitted.")
+    parser.add_argument(
+        "--reference-time-limit-seconds", type=float, default=DEFAULT_REFERENCE_SECONDS
+    )
+    parser.add_argument(
+        "--production-timeout-seconds", type=float, default=DEFAULT_PRODUCTION_SECONDS
+    )
+    parser.add_argument(
+        "--validation-reserve-seconds", type=float, default=DEFAULT_VALIDATION_RESERVE_SECONDS
+    )
+    parser.add_argument(
+        "--output", type=Path, help="Optional JSON report destination; stdout when omitted."
+    )
     args = parser.parse_args()
     try:
         _validate_run_bounds(

@@ -20,7 +20,6 @@ from query_test_support import count_selects
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
 
-from app import main as main_module
 from app.broker.fake import FakeBroker
 from app.db.models import (
     CurrentPosition,
@@ -38,7 +37,6 @@ from app.main import create_app
 from app.schemas import BrokerSnapshot
 from app.services import demo_optimizer
 from app.services.demo_optimizer import _fingerprint
-from app.services.errors import AppError
 
 
 @pytest.fixture
@@ -1431,23 +1429,42 @@ def test_missing_frozen_policy_context_uses_only_exact_revision_or_reports_unava
 def test_real_optimizer_timeout_app_error_is_not_a_generic_http_500(
     demo_app: tuple[FastAPI, TestClient, FakeBroker, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _app, client, _, _ = demo_app
+    app, client, _, _ = demo_app
 
     async def timeout_run(*args: object, **kwargs: object) -> None:
         del args, kwargs
-        raise AppError(
-            "optimizer_timeout",
-            "The production optimizer did not finish and validate within its shared deadline",
-            status_code=504,
-            details={"basket_unchanged": True, "run_id": "persisted-timeout-run"},
-        )
+        from app.optimizer.runtime import WorkerTimeoutError
 
-    monkeypatch.setattr(main_module, "create_production_run", timeout_run)
+        raise WorkerTimeoutError("injected integration-test timeout")
+
+    monkeypatch.setattr(app.state.optimizer_supervisor, "run", timeout_run)
     response = client.post("/api/v1/optimizer/runs", json={"mode": "real_optimizer"})
 
-    assert response.status_code == 504
-    assert response.json()["code"] == "optimizer_timeout"
-    assert response.json()["details"] == {
-        "basket_unchanged": True,
-        "run_id": "persisted-timeout-run",
-    }
+    assert response.status_code == 504, response.text
+    body = response.json()
+    assert body["code"] == "optimizer_timeout"
+    run_id = body["details"]["run_id"]
+    assert run_id
+
+    with app.state.session_factory() as session:
+        run = session.get(OptimizerRun, run_id)
+        assert run is not None
+        assert run.status == "TIMEOUT"
+        assert run.frozen_input_bundle is not None
+        assert session.query(RecommendationGroup).filter_by(run_id=run_id).count() == 0
+
+    readback = client.get(f"/api/v1/optimizer/runs/{run_id}")
+    assert readback.status_code == 200, readback.text
+    assert readback.json()["status"] == "timeout"
+    assert readback.json()["orders_count"] == 0
+
+    recommendations = client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations")
+    assert recommendations.status_code == 200, recommendations.text
+    assert recommendations.json()["groups"] == []
+    assert recommendations.json()["consolidated_legs"] == []
+
+    with app.state.session_factory() as session:
+        run = session.get(OptimizerRun, run_id)
+        assert run is not None
+        assert session.query(RecommendationGroup).filter_by(run_id=run_id).count() == 0
+        assert run.status == "TIMEOUT"

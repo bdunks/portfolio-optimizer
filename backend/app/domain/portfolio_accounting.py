@@ -3,6 +3,7 @@
 The input is the frozen account/policy state plus canonical run-level legs. No solver totals,
 web framework, persistence, or broker state are accepted by this module.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -200,47 +201,86 @@ def _proportional_amount(total: Decimal, part: Decimal, whole: Decimal) -> Decim
         return total
     precision = max(
         80,
-        len(total.as_tuple().digits) + len(part.as_tuple().digits) + len(whole.as_tuple().digits) + 16,
+        len(total.as_tuple().digits)
+        + len(part.as_tuple().digits)
+        + len(whole.as_tuple().digits)
+        + 16,
     )
     with localcontext() as context:
         context.prec = precision
         return exact_product(total, part) / whole
 
 
+def _allocate_order_fee(fee: Decimal, allocations: Sequence[LotAllocation]) -> dict[str, Decimal]:
+    """Allocate one consolidated SELL fee by shares, with an exact final-lot residual."""
+    ordered = sorted(allocations, key=lambda allocation: allocation.broker_lot_id)
+    total_shares = exact_sum(allocation.shares for allocation in ordered)
+    fees_by_lot: dict[str, Decimal] = {}
+    allocated_fees: list[Decimal] = []
+    for allocation in ordered[:-1]:
+        allocated_fee = _proportional_amount(fee, allocation.shares, total_shares)
+        fees_by_lot[allocation.broker_lot_id] = allocated_fee
+        allocated_fees.append(allocated_fee)
+    if ordered:
+        fees_by_lot[ordered[-1].broker_lot_id] = exact_difference(fee, exact_sum(allocated_fees))
+    return fees_by_lot
+
+
 def _normalized_legs(legs: Sequence[ConsolidatedLeg]) -> tuple[ConsolidatedLeg, ...]:
     if len({leg.leg_id for leg in legs}) != len(legs) or any(not leg.leg_id for leg in legs):
-        raise _invalid("duplicate_or_empty_leg_id", "Consolidated leg IDs must be nonempty and unique")
+        raise _invalid(
+            "duplicate_or_empty_leg_id", "Consolidated leg IDs must be nonempty and unique"
+        )
     by_id = {leg.leg_id: leg for leg in legs}
     seen_tickers: set[tuple[str, str]] = set()
     sides_by_ticker: dict[str, set[str]] = {}
     for leg in legs:
         ticker = leg.ticker.strip().upper()
         if not ticker or leg.side not in ("BUY", "SELL"):
-            raise _invalid("invalid_leg", "Every consolidated leg needs a ticker and BUY or SELL side")
+            raise _invalid(
+                "invalid_leg", "Every consolidated leg needs a ticker and BUY or SELL side"
+            )
         if not leg.shares.is_finite() or leg.shares <= 0:
             raise _invalid("invalid_leg_shares", f"{leg.leg_id} shares must be positive and finite")
         if not leg.estimated_unit_price_usd.is_finite() or leg.estimated_unit_price_usd <= 0:
-            raise _invalid("invalid_leg_price", f"{leg.leg_id} unit price must be positive and finite")
+            raise _invalid(
+                "invalid_leg_price", f"{leg.leg_id} unit price must be positive and finite"
+            )
         if leg.sequence < 0:
             raise _invalid("invalid_leg_sequence", f"{leg.leg_id} sequence cannot be negative")
         side_ticker = (leg.side, ticker)
         if side_ticker in seen_tickers:
-            raise _invalid("unconsolidated_ticker_legs", f"{leg.side} legs for {ticker} must be consolidated")
+            raise _invalid(
+                "unconsolidated_ticker_legs", f"{leg.side} legs for {ticker} must be consolidated"
+            )
         seen_tickers.add(side_ticker)
         sides_by_ticker.setdefault(ticker, set()).add(leg.side)
         if len(set(leg.group_ids)) != len(leg.group_ids):
             raise _invalid("duplicate_leg_group", f"{leg.leg_id} group references must be unique")
         if leg.side == "BUY":
             if leg.selected_lots:
-                raise _invalid("buy_has_lot_allocations", f"BUY leg {leg.leg_id} cannot allocate broker lots")
+                raise _invalid(
+                    "buy_has_lot_allocations", f"BUY leg {leg.leg_id} cannot allocate broker lots"
+                )
             if leg.shares != leg.shares.to_integral_value():
-                raise _invalid("fractional_buy_shares", f"BUY leg {leg.leg_id} must use whole shares")
+                raise _invalid(
+                    "fractional_buy_shares", f"BUY leg {leg.leg_id} must use whole shares"
+                )
         elif leg.depends_on_leg_ids:
-            raise _invalid("sell_has_funding_dependencies", f"SELL leg {leg.leg_id} cannot depend on funding legs")
-        if len({allocation.broker_lot_id for allocation in leg.selected_lots}) != len(leg.selected_lots):
-            raise _invalid("duplicate_lot_allocation", f"SELL leg {leg.leg_id} repeats a broker lot ID")
+            raise _invalid(
+                "sell_has_funding_dependencies",
+                f"SELL leg {leg.leg_id} cannot depend on funding legs",
+            )
+        if len({allocation.broker_lot_id for allocation in leg.selected_lots}) != len(
+            leg.selected_lots
+        ):
+            raise _invalid(
+                "duplicate_lot_allocation", f"SELL leg {leg.leg_id} repeats a broker lot ID"
+            )
         if len(set(leg.depends_on_leg_ids)) != len(leg.depends_on_leg_ids):
-            raise _invalid("duplicate_funding_dependency", f"BUY leg {leg.leg_id} repeats a dependency")
+            raise _invalid(
+                "duplicate_funding_dependency", f"BUY leg {leg.leg_id} repeats a dependency"
+            )
 
     for ticker, sides in sides_by_ticker.items():
         if len(sides) > 1:
@@ -264,12 +304,19 @@ def _normalized_legs(legs: Sequence[ConsolidatedLeg]) -> tuple[ConsolidatedLeg, 
     return tuple(legs)
 
 
-def _assignment_path(policy: AllocationPolicy, assignment: SleeveAssignment | None, ticker: str) -> tuple[str, ...]:
+def _assignment_path(
+    policy: AllocationPolicy, assignment: SleeveAssignment | None, ticker: str
+) -> tuple[str, ...]:
     if assignment is None:
-        raise _invalid("unassigned_holding", f"Held security {ticker} has no policy sleeve assignment")
+        raise _invalid(
+            "unassigned_holding", f"Held security {ticker} has no policy sleeve assignment"
+        )
     path = assignment_path(policy, assignment.sleeve_key, assignment.sub_sleeve_key)
     if path is None:
-        raise _invalid("invalid_holding_assignment", f"Held security {ticker} has invalid or disabled sleeve ancestry")
+        raise _invalid(
+            "invalid_holding_assignment",
+            f"Held security {ticker} has invalid or disabled sleeve ancestry",
+        )
     return path
 
 
@@ -292,7 +339,9 @@ def _snapshot(
             policy, cash_resolution.assignment.sleeve_key, cash_resolution.assignment.sub_sleeve_key
         )
         if cash_path is None:
-            raise _invalid("invalid_cash_assignment", "Configured cash sleeve has invalid or disabled ancestry")
+            raise _invalid(
+                "invalid_cash_assignment", "Configured cash sleeve has invalid or disabled ancestry"
+            )
         accumulate_sleeve_value(sleeve_values, cash_path, cash_usd)
     elif cash_resolution.reason not in ("cash_sleeve_not_configured",):
         raise _invalid("invalid_cash_assignment", "Configured cash sleeve is ambiguous or invalid")
@@ -327,7 +376,10 @@ def _allocation_target(policy: AllocationPolicy) -> AllocationTarget:
     enabled = {sleeve.key: sleeve for sleeve in policy.sleeves if sleeve.enabled}
     for sleeve in enabled.values():
         if assignment_path(policy, sleeve.key) is None:
-            raise _invalid("invalid_policy_tree", f"Enabled sleeve {sleeve.key} has missing, disabled, or cyclic ancestry")
+            raise _invalid(
+                "invalid_policy_tree",
+                f"Enabled sleeve {sleeve.key} has missing, disabled, or cyclic ancestry",
+            )
     children: dict[str | None, list[str]] = {}
     for sleeve in enabled.values():
         children.setdefault(sleeve.parent_key, []).append(sleeve.key)
@@ -342,7 +394,9 @@ def _allocation_target(policy: AllocationPolicy) -> AllocationTarget:
         target = sleeve.target_pct or Decimal(0)
         parent = enabled.get(sleeve.parent_key or "")
         if sleeve.parent_key is not None and parent is None:
-            raise _invalid("invalid_policy_tree", f"Enabled sleeve {key} has a missing or disabled parent")
+            raise _invalid(
+                "invalid_policy_tree", f"Enabled sleeve {key} has a missing or disabled parent"
+            )
         whole_portfolio_target = (
             target
             if parent is None
@@ -352,8 +406,7 @@ def _allocation_target(policy: AllocationPolicy) -> AllocationTarget:
         pending.extend(children.get(key, []))
 
     top_targets = tuple(
-        (key, target_rows[key].target_whole_portfolio_pct)
-        for key in children.get(None, [])
+        (key, target_rows[key].target_whole_portfolio_pct) for key in children.get(None, [])
     )
     ordered_targets = tuple(
         target_rows[key]
@@ -374,7 +427,10 @@ def _transition_snapshot(
         None,
     )
     if container is None:
-        raise _invalid("transition_container_missing", "Transition summary requires a direct-indexing container")
+        raise _invalid(
+            "transition_container_missing",
+            "Transition summary requires a direct-indexing container",
+        )
     values = dict(state.sleeve_values_usd)
     children = sorted(
         (sleeve for sleeve in sleeves.values() if sleeve.parent_key == container.key),
@@ -391,7 +447,9 @@ def _transition_snapshot(
                 child.key,
                 TransitionChild(
                     values.get(child.key, Decimal(0)),
-                    percentage(values.get(child.key, Decimal(0)), values.get(container.key, Decimal(0))),
+                    percentage(
+                        values.get(child.key, Decimal(0)), values.get(container.key, Decimal(0))
+                    ),
                     percentage(values.get(child.key, Decimal(0)), state.portfolio_total_usd),
                 ),
             )
@@ -401,7 +459,10 @@ def _transition_snapshot(
 
 
 def _transition_evaluation(
-    policy: AllocationPolicy, current: AccountSnapshot, proposed: AccountSnapshot, target: AllocationTarget
+    policy: AllocationPolicy,
+    current: AccountSnapshot,
+    proposed: AccountSnapshot,
+    target: AllocationTarget,
 ) -> TransitionEvaluation | None:
     current_values = dict(current.sleeve_values_usd)
     proposed_values = dict(proposed.sleeve_values_usd)
@@ -414,7 +475,9 @@ def _transition_evaluation(
     if current_progress.container_key is None:
         return None
     children_targets = {row.sleeve_key: row for row in target.sleeves}
-    container = next(sleeve for sleeve in policy.sleeves if sleeve.key == current_progress.container_key)
+    container = next(
+        sleeve for sleeve in policy.sleeves if sleeve.key == current_progress.container_key
+    )
     children = sorted(
         (
             sleeve
@@ -440,7 +503,10 @@ def _transition_evaluation(
             policy, current, current_progress.destination_sleeve_key, current_progress.progress_pct
         ),
         proposed_basket=_transition_snapshot(
-            policy, proposed, proposed_progress.destination_sleeve_key, proposed_progress.progress_pct
+            policy,
+            proposed,
+            proposed_progress.destination_sleeve_key,
+            proposed_progress.progress_pct,
         ),
         target=TransitionTarget(
             children_targets[container.key].target_whole_portfolio_pct,
@@ -453,15 +519,29 @@ def evaluate_portfolio(
     inputs: FinancialInputs,
     proposed_legs: Sequence[ConsolidatedLeg] = (),
     *,
+    estimated_fee_per_order_usd: Decimal = Decimal(0),
     allow_unassigned_current_positions: bool = False,
 ) -> PortfolioEvaluation:
     """Recompute current and proposed account effects from immutable inputs and unique legs.
 
     This is suitable for independent validation after solver rounding: it has no parameters for
     solver-reported totals, and every leg, sale allocation, cash movement, and sleeve value is
-    recomputed from the frozen financial inputs.
-    `allow_unassigned_current_positions` is only for empty-basket display; proposed baskets stay strict.
+    recomputed from the frozen financial inputs. `allow_unassigned_current_positions` is only for
+    empty-basket display; proposed baskets stay strict.
+
+    `estimated_fee_per_order_usd` is charged once per nonempty consolidated leg. SELL fees are
+    allocated by sold shares with a deterministic final-lot residual; BUY fees are reflected in cash
+    only. `sell_proceeds_usd` remains gross.
     """
+    if (
+        not isinstance(estimated_fee_per_order_usd, Decimal)
+        or not estimated_fee_per_order_usd.is_finite()
+        or estimated_fee_per_order_usd < 0
+    ):
+        raise _invalid(
+            "invalid_estimated_fee",
+            "Estimated fee per order must be a finite nonnegative Decimal",
+        )
     policy = inputs.policy.allocation
     legs = _normalized_legs(proposed_legs)
     if allow_unassigned_current_positions and legs:
@@ -477,23 +557,32 @@ def evaluate_portfolio(
         or cash_usd < 0
         or settled_buying_power_usd < 0
     ):
-        raise _invalid("invalid_account_balance", "Account cash and settled buying power must be finite and nonnegative")
+        raise _invalid(
+            "invalid_account_balance",
+            "Account cash and settled buying power must be finite and nonnegative",
+        )
     positions_by_ticker: dict[str, PositionInput] = {}
     position_assignments: dict[str, SleeveAssignment | None] = {}
     for position in inputs.positions:
         ticker = position.ticker.strip().upper()
         if ticker in positions_by_ticker:
-            raise _invalid("duplicate_position", f"Current position {ticker} appears more than once")
+            raise _invalid(
+                "duplicate_position", f"Current position {ticker} appears more than once"
+            )
         if (
             not position.shares.is_finite()
             or position.shares <= 0
             or not position.market_value_usd.is_finite()
             or position.market_value_usd < 0
         ):
-            raise _invalid("invalid_position", f"Current position {ticker} has invalid shares or market value")
+            raise _invalid(
+                "invalid_position", f"Current position {ticker} has invalid shares or market value"
+            )
         if position.assignment is None:
             if not allow_unassigned_current_positions:
-                raise _invalid("unassigned_holding", f"Held security {ticker} has no policy sleeve assignment")
+                raise _invalid(
+                    "unassigned_holding", f"Held security {ticker} has no policy sleeve assignment"
+                )
         else:
             _assignment_path(policy, position.assignment, ticker)
         positions_by_ticker[ticker] = position
@@ -502,7 +591,9 @@ def evaluate_portfolio(
     lots_by_id: dict[str, LotInput] = {}
     for lot in inputs.lots:
         if not lot.broker_lot_id or lot.broker_lot_id in lots_by_id:
-            raise _invalid("duplicate_or_empty_lot_id", "Broker lot IDs must be nonempty and unique")
+            raise _invalid(
+                "duplicate_or_empty_lot_id", "Broker lot IDs must be nonempty and unique"
+            )
         if (
             not lot.shares.is_finite()
             or not lot.available_shares.is_finite()
@@ -510,22 +601,34 @@ def evaluate_portfolio(
             or lot.available_shares < 0
             or lot.available_shares > lot.shares
         ):
-            raise _invalid("invalid_lot_balance", f"Broker lot {lot.broker_lot_id} has invalid share balances")
+            raise _invalid(
+                "invalid_lot_balance", f"Broker lot {lot.broker_lot_id} has invalid share balances"
+            )
         lots_by_id[lot.broker_lot_id] = lot
     lot_shares_by_ticker: dict[str, Decimal] = {}
     for lot in lots_by_id.values():
         ticker = lot.ticker.strip().upper()
         position = positions_by_ticker.get(ticker)
         if position is None:
-            raise _invalid("orphan_lot", f"Broker lot {lot.broker_lot_id} has no current {ticker} position")
+            raise _invalid(
+                "orphan_lot", f"Broker lot {lot.broker_lot_id} has no current {ticker} position"
+            )
         if not lot.adjusted_unit_basis_usd.is_finite() or lot.adjusted_unit_basis_usd < 0:
-            raise _invalid("invalid_lot_basis", f"Broker lot {lot.broker_lot_id} has an invalid basis")
-        lot_shares_by_ticker[ticker] = exact_sum((lot_shares_by_ticker.get(ticker, Decimal(0)), lot.shares))
+            raise _invalid(
+                "invalid_lot_basis", f"Broker lot {lot.broker_lot_id} has an invalid basis"
+            )
+        lot_shares_by_ticker[ticker] = exact_sum(
+            (lot_shares_by_ticker.get(ticker, Decimal(0)), lot.shares)
+        )
     for ticker, lot_shares in lot_shares_by_ticker.items():
         if lot_shares > positions_by_ticker[ticker].shares:
-            raise _invalid("lot_shares_exceed_position", f"Broker lots exceed current position shares for {ticker}")
+            raise _invalid(
+                "lot_shares_exceed_position",
+                f"Broker lots exceed current position shares for {ticker}",
+            )
 
     lot_allocations: dict[str, tuple[ConsolidatedLeg, LotAllocation]] = {}
+    sell_fee_by_lot_id: dict[str, Decimal] = {}
     sold_by_ticker: dict[str, Decimal] = {}
     bought_assignment: dict[str, SleeveAssignment] = {}
     for leg in legs:
@@ -533,9 +636,15 @@ def evaluate_portfolio(
         if leg.side == "SELL":
             position = positions_by_ticker.get(ticker)
             if position is None:
-                raise _invalid("sell_without_position", f"SELL leg {leg.leg_id} has no current {ticker} position")
+                raise _invalid(
+                    "sell_without_position",
+                    f"SELL leg {leg.leg_id} has no current {ticker} position",
+                )
             if not leg.selected_lots:
-                raise _invalid("sell_without_lots", f"SELL leg {leg.leg_id} requires explicit broker-lot allocations")
+                raise _invalid(
+                    "sell_without_lots",
+                    f"SELL leg {leg.leg_id} requires explicit broker-lot allocations",
+                )
             lot_share_sum: list[Decimal] = []
             for allocation in leg.selected_lots:
                 lot = lots_by_id.get(allocation.broker_lot_id)
@@ -545,24 +654,42 @@ def evaluate_portfolio(
                         f"SELL leg {leg.leg_id} references an unknown or different-ticker broker lot",
                     )
                 if not allocation.shares.is_finite() or allocation.shares <= 0:
-                    raise _invalid("invalid_lot_allocation", f"SELL leg {leg.leg_id} lot shares must be positive")
+                    raise _invalid(
+                        "invalid_lot_allocation",
+                        f"SELL leg {leg.leg_id} lot shares must be positive",
+                    )
                 if allocation.shares > lot.available_shares or allocation.shares > lot.shares:
                     raise _invalid(
-                        "lot_oversell", f"SELL leg {leg.leg_id} exceeds available shares for {allocation.broker_lot_id}"
+                        "lot_oversell",
+                        f"SELL leg {leg.leg_id} exceeds available shares for {allocation.broker_lot_id}",
                     )
                 if allocation.broker_lot_id in lot_allocations:
-                    raise _invalid("duplicate_lot_allocation", f"Broker lot {allocation.broker_lot_id} is sold twice")
+                    raise _invalid(
+                        "duplicate_lot_allocation",
+                        f"Broker lot {allocation.broker_lot_id} is sold twice",
+                    )
                 lot_allocations[allocation.broker_lot_id] = (leg, allocation)
                 lot_share_sum.append(allocation.shares)
             if exact_sum(lot_share_sum) != leg.shares:
-                raise _invalid("sell_lot_total_mismatch", f"SELL leg {leg.leg_id} shares do not equal its lot allocations")
+                raise _invalid(
+                    "sell_lot_total_mismatch",
+                    f"SELL leg {leg.leg_id} shares do not equal its lot allocations",
+                )
+            sell_fee_by_lot_id.update(
+                _allocate_order_fee(estimated_fee_per_order_usd, leg.selected_lots)
+            )
             sold_by_ticker[ticker] = leg.shares
             if leg.shares > position.shares:
-                raise _invalid("position_oversell", f"SELL leg {leg.leg_id} exceeds current position shares")
+                raise _invalid(
+                    "position_oversell", f"SELL leg {leg.leg_id} exceeds current position shares"
+                )
         else:
             security = inputs.security_for(ticker)
             if security is None:
-                raise _invalid("unknown_buy_security", f"BUY leg {leg.leg_id} references unknown security {ticker}")
+                raise _invalid(
+                    "unknown_buy_security",
+                    f"BUY leg {leg.leg_id} references unknown security {ticker}",
+                )
             resolution = resolve_holding(policy, security.identity)
             if resolution.assignment is None:
                 raise _invalid(
@@ -571,7 +698,10 @@ def evaluate_portfolio(
                 )
             existing = positions_by_ticker.get(ticker)
             if existing is not None and existing.assignment != resolution.assignment:
-                raise _invalid("buy_assignment_mismatch", f"BUY security {ticker} differs from its current assignment")
+                raise _invalid(
+                    "buy_assignment_mismatch",
+                    f"BUY security {ticker} differs from its current assignment",
+                )
             bought_assignment[ticker] = resolution.assignment
 
     cash_reserve_value = inputs.policy.settings.get("cash_reserve_usd", Decimal(0))
@@ -580,22 +710,38 @@ def evaluate_portfolio(
         or not cash_reserve_value.is_finite()
         or cash_reserve_value < 0
     ):
-        raise _invalid("invalid_cash_reserve", "Configured cash reserve must be a nonnegative Decimal")
+        raise _invalid(
+            "invalid_cash_reserve", "Configured cash reserve must be a nonnegative Decimal"
+        )
     cash = cash_usd
 
     leg_by_id = {leg.leg_id: leg for leg in legs}
     for leg in sorted(legs, key=lambda item: (item.sequence, item.leg_id)):
         notional = exact_product(leg.shares, leg.estimated_unit_price_usd)
         if leg.side == "SELL":
-            cash = exact_sum((cash, notional))
+            cash = exact_difference(exact_sum((cash, notional)), estimated_fee_per_order_usd)
+            if cash < 0:
+                raise _invalid(
+                    "insufficient_cash", f"SELL leg {leg.leg_id} would make cash negative"
+                )
         else:
-            cash = exact_difference(cash, notional)
+            cash = exact_difference(exact_difference(cash, notional), estimated_fee_per_order_usd)
             if cash < cash_reserve_value:
-                raise _invalid("insufficient_cash", f"BUY leg {leg.leg_id} breaches the configured cash reserve")
+                raise _invalid(
+                    "insufficient_cash",
+                    f"BUY leg {leg.leg_id} breaches the configured cash reserve",
+                )
         for dependency_id in leg.depends_on_leg_ids:
             if leg_by_id[dependency_id].sequence >= leg.sequence:
-                raise _invalid("funding_dependency_not_prior", f"Funding SELL {dependency_id} must precede {leg.leg_id}")
+                raise _invalid(
+                    "funding_dependency_not_prior",
+                    f"Funding SELL {dependency_id} must precede {leg.leg_id}",
+                )
 
+    if legs and cash < cash_reserve_value:
+        raise _invalid(
+            "insufficient_cash", "Proposed basket ends below the configured cash reserve"
+        )
     current_positions = {
         ticker: PositionBalance(
             position.ticker,
@@ -623,7 +769,9 @@ def evaluate_portfolio(
         value_reduction = _proportional_amount(before.market_value_usd, shares_sold, before.shares)
         value_after = exact_difference(before.market_value_usd, value_reduction)
         if value_after < 0:
-            raise _invalid("negative_position_value", f"SELL leg leaves {ticker} with a negative market value")
+            raise _invalid(
+                "negative_position_value", f"SELL leg leaves {ticker} with a negative market value"
+            )
         if shares_after == 0:
             proposed_positions.pop(ticker, None)
             value_after = Decimal(0)
@@ -632,7 +780,14 @@ def evaluate_portfolio(
                 before.ticker, before.asset_type, shares_after, value_after, before.assignment
             )
         position_effects.append(
-            PositionEffect(ticker, before.shares, shares_after, before.market_value_usd, value_after, shares_after == 0)
+            PositionEffect(
+                ticker,
+                before.shares,
+                shares_after,
+                before.market_value_usd,
+                value_after,
+                shares_after == 0,
+            )
         )
 
     for leg in legs:
@@ -665,9 +820,12 @@ def evaluate_portfolio(
         shares_after = exact_difference(lot.shares, allocation.shares)
         available_after = exact_difference(lot.available_shares, allocation.shares)
         price_gain = exact_difference(leg.estimated_unit_price_usd, lot.adjusted_unit_basis_usd)
-        realized = exact_product(price_gain, allocation.shares)
+        realized = exact_difference(
+            exact_product(price_gain, allocation.shares), sell_fee_by_lot_id[lot_id]
+        )
         term = cast(
-            Literal["ST", "LT"], classify_holding_period(lot.acquired_date, inputs.proposed_trade_date)
+            Literal["ST", "LT"],
+            classify_holding_period(lot.acquired_date, inputs.proposed_trade_date),
         )
         (realized_st if term == "ST" else realized_lt).append(realized)
         if shares_after == 0:
@@ -692,8 +850,10 @@ def evaluate_portfolio(
     effect_tickers = {effect.ticker for effect in position_effects}
     for ticker, before in current_positions.items():
         after = proposed_positions.get(ticker)
-        if after is not None and ticker not in effect_tickers and (
-            before.shares != after.shares or before.market_value_usd != after.market_value_usd
+        if (
+            after is not None
+            and ticker not in effect_tickers
+            and (before.shares != after.shares or before.market_value_usd != after.market_value_usd)
         ):
             position_effects.append(
                 PositionEffect(
@@ -708,7 +868,9 @@ def evaluate_portfolio(
     for ticker, after in proposed_positions.items():
         if ticker not in current_positions:
             position_effects.append(
-                PositionEffect(ticker, Decimal(0), after.shares, Decimal(0), after.market_value_usd, False)
+                PositionEffect(
+                    ticker, Decimal(0), after.shares, Decimal(0), after.market_value_usd, False
+                )
             )
     current = _snapshot(policy, current_positions, current_lots, cash_usd)
     proposed = _snapshot(policy, proposed_positions, proposed_lots, cash)
@@ -727,7 +889,9 @@ def evaluate_portfolio(
         lot_count_after=len(proposed_lots),
         selected_lots_count=len(lot_allocations),
         sell_proceeds_usd=exact_sum(
-            exact_product(leg.estimated_unit_price_usd, leg.shares) for leg in legs if leg.side == "SELL"
+            exact_product(leg.estimated_unit_price_usd, leg.shares)
+            for leg in legs
+            if leg.side == "SELL"
         ),
         realized_st_usd=exact_sum(realized_st),
         realized_lt_usd=exact_sum(realized_lt),

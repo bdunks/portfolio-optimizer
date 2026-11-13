@@ -14,6 +14,7 @@ from app.domain.allocation import (
     SecurityOverride,
     SleeveAssignment,
 )
+from app.domain.decimal_math import exact_sum
 from app.domain.financial_inputs import (
     AccountInput,
     FinancialInputs,
@@ -33,7 +34,9 @@ from app.domain.portfolio_accounting import (
 _NOW = datetime(2026, 11, 5, 12, tzinfo=UTC)
 
 
-def _inputs(*, transition_destination: bool = True, cash_reserve: Decimal = Decimal(0)) -> FinancialInputs:
+def _inputs(
+    *, transition_destination: bool = True, cash_reserve: Decimal = Decimal(0)
+) -> FinancialInputs:
     policy = AllocationPolicy(
         sleeves=(
             AllocationSleeve(
@@ -67,9 +70,20 @@ def _inputs(*, transition_destination: bool = True, cash_reserve: Decimal = Deci
                 target_pct=Decimal(100),
                 drift_band_pp=Decimal(5),
             ),
-            AllocationSleeve("other_us", "us", True, target_pct=Decimal(25), drift_band_pp=Decimal(5)),
-            AllocationSleeve("international", None, True, target_pct=Decimal(30), drift_band_pp=Decimal(5)),
-            AllocationSleeve("cash", None, True, cash_sleeve=True, target_pct=Decimal(10), drift_band_pp=Decimal(2)),
+            AllocationSleeve(
+                "other_us", "us", True, target_pct=Decimal(25), drift_band_pp=Decimal(5)
+            ),
+            AllocationSleeve(
+                "international", None, True, target_pct=Decimal(30), drift_band_pp=Decimal(5)
+            ),
+            AllocationSleeve(
+                "cash",
+                None,
+                True,
+                cash_sleeve=True,
+                target_pct=Decimal(10),
+                drift_band_pp=Decimal(2),
+            ),
         ),
         allowed_securities=(
             AllowedSecurity("NEWBUY", "us", "destination", 0, True),
@@ -85,9 +99,36 @@ def _inputs(*, transition_destination: bool = True, cash_reserve: Decimal = Deci
         PolicySettings.from_mapping({"cash_reserve_usd": cash_reserve}),
     )
     positions = (
-        PositionInput("AAPL", "EQUITY", False, Decimal(10), 1, _NOW, Decimal(1000), SleeveAssignment("us", "legacy")),
-        PositionInput("NEWETF", "ETF", False, Decimal(3), 1, _NOW, Decimal(300), SleeveAssignment("us", "destination")),
-        PositionInput("BROAD", "ETF", False, Decimal(2), 1, _NOW, Decimal(200), SleeveAssignment("us", "other_us")),
+        PositionInput(
+            "AAPL",
+            "EQUITY",
+            False,
+            Decimal(10),
+            1,
+            _NOW,
+            Decimal(1000),
+            SleeveAssignment("us", "legacy"),
+        ),
+        PositionInput(
+            "NEWETF",
+            "ETF",
+            False,
+            Decimal(3),
+            1,
+            _NOW,
+            Decimal(300),
+            SleeveAssignment("us", "destination"),
+        ),
+        PositionInput(
+            "BROAD",
+            "ETF",
+            False,
+            Decimal(2),
+            1,
+            _NOW,
+            Decimal(200),
+            SleeveAssignment("us", "other_us"),
+        ),
         PositionInput(
             "NEST",
             "EQUITY",
@@ -98,16 +139,45 @@ def _inputs(*, transition_destination: bool = True, cash_reserve: Decimal = Deci
             Decimal(40),
             SleeveAssignment("destination", "destination_nested"),
         ),
-        PositionInput("INTL", "ETF", False, Decimal(3), 1, _NOW, Decimal(300), SleeveAssignment("international")),
+        PositionInput(
+            "INTL",
+            "ETF",
+            False,
+            Decimal(3),
+            1,
+            _NOW,
+            Decimal(300),
+            SleeveAssignment("international"),
+        ),
     )
     lots = (
         LotInput(
-            "AAPL", "AAPL-short", date(2026, 10, 1), Decimal(4), Decimal(4), Decimal(50), None,
-            "FAKE", _NOW, False, (), 1,
+            "AAPL",
+            "AAPL-short",
+            date(2026, 10, 1),
+            Decimal(4),
+            Decimal(4),
+            Decimal(50),
+            None,
+            "FAKE",
+            _NOW,
+            False,
+            (),
+            1,
         ),
         LotInput(
-            "AAPL", "AAPL-long", date(2024, 1, 1), Decimal(6), Decimal(6), Decimal(80), None,
-            "FAKE", _NOW, False, (), 1,
+            "AAPL",
+            "AAPL-long",
+            date(2024, 1, 1),
+            Decimal(6),
+            Decimal(6),
+            Decimal(80),
+            None,
+            "FAKE",
+            _NOW,
+            False,
+            (),
+            1,
         ),
     )
     identities = (
@@ -141,19 +211,28 @@ def _inputs(*, transition_destination: bool = True, cash_reserve: Decimal = Deci
     )
 
 
-def _sell(*, shares: str = "3", allocations: tuple[tuple[str, str], ...] = (("AAPL-short", "2"), ("AAPL-long", "1")), sequence: int = 0) -> ConsolidatedLeg:
+def _sell(
+    *,
+    shares: str = "3",
+    allocations: tuple[tuple[str, str], ...] = (("AAPL-short", "2"), ("AAPL-long", "1")),
+    sequence: int = 0,
+) -> ConsolidatedLeg:
     return ConsolidatedLeg(
         leg_id="sell-aapl",
         side="SELL",
         ticker="AAPL",
         shares=Decimal(shares),
         estimated_unit_price_usd=Decimal(110),
-        selected_lots=tuple(LotAllocation(lot_id, Decimal(quantity)) for lot_id, quantity in allocations),
+        selected_lots=tuple(
+            LotAllocation(lot_id, Decimal(quantity)) for lot_id, quantity in allocations
+        ),
         sequence=sequence,
     )
 
 
-def test_empty_basket_is_current_state_and_nested_destination_progress_uses_all_assigned_assets() -> None:
+def test_empty_basket_is_current_state_and_nested_destination_progress_uses_all_assigned_assets() -> (
+    None
+):
     result = evaluate_portfolio(_inputs())
 
     assert result.current == result.proposed
@@ -208,10 +287,14 @@ def test_consolidated_lots_funding_cash_and_proposed_transition_are_recomputed_e
     assert result.position_count_after == 6
     assert result.lot_count_before == result.lot_count_after == 2
     assert result.selected_lots_count == 2
-    assert {row.broker_lot_id: row.shares for row in result.proposed.lots}["AAPL-short"] == Decimal(2)
+    assert {row.broker_lot_id: row.shares for row in result.proposed.lots}["AAPL-short"] == Decimal(
+        2
+    )
 
 
-def test_high_precision_partial_sale_cash_and_nested_rollup_match_independent_expected_values() -> None:
+def test_high_precision_partial_sale_cash_and_nested_rollup_match_independent_expected_values() -> (
+    None
+):
     base = _inputs()
     inputs = replace(
         base,
@@ -257,8 +340,12 @@ def test_high_precision_partial_sale_cash_and_nested_rollup_match_independent_ex
     assert result.current.portfolio_total_usd == Decimal("1940.000000000000000000000000016")
     assert result.proposed.cash_usd == Decimal("137.5000000000000000000000000365")
     assert result.proposed.portfolio_total_usd == Decimal("1952.500000000000000000000000052625")
-    assert result.current.portfolio_total_usd - Decimal(1940) == Decimal("0.000000000000000000000000016")
-    assert result.proposed.portfolio_total_usd - Decimal("1952.5") == Decimal("0.000000000000000000000000052625")
+    assert result.current.portfolio_total_usd - Decimal(1940) == Decimal(
+        "0.000000000000000000000000016"
+    )
+    assert result.proposed.portfolio_total_usd - Decimal("1952.5") == Decimal(
+        "0.000000000000000000000000052625"
+    )
 
     current_values = dict(result.current.sleeve_values_usd)
     proposed_values = dict(result.proposed.sleeve_values_usd)
@@ -270,7 +357,9 @@ def test_high_precision_partial_sale_cash_and_nested_rollup_match_independent_ex
     assert proposed_values["destination_nested"] == Decimal("915.000000000000000000000000006125")
     proposed_positions = {row.ticker: row for row in result.proposed.positions}
     assert proposed_positions["AAPL"].shares == Decimal("8.75")
-    assert proposed_positions["AAPL"].market_value_usd == Decimal("875.000000000000000000000000006125")
+    assert proposed_positions["AAPL"].market_value_usd == Decimal(
+        "875.000000000000000000000000006125"
+    )
     proposed_lots = {row.broker_lot_id: row for row in result.proposed.lots}
     assert proposed_lots["AAPL-short"].shares == Decimal("2.75")
 
@@ -282,12 +371,17 @@ def test_full_position_exit_closes_lots_and_preserves_exact_account_value() -> N
         ticker="AAPL",
         shares=Decimal(10),
         estimated_unit_price_usd=Decimal(100),
-        selected_lots=(LotAllocation("AAPL-short", Decimal(4)), LotAllocation("AAPL-long", Decimal(6))),
+        selected_lots=(
+            LotAllocation("AAPL-short", Decimal(4)),
+            LotAllocation("AAPL-long", Decimal(6)),
+        ),
     )
 
     result = evaluate_portfolio(_inputs(), (sale,))
 
-    assert result.proposed.portfolio_total_usd == result.current.portfolio_total_usd == Decimal(1940)
+    assert (
+        result.proposed.portfolio_total_usd == result.current.portfolio_total_usd == Decimal(1940)
+    )
     assert result.proposed.cash_usd == Decimal(1100)
     assert "AAPL" not in {row.ticker for row in result.proposed.positions}
     assert result.position_count_before == 5
@@ -327,7 +421,9 @@ def test_unassigned_current_state_is_explicitly_display_only() -> None:
     with pytest.raises(BasketValidationError, match="no policy sleeve assignment") as strict_error:
         evaluate_portfolio(display_inputs)
     assert strict_error.value.code == "unassigned_holding"
-    with pytest.raises(BasketValidationError, match="only for an empty-basket display") as proposal_error:
+    with pytest.raises(
+        BasketValidationError, match="only for an empty-basket display"
+    ) as proposal_error:
         evaluate_portfolio(display_inputs, (_sell(),), allow_unassigned_current_positions=True)
     assert proposal_error.value.code == "unassigned_current_only"
 
@@ -351,8 +447,10 @@ def test_nonfinite_monetary_boundaries_raise_structured_errors(
         inputs = replace(inputs, positions=positions)
     elif field == "cash_reserve_usd":
         inputs = _inputs(cash_reserve=amount)
+    elif field == "cash_usd":
+        inputs = replace(inputs, account=replace(inputs.account, cash_usd=amount))
     else:
-        inputs = replace(inputs, account=replace(inputs.account, **{field: amount}))
+        inputs = replace(inputs, account=replace(inputs.account, settled_buying_power_usd=amount))
 
     with pytest.raises(BasketValidationError) as error:
         evaluate_portfolio(inputs, allow_unassigned_current_positions=True)
@@ -362,7 +460,10 @@ def test_nonfinite_monetary_boundaries_raise_structured_errors(
 @pytest.mark.parametrize("field", ["cash_usd", "settled_buying_power_usd"])
 def test_negative_account_balances_are_rejected(field: str) -> None:
     inputs = _inputs()
-    invalid_account = replace(inputs.account, **{field: Decimal(-1)})
+    if field == "cash_usd":
+        invalid_account = replace(inputs.account, cash_usd=Decimal(-1))
+    else:
+        invalid_account = replace(inputs.account, settled_buying_power_usd=Decimal(-1))
 
     with pytest.raises(BasketValidationError) as error:
         evaluate_portfolio(replace(inputs, account=invalid_account))
@@ -372,7 +473,13 @@ def test_negative_account_balances_are_rejected(field: str) -> None:
 def test_basket_structure_lots_dependencies_and_funding_are_independently_validated() -> None:
     inputs = _inputs()
     buy = ConsolidatedLeg(
-        "buy-new", "BUY", "NEWBUY", Decimal(2), Decimal(100), depends_on_leg_ids=("missing",), sequence=1
+        "buy-new",
+        "BUY",
+        "NEWBUY",
+        Decimal(2),
+        Decimal(100),
+        depends_on_leg_ids=("missing",),
+        sequence=1,
     )
     with pytest.raises(BasketValidationError, match="SELL leg IDs") as unknown_dependency:
         evaluate_portfolio(inputs, (_sell(), buy))
@@ -393,7 +500,17 @@ def test_basket_structure_lots_dependencies_and_funding_are_independently_valida
         evaluate_portfolio(inputs, (underfunded,))
     assert cash_limit.value.code == "insufficient_cash"
 
-    duplicate_sales = (_sell(), ConsolidatedLeg("sell-again", "SELL", "AAPL", Decimal(1), Decimal(100), (LotAllocation("AAPL-short", Decimal(1)),)))
+    duplicate_sales = (
+        _sell(),
+        ConsolidatedLeg(
+            "sell-again",
+            "SELL",
+            "AAPL",
+            Decimal(1),
+            Decimal(100),
+            (LotAllocation("AAPL-short", Decimal(1)),),
+        ),
+    )
     with pytest.raises(BasketValidationError) as unconsolidated:
         evaluate_portfolio(inputs, duplicate_sales)
     assert unconsolidated.value.code == "unconsolidated_ticker_legs"
@@ -402,9 +519,149 @@ def test_basket_structure_lots_dependencies_and_funding_are_independently_valida
 def test_funding_dependencies_must_precede_the_buy() -> None:
     sale = _sell(sequence=1)
     buy = ConsolidatedLeg(
-        "buy-new", "BUY", "NEWBUY", Decimal(1), Decimal(100), depends_on_leg_ids=(sale.leg_id,), sequence=1
+        "buy-new",
+        "BUY",
+        "NEWBUY",
+        Decimal(1),
+        Decimal(100),
+        depends_on_leg_ids=(sale.leg_id,),
+        sequence=1,
     )
 
     with pytest.raises(BasketValidationError) as failure:
         evaluate_portfolio(_inputs(), (sale, buy))
     assert failure.value.code == "funding_dependency_not_prior"
+
+
+def test_sell_fee_changes_net_lot_realization_cash_and_portfolio_value() -> None:
+    base = _inputs()
+    inputs = replace(
+        base,
+        lots=(replace(base.lots[0], adjusted_unit_basis_usd=Decimal(99)), *base.lots[1:]),
+    )
+    sale = ConsolidatedLeg(
+        "sell-aapl",
+        "SELL",
+        "AAPL",
+        Decimal(1),
+        Decimal(100),
+        (LotAllocation("AAPL-short", Decimal(1)),),
+    )
+
+    result = evaluate_portfolio(inputs, (sale,), estimated_fee_per_order_usd=Decimal(2))
+
+    assert result.sell_proceeds_usd == Decimal(100)
+    assert result.realized_st_usd == Decimal(-1)
+    assert result.realized_lt_usd == Decimal(0)
+    assert result.lot_effects[0].realized_pl_usd == Decimal(-1)
+    assert result.proposed.cash_usd == Decimal(198)
+    assert result.proposed.portfolio_total_usd == Decimal(1938)
+
+
+def test_consolidated_sell_fee_is_allocated_once_and_deterministically_across_terms() -> None:
+    inputs = _inputs()
+    sale = _sell()
+    fee = Decimal("0.01")
+    without_fee = evaluate_portfolio(inputs, (sale,))
+    result = evaluate_portfolio(inputs, (sale,), estimated_fee_per_order_usd=fee)
+    reversed_sale = replace(sale, selected_lots=tuple(reversed(sale.selected_lots)))
+    reversed_result = evaluate_portfolio(inputs, (reversed_sale,), estimated_fee_per_order_usd=fee)
+
+    gross_by_lot = {
+        effect.broker_lot_id: effect.realized_pl_usd for effect in without_fee.lot_effects
+    }
+    net_by_lot = {effect.broker_lot_id: effect.realized_pl_usd for effect in result.lot_effects}
+    allocated_fees = {
+        lot_id: exact_sum((gross_by_lot[lot_id], net_by_lot[lot_id].copy_negate()))
+        for lot_id in gross_by_lot
+    }
+    assert exact_sum(allocated_fees.values()) == fee
+    assert {
+        effect.broker_lot_id: effect.realized_pl_usd for effect in reversed_result.lot_effects
+    } == net_by_lot
+    assert result.sell_proceeds_usd == Decimal(330)
+    assert result.proposed.cash_usd == Decimal("429.99")
+    assert exact_sum((result.realized_st_usd, result.realized_lt_usd)) == Decimal("149.99")
+
+
+def test_buy_fee_reduces_cash_and_portfolio_value_and_counts_against_reserve() -> None:
+    base = _inputs(cash_reserve=Decimal(20))
+    inputs = replace(
+        base,
+        account=replace(
+            base.account,
+            cash_usd=Decimal(200),
+            settled_buying_power_usd=Decimal(200),
+        ),
+    )
+    buy = ConsolidatedLeg("buy-new", "BUY", "NEWBUY", Decimal(1), Decimal(100))
+
+    result = evaluate_portfolio(inputs, (buy,), estimated_fee_per_order_usd=Decimal(2))
+
+    assert result.proposed.cash_usd == Decimal(98)
+    assert result.proposed.portfolio_total_usd == Decimal(2038)
+    assert {position.ticker: position.market_value_usd for position in result.proposed.positions}[
+        "NEWBUY"
+    ] == Decimal(100)
+
+    reserve_inputs = replace(
+        _inputs(cash_reserve=Decimal(99)),
+        account=replace(
+            base.account,
+            cash_usd=Decimal(200),
+            settled_buying_power_usd=Decimal(200),
+        ),
+    )
+    with pytest.raises(BasketValidationError) as reserve_error:
+        evaluate_portfolio(reserve_inputs, (buy,), estimated_fee_per_order_usd=Decimal(2))
+    assert reserve_error.value.code == "insufficient_cash"
+
+
+def test_sell_can_repair_initial_cash_reserve_breach_but_cannot_end_below_reserve() -> None:
+    base = _inputs(cash_reserve=Decimal(20))
+    inputs = replace(
+        base,
+        account=replace(base.account, cash_usd=Decimal(0), settled_buying_power_usd=Decimal(0)),
+    )
+    sale = ConsolidatedLeg(
+        "sell-aapl",
+        "SELL",
+        "AAPL",
+        Decimal(1),
+        Decimal(110),
+        (LotAllocation("AAPL-short", Decimal(1)),),
+    )
+
+    result = evaluate_portfolio(inputs, (sale,), estimated_fee_per_order_usd=Decimal(2))
+    assert result.proposed.cash_usd == Decimal(108)
+
+    under_reserve_sale = replace(sale, estimated_unit_price_usd=Decimal(10))
+    with pytest.raises(BasketValidationError) as reserve_error:
+        evaluate_portfolio(inputs, (under_reserve_sale,), estimated_fee_per_order_usd=Decimal(2))
+    assert reserve_error.value.code == "insufficient_cash"
+
+    empty = evaluate_portfolio(inputs, estimated_fee_per_order_usd=Decimal(2))
+    assert empty.proposed == empty.current
+    assert empty.proposed.cash_usd == Decimal(0)
+
+
+def test_zero_fee_and_empty_basket_preserve_legacy_results() -> None:
+    inputs = _inputs()
+    sale = _sell()
+
+    assert evaluate_portfolio(inputs, (sale,)) == evaluate_portfolio(
+        inputs, (sale,), estimated_fee_per_order_usd=Decimal(0)
+    )
+    assert evaluate_portfolio(inputs, estimated_fee_per_order_usd=Decimal(2)) == evaluate_portfolio(
+        inputs
+    )
+
+
+@pytest.mark.parametrize(
+    "fee",
+    [Decimal(-1), Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")],
+)
+def test_invalid_estimated_order_fees_are_rejected(fee: Decimal) -> None:
+    with pytest.raises(BasketValidationError) as error:
+        evaluate_portfolio(_inputs(), estimated_fee_per_order_usd=fee)
+    assert error.value.code == "invalid_estimated_fee"

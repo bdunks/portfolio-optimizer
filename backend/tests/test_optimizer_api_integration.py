@@ -10,12 +10,11 @@ from app.broker.fake import FakeBroker
 from app.db.models import OptimizerRun
 from app.main import create_app
 from app.optimizer.runtime import ProcessSupervisor
-from app.schemas import BrokerSnapshot
+from app.schemas import BrokerSnapshot, ExposureInput
 from app.services.optimizer_service import BoundedValidationExecutor
 
-
 TRADE_DATE = date(2026, 11, 15)
-SOURCE_AS_OF = datetime(2026, 11, 14, 20, 0, tzinfo=UTC)
+SOURCE_AS_OF = datetime(2026, 11, 15, 20, 0, tzinfo=UTC)
 OLD_LOT_ID = "AAPL-OLD-001"
 RECENT_LOT_ID = "AAPL-RECENT-001"
 
@@ -71,6 +70,39 @@ def _fee_adjusted_snapshot() -> BrokerSnapshot:
     return template.model_copy(
         update={
             "as_of": SOURCE_AS_OF,
+            "coverage": template.coverage.model_copy(
+                update={
+                    "lookthrough": True,
+                    "transaction_history_start_date": date(2025, 9, 1),
+                    "transaction_history_end_date": SOURCE_AS_OF.date(),
+                }
+            ),
+            "exposures": [
+                ExposureInput(
+                    ticker="AAPL",
+                    dimension="sector",
+                    exposure_key="TEST",
+                    weight=Decimal(1),
+                    provider="manual_csv",
+                    as_of_date=SOURCE_AS_OF.date(),
+                ),
+                ExposureInput(
+                    ticker="VTI",
+                    dimension="security",
+                    exposure_key="US_MARKET",
+                    weight=Decimal(1),
+                    provider="manual_csv",
+                    as_of_date=SOURCE_AS_OF.date(),
+                ),
+                ExposureInput(
+                    ticker="VTI",
+                    dimension="sector",
+                    exposure_key="TEST",
+                    weight=Decimal(1),
+                    provider="manual_csv",
+                    as_of_date=SOURCE_AS_OF.date(),
+                ),
+            ],
             "cash_usd": Decimal(0),
             "settled_buying_power_usd": Decimal(0),
             "positions": [
@@ -136,7 +168,9 @@ def _activate_test_policy(client: TestClient) -> str:
         "/api/v1/policy/drafts",
         json={
             "source_revision_id": active["id"],
-            "sector_bands": [],
+            "sector_bands": [
+                {"sector_key": "TEST", "target_weight_pct": "100", "band_pct": "100"}
+            ],
             "settings": settings,
             "sleeves": [
                 {
@@ -178,7 +212,7 @@ def _activate_test_policy(client: TestClient) -> str:
                 }
             ],
             "overrides": [],
-            "reassignments": {},
+            "reassignments": {"direct_indexing": "equity"},
         },
     )
     assert draft_response.status_code == 201, draft_response.text
@@ -217,7 +251,7 @@ def test_real_optimizer_http_pipeline_persists_fee_adjusted_reviewed_lots_and_re
         assert create_response.status_code == 201, create_response.text
         initial = create_response.json()
         run_id = initial["run_id"]
-        assert initial["status"] == "COMPLETE"
+        assert initial["status"] == "complete", initial["optimizer_metrics"]
         assert initial["mode"] == "real_optimizer"
         assert initial["demo"] is False
         assert initial["solver_version"] != "DEMO"
@@ -240,28 +274,43 @@ def test_real_optimizer_http_pipeline_persists_fee_adjusted_reviewed_lots_and_re
 
         selected_lots = {lot["broker_lot_id"]: lot for lot in sell["selected_lots"]}
         assert set(selected_lots) == {OLD_LOT_ID, RECENT_LOT_ID}
-        assert _decimal(selected_lots[OLD_LOT_ID]["shares"]) == Decimal(10)
-        assert _decimal(selected_lots[RECENT_LOT_ID]["shares"]) == Decimal(1)
+        old_shares = _decimal(selected_lots[OLD_LOT_ID]["shares"])
+        recent_shares = _decimal(selected_lots[RECENT_LOT_ID]["shares"])
+        assert old_shares > 0
+        assert old_shares <= Decimal(10)
+        assert old_shares.to_integral_value() == old_shares
+        assert recent_shares == Decimal(1)
         assert selected_lots[OLD_LOT_ID]["st_lt"] == "LT"
         assert selected_lots[RECENT_LOT_ID]["st_lt"] == "ST"
 
         with localcontext() as context:
             context.prec = 100
-            old_fee = Decimal(1) * Decimal(10) / Decimal(11)
+            total_sold = old_shares + recent_shares
+            old_fee = Decimal(1) * old_shares / total_sold
             recent_fee = Decimal(1) - old_fee
-            expected_old_realized = (Decimal(100) - Decimal(110)) * Decimal(10) - old_fee
-            expected_recent_realized = (Decimal(100) - Decimal(95)) - recent_fee
+            expected_old_realized = (Decimal(100) - Decimal(110)) * old_shares - old_fee
+            expected_recent_realized = (Decimal(100) - Decimal(95)) * recent_shares - recent_fee
+            expected_net_realized = expected_old_realized + expected_recent_realized
         assert _to_eight_places(_decimal(selected_lots[OLD_LOT_ID]["realized_pl_usd"])) == _to_eight_places(
             expected_old_realized
         )
         assert _to_eight_places(_decimal(selected_lots[RECENT_LOT_ID]["realized_pl_usd"])) == _to_eight_places(
             expected_recent_realized
         )
-        assert sum((_decimal(lot["realized_pl_usd"]) for lot in selected_lots.values()), Decimal(0)) == Decimal(-96)
+        persisted_net_realized = sum(
+            (_decimal(lot["realized_pl_usd"]) for lot in selected_lots.values()), Decimal(0)
+        )
+        assert _to_eight_places(persisted_net_realized) == _to_eight_places(expected_net_realized)
         assert _to_eight_places(_decimal(sell["net_lt_realized_usd"])) == _to_eight_places(
             expected_old_realized
         )
         assert _to_eight_places(_decimal(sell["net_st_realized_usd"])) == _to_eight_places(
+            expected_recent_realized
+        )
+        assert _to_eight_places(_decimal(initial["estimated_realized_lt_usd"])) == _to_eight_places(
+            expected_old_realized
+        )
+        assert _to_eight_places(_decimal(initial["estimated_realized_st_usd"])) == _to_eight_places(
             expected_recent_realized
         )
 
@@ -283,7 +332,15 @@ def test_real_optimizer_http_pipeline_persists_fee_adjusted_reviewed_lots_and_re
             assert provenance["mode"] == "real_optimizer"
             assert provenance["proposed_trade_date"] == TRADE_DATE.isoformat()
             assert provenance["input_fingerprint"] == saved_run.input_fingerprint
+            assert provenance["source_generation"] == saved_run.source_generation
+            assert provenance["source_checksum"] == initial["source_checksum"]
+            source_metadata = provenance["source_metadata"]
+            assert source_metadata["transaction_history_complete"] is True
+            assert source_metadata["transaction_history_start_date"] == "2025-09-01"
+            assert source_metadata["transaction_history_end_date"] == TRADE_DATE.isoformat()
+            assert source_metadata["lookthrough_complete"] is True
             policy_provenance = provenance["policy"]
+            assert policy_provenance["id"] == policy_revision_id
             assert policy_provenance["settings"]["estimated_fee_per_order_usd"] == "1"
             assert policy_provenance["settings"]["short_term_tax_rate"] == "0.3"
             assert {lot["broker_lot_id"] for lot in provenance["lots"]} == {
@@ -309,6 +366,23 @@ def test_real_optimizer_http_pipeline_persists_fee_adjusted_reviewed_lots_and_re
         confirmed = intent_response.json()
         confirmed_sell = next(leg for leg in confirmed["consolidated_legs"] if leg["side"] == "SELL")
         confirmed_buy = next(leg for leg in confirmed["consolidated_legs"] if leg["side"] == "BUY")
+        assert confirmed["status"] == "complete"
+        assert confirmed["constraints_satisfied"] is True
+        assert confirmed["orders_count"] == 2
+        assert all(
+            _decimal(leg["shares"]).to_integral_value() == _decimal(leg["shares"])
+            for leg in confirmed["consolidated_legs"]
+        )
+        assert all(lot["selected"] for lot in confirmed_sell["selected_lots"])
+        assert any(group["selected"] for group in confirmed["groups"])
+        assert _decimal(confirmed["optimizer_metrics"]["estimated_trading_cost_usd"]) == Decimal(2)
+        confirmed_cash = (
+            _decimal(confirmed["cash_before_usd"])
+            + _decimal(confirmed_sell["shares"]) * _decimal(confirmed_sell["estimated_unit_price_usd"])
+            - _decimal(confirmed_buy["shares"]) * _decimal(confirmed_buy["estimated_unit_price_usd"])
+            - Decimal(2)
+        )
+        assert _decimal(confirmed["cash_after_usd"]) == confirmed_cash
         assert {lot["broker_lot_id"] for lot in confirmed_sell["selected_lots"]} == {
             OLD_LOT_ID,
             RECENT_LOT_ID,

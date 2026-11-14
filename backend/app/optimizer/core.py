@@ -653,9 +653,7 @@ def _screen(
     limits = _configured_limits(inputs)
     if limits is None:
         return None, ("configuration_required:batch_limits_and_cash_policy",)
-    sell_ticker_limit, sell_lot_limit, order_limit, turnover_pct, buy_minimum, _cash_reserve = (
-        limits
-    )
+    sell_ticker_limit, sell_lot_limit, order_limit, turnover_pct, buy_minimum, cash_reserve = limits
     sell_order_capacity = min(sell_ticker_limit, order_limit)
     if config.estimated_spread_bps >= _BASIS_POINTS:
         return None, ("invalid_configuration:estimated_spread_bps_must_be_less_than_10000",)
@@ -814,53 +812,32 @@ def _screen(
         buy_candidates.append(
             _BuyCandidate(ticker, max_shares, mark, buy_price, path, priority, replacement_set)
         )
-    # Reserve a BUY order only when an eligible same-sleeve replacement exists and a
-    # one-share sale-only candidate violates a hard sleeve boundary. This leaves
-    # feasible sale-only cleanup available when a replacement is unnecessary.
+    # Reserve a BUY order only when a fundable replacement repairs a hard boundary that an
+    # actual screened sale would worsen. Keep this replacement with the reduced sale set so
+    # later global BUY truncation cannot discard the witness for reserving its order slot.
+    reserved_buy_ticker: str | None = None
     if request.sell_lot_ids is None and order_limit > 1 and len(selected_tickers) >= order_limit:
-        reserve_buy = False
+        reserve_sales, reserve_tickers = select_sales(min(sell_ticker_limit, order_limit - 1))
         potential_buys = [
-            candidate for candidate in buy_candidates if candidate.ticker not in selected_tickers
+            candidate for candidate in buy_candidates if candidate.ticker not in reserve_tickers
         ]
+        whole_sale_proceeds = exact_sum(
+            exact_product(candidate.execution_price, _whole_floor(candidate.maximum_shares))
+            for candidate in reserve_sales
+        )
+        order_fees = exact_product(
+            config.estimated_fee_per_order_usd, Decimal(len(reserve_tickers) + 1)
+        )
+        cash_fundable = inputs.account.cash_usd + whole_sale_proceeds - cash_reserve - order_fees
+        settled_fundable = (
+            inputs.account.settled_buying_power_usd + whole_sale_proceeds - order_fees
+        )
+        fundable_notional = min(cash_fundable, settled_fundable)
 
-        def screened_sale_path(ticker: str) -> tuple[str, ...] | None:
-            security = security_by_ticker.get(ticker.upper())
-            if security is None:
-                return None
-            position = position_by_ticker.get(ticker.upper())
-            assignment = (
-                position.assignment
-                if position is not None and position.assignment is not None
-                else resolve_holding(inputs.policy.allocation, security.identity).assignment
-            )
-            if assignment is None:
-                return None
-            return assignment_path(
-                inputs.policy.allocation,
-                assignment.sleeve_key,
-                assignment.sub_sleeve_key,
-            )
-
-        def sale_capacity_for_path(path: tuple[str, ...]) -> Decimal:
-            matching_sales = [
-                sale for sale in selected_sales if screened_sale_path(sale.lot.ticker) == path
-            ]
-            return exact_sum(
-                sale.execution_price * sale.maximum_shares for sale in matching_sales
-            ) - config.estimated_fee_per_order_usd * len(
-                {sale.lot.ticker.upper() for sale in matching_sales}
-            )
-
-        for candidate in selected_sales:
+        for candidate in reserve_sales:
             if time.monotonic() >= deadline:
                 return None, ("deadline_during_sell_buy_capacity_screening",)
-            if candidate.maximum_shares < _ONE:
-                continue
-            sale_path = screened_sale_path(candidate.lot.ticker)
-            if sale_path is None or not any(
-                buy.assignment_path == sale_path and buy.ticker != candidate.lot.ticker.upper()
-                for buy in potential_buys
-            ):
+            if _whole_floor(candidate.maximum_shares) < _ONE:
                 continue
             sale_leg = ConsolidatedLeg(
                 f"sell:{candidate.lot.ticker.upper()}",
@@ -874,15 +851,29 @@ def _screen(
                 (f"sale:{candidate.lot.ticker.upper()}",),
             )
             validation = validate_candidate(inputs, (sale_leg,), deadline)
-            if validation.reasons and all(
+            if not validation.reasons or not all(
                 reason.startswith("sleeve_drift_worsened:") for reason in validation.reasons
             ):
-                sale_capacity = sale_capacity_for_path(sale_path)
-                if sale_capacity >= buy_minimum:
-                    reserve_buy = True
-                    break
-        if reserve_buy:
-            selected_sales, selected_tickers = select_sales(min(sell_ticker_limit, order_limit - 1))
+                continue
+            violated_sleeves = {
+                reason.partition(":")[2] for reason in validation.reasons if ":" in reason
+            }
+            for buy in potential_buys:
+                if time.monotonic() >= deadline:
+                    return None, ("deadline_during_sell_buy_capacity_screening",)
+                if not violated_sleeves.intersection(buy.assignment_path):
+                    continue
+                fundable_shares = min(
+                    buy.maximum_shares, _whole_floor(fundable_notional / buy.execution_price)
+                )
+                if fundable_shares < _ONE or buy.execution_price * fundable_shares < buy_minimum:
+                    continue
+                reserved_buy_ticker = buy.ticker
+                break
+            if reserved_buy_ticker is not None:
+                break
+        if reserved_buy_ticker is not None:
+            selected_sales, selected_tickers = reserve_sales, reserve_tickers
 
     selected_sale_ids = {candidate.lot.broker_lot_id for candidate in selected_sales}
     mandatory_clearance_ids: set[str] = set()
@@ -900,6 +891,14 @@ def _screen(
     buy_candidates = [
         candidate for candidate in buy_candidates if candidate.ticker not in selected_tickers
     ]
+    if reserved_buy_ticker is not None:
+        buy_candidates.sort(
+            key=lambda candidate: (
+                candidate.ticker != reserved_buy_ticker,
+                candidate.priority,
+                candidate.ticker,
+            )
+        )
     available_buy_slots = max(0, order_limit - len(selected_tickers))
     buy_candidates = buy_candidates[:available_buy_slots]
     if sector_model is not None:

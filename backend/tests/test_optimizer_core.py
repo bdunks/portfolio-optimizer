@@ -1277,6 +1277,76 @@ def _add_msft_loss_candidate(inputs: FinancialInputs) -> FinancialInputs:
     )
 
 
+def _strict_equity_order_budget_inputs(inputs: FinancialInputs) -> FinancialInputs:
+    settings = tuple(
+        (key, 2 if key in {"max_sell_tickers_per_batch", "max_total_orders_per_batch"} else value)
+        for key, value in inputs.policy.settings.values
+    )
+    equity, cash = inputs.policy.allocation.sleeves
+    allocation = replace(
+        inputs.policy.allocation,
+        sleeves=(
+            replace(equity, target_pct=Decimal(100), drift_band_pp=Decimal(0)),
+            replace(cash, target_pct=Decimal(0), drift_band_pp=Decimal(0)),
+        ),
+    )
+    return replace(
+        inputs,
+        policy=replace(
+            inputs.policy,
+            allocation=allocation,
+            settings=PolicySettings(settings),
+        ),
+    )
+
+
+def _small_cash_funding_inputs() -> FinancialInputs:
+    inputs = _strict_equity_order_budget_inputs(_add_msft_loss_candidate(_inputs()))
+    positions = tuple(
+        replace(row, shares=Decimal(25), market_value_usd=Decimal(500)) for row in inputs.positions
+    )
+    lots = tuple(
+        replace(
+            row,
+            shares=Decimal(1),
+            available_shares=Decimal(1),
+            adjusted_unit_basis_usd=Decimal(40),
+        )
+        for row in inputs.lots
+    )
+    quotes = tuple(
+        replace(row, bid_usd=Decimal(20), ask_usd=Decimal(20))
+        if row.ticker in {"AAPL", "MSFT"}
+        else row
+        for row in inputs.quotes
+    )
+    settings = tuple(
+        (
+            key,
+            Decimal(10)
+            if key == "objective_cleanup_weight"
+            else Decimal(1)
+            if key == "objective_allocation_weight"
+            else Decimal(0)
+            if key == "objective_tax_weight"
+            else value,
+        )
+        for key, value in inputs.policy.settings.values
+    )
+    return replace(
+        inputs,
+        account=replace(
+            inputs.account,
+            cash_usd=Decimal(100),
+            settled_buying_power_usd=Decimal(100),
+        ),
+        policy=replace(inputs.policy, settings=PolicySettings(settings)),
+        positions=positions,
+        lots=lots,
+        quotes=quotes,
+    )
+
+
 def test_total_order_cap_keeps_feasible_single_sell(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_objective_accessor(monkeypatch)
     inputs = _add_msft_loss_candidate(_inputs())
@@ -1303,7 +1373,53 @@ def test_total_order_cap_keeps_feasible_single_sell(monkeypatch: pytest.MonkeyPa
     assert validate_candidate(inputs, result.legs).accepted
 
 
-def test_total_order_budget_keeps_replacement_buy_when_hard_sleeve_requires_it(
+def test_total_order_budget_keeps_fundable_replacement_ahead_of_unrelated_priority_buy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _strict_equity_order_budget_inputs(_add_msft_loss_candidate(_inputs()))
+    unrelated = SecurityInput(SecurityIdentity("OTHERETF", "ETF"))
+    allocation = replace(
+        inputs.policy.allocation,
+        sleeves=(
+            *inputs.policy.allocation.sleeves,
+            AllocationSleeve(
+                "unrelated", None, True, target_pct=Decimal(0), drift_band_pp=Decimal(0)
+            ),
+        ),
+        allowed_securities=(
+            AllowedSecurity("OTHERETF", "unrelated", None, 0, True, "unrelated"),
+            AllowedSecurity("NEWETF", "equity", None, 1, True, "replacement"),
+        ),
+    )
+    inputs = replace(
+        inputs,
+        policy=replace(inputs.policy, allocation=allocation),
+        securities=(*inputs.securities, unrelated),
+        quotes=(
+            *inputs.quotes,
+            QuoteInput("OTHERETF", Decimal(100), Decimal(100), None, "TEST", NOW, "good", 1),
+        ),
+        exposures=(
+            *inputs.exposures,
+            LookThroughExposureInput(
+                "OTHERETF", "security", "US_MARKET", Decimal(1), "TEST", TRADE_DATE
+            ),
+            LookThroughExposureInput("OTHERETF", "sector", "TEST", Decimal(1), "TEST", TRADE_DATE),
+        ),
+    )
+
+    result = optimize_worker(OptimizerRequest(inputs), time.monotonic() + 10)
+
+    assert result.status == "ready"
+    assert len(result.legs) == 2
+    assert [leg.side for leg in result.legs].count("SELL") == 1
+    assert [leg.side for leg in result.legs].count("BUY") == 1
+    assert next(leg for leg in result.legs if leg.side == "BUY").ticker == "NEWETF"
+    assert validate_candidate(inputs, result.legs).accepted
+
+
+def test_order_budget_recognizes_replacement_in_sibling_child_of_violated_parent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _install_objective_accessor(monkeypatch)
@@ -1312,16 +1428,30 @@ def test_total_order_budget_keeps_replacement_buy_when_hard_sleeve_requires_it(
         (key, 2 if key == "max_sell_tickers_per_batch" else value)
         for key, value in inputs.policy.settings.values
     )
-    equity, cash = inputs.policy.allocation.sleeves
     allocation = replace(
         inputs.policy.allocation,
         sleeves=(
-            replace(equity, target_pct=Decimal(100), drift_band_pp=Decimal(0)),
-            replace(cash, target_pct=Decimal(0), drift_band_pp=Decimal(0)),
+            AllocationSleeve("us", None, True, target_pct=Decimal(100), drift_band_pp=Decimal(0)),
+            AllocationSleeve(
+                "cash",
+                None,
+                True,
+                cash_sleeve=True,
+                target_pct=Decimal(0),
+                drift_band_pp=Decimal(0),
+            ),
+            AllocationSleeve(
+                "legacy", "us", True, target_pct=Decimal(50), drift_band_pp=Decimal(50)
+            ),
+            AllocationSleeve("etf", "us", True, target_pct=Decimal(50), drift_band_pp=Decimal(50)),
         ),
+        allowed_securities=(AllowedSecurity("NEWETF", "us", "etf", 0, True, "replacement"),),
     )
     inputs = replace(
         inputs,
+        positions=tuple(
+            replace(row, assignment=SleeveAssignment("us", "legacy")) for row in inputs.positions
+        ),
         policy=replace(
             inputs.policy,
             allocation=allocation,
@@ -1337,6 +1467,117 @@ def test_total_order_budget_keeps_replacement_buy_when_hard_sleeve_requires_it(
     assert [leg.side for leg in result.legs].count("BUY") == 1
     assert next(leg for leg in result.legs if leg.side == "BUY").ticker == "NEWETF"
     assert validate_candidate(inputs, result.legs).accepted
+
+
+def test_order_budget_funds_minimum_buy_with_existing_cash_and_small_loss_sale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _small_cash_funding_inputs()
+
+    result = optimize_worker(OptimizerRequest(inputs), time.monotonic() + 10)
+
+    assert result.status == "ready", (
+        result.metadata.warnings,
+        result.metadata.solver_statuses,
+        result.legs,
+    )
+    sells = [leg for leg in result.legs if leg.side == "SELL"]
+    buys = [leg for leg in result.legs if leg.side == "BUY"]
+    assert len(sells) == len(buys) == 1
+    assert sells[0].shares == Decimal(1)
+    assert sells[0].shares * sells[0].estimated_unit_price_usd == Decimal(20)
+    assert buys[0].shares * buys[0].estimated_unit_price_usd >= Decimal(100)
+    validation = validate_candidate(inputs, result.legs)
+    assert validation.accepted, validation.reasons
+    assert validation.evaluation is not None
+    assert validation.evaluation.proposed.cash_usd == Decimal(20)
+
+
+@pytest.mark.parametrize(
+    ("cash_usd", "settled_buying_power_usd", "cash_reserve_usd", "fee_per_order_usd"),
+    [
+        (Decimal(0), Decimal(100), Decimal(0), Decimal(0)),
+        (Decimal(100), Decimal(100), Decimal(30), Decimal(0)),
+        (Decimal(100), Decimal(100), Decimal(0), Decimal(11)),
+    ],
+    ids=("unsettled-cash-is-not-available-cash", "preserve-cash-reserve", "include-order-fees"),
+)
+def test_screen_does_not_reserve_unfundable_buy_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+    cash_usd: Decimal,
+    settled_buying_power_usd: Decimal,
+    cash_reserve_usd: Decimal,
+    fee_per_order_usd: Decimal,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _small_cash_funding_inputs()
+    settings = tuple(
+        (
+            key,
+            cash_reserve_usd
+            if key == "cash_reserve_usd"
+            else fee_per_order_usd
+            if key == "estimated_fee_per_order_usd"
+            else value,
+        )
+        for key, value in inputs.policy.settings.values
+    )
+    inputs = replace(
+        inputs,
+        account=replace(
+            inputs.account,
+            cash_usd=cash_usd,
+            settled_buying_power_usd=settled_buying_power_usd,
+        ),
+        policy=replace(inputs.policy, settings=PolicySettings(settings)),
+    )
+    config, config_errors = read_objective_policy(inputs)
+    assert config is not None
+    assert config_errors == ()
+
+    screen, screen_errors = core_module._screen(
+        OptimizerRequest(inputs), config, time.monotonic() + 10
+    )
+
+    assert screen_errors == ()
+    assert screen is not None
+    assert len(screen.sales) == 2
+    assert screen.buys == ()
+
+
+def test_ineligible_replacement_does_not_reserve_buy_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _small_cash_funding_inputs()
+    blocked_loss = TransactionInput(
+        "recent-loss",
+        "NEWETF",
+        "SELL",
+        NOW - timedelta(days=10),
+        TRADE_DATE - timedelta(days=10),
+        Decimal(1),
+        Decimal(100),
+        False,
+        None,
+        "TEST",
+        Decimal(-10),
+    )
+    inputs = replace(inputs, transactions=(blocked_loss,))
+    config, config_errors = read_objective_policy(inputs)
+    assert config is not None
+    assert config_errors == ()
+
+    screen, screen_errors = core_module._screen(
+        OptimizerRequest(inputs), config, time.monotonic() + 10
+    )
+
+    assert screen_errors == ()
+    assert screen is not None
+    assert len(screen.sales) == 2
+    assert screen.buys == ()
+    assert any("buy_wash_sale_ineligible:NEWETF" in warning for warning in screen.warnings)
 
 
 def test_total_order_budget_keeps_sale_only_candidates_when_buy_is_unneeded(

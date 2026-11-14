@@ -261,6 +261,7 @@ async def test_run_validated_candidate_rejects_fee_underfunded_nonempty_basket(
         "basket_unchanged": True,
     }
 
+
 @pytest.mark.asyncio
 async def test_run_validated_candidate_rejects_late_owner_validation(monkeypatch: pytest.MonkeyPatch) -> None:
     candidate = Candidate((), status="no_trade")
@@ -1602,8 +1603,14 @@ async def test_create_run_persists_native_fee_adjusted_multilot_basket(
                 assert row["st_lt"] == effect.term
                 assert Decimal(str(row["shares"])) == effect.shares_sold
                 assert Decimal(str(row["realized_pl_usd"])) == effect.realized_pl_usd
-            assert Decimal(str(readback_sell["net_st_realized_usd"])) == validation.evaluation.realized_st_usd
-            assert Decimal(str(readback_sell["net_lt_realized_usd"])) == validation.evaluation.realized_lt_usd
+            assert (
+                Decimal(str(readback_sell["net_st_realized_usd"]))
+                == validation.evaluation.realized_st_usd
+            )
+            assert (
+                Decimal(str(readback_sell["net_lt_realized_usd"]))
+                == validation.evaluation.realized_lt_usd
+            )
 
             groups = cast(list[dict[str, object]], response["groups"])
             assert len(groups) == 1

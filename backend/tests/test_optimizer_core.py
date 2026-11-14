@@ -683,6 +683,7 @@ def test_validator_rejects_buy_funding_shortfall_after_order_fee(
     assert result.reasons == ("accounting:insufficient_cash",)
     assert result.evaluation is None
 
+
 @pytest.mark.parametrize(
     ("equity_value", "cash_value", "side", "shares", "accepted"),
     [
@@ -2412,6 +2413,7 @@ def test_worker_sells_full_recent_wash_clearance_quantity(
     assert validation.evaluation.proposed.cash_usd == Decimal(198)
     assert validation.evaluation.proposed.cash_usd >= inputs.policy.settings.get("cash_reserve_usd")
     assert {effect.term for effect in validation.evaluation.lot_effects} == {"ST", "LT"}
+
 
 def test_shared_wash_clearance_does_not_merge_independent_losses(
     monkeypatch: pytest.MonkeyPatch,

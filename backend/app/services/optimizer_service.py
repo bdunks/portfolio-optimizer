@@ -617,15 +617,14 @@ def _unique_strings(values: object) -> list[str]:
     return list(dict.fromkeys(str(value) for value in values if isinstance(value, str) and value))
 
 
-def _core_group_ids(legs: Sequence[ConsolidatedLeg], metadata: object) -> list[str]:
+def _core_group_ids(legs: Sequence[ConsolidatedLeg]) -> list[str]:
+    # A review opportunity must be backed by a published leg. Priority-only IDs
+    # are diagnostics, not independently selectable groups.
     groups = {group_id for leg in legs for group_id in leg.group_ids if group_id}
-    for priority in getattr(metadata, "trade_group_priorities", ()):
-        groups.add(str(priority.group_id))
     for leg in legs:
         if not leg.group_ids:
-            groups.add(f"buy:{leg.ticker.upper()}")
+            groups.add(f"{leg.side.lower()}:{leg.ticker.upper()}")
     return sorted(groups)
-
 
 def _priority_map(metadata: object) -> dict[str, object]:
     return {str(row.group_id): row for row in getattr(metadata, "trade_group_priorities", ())}
@@ -751,21 +750,115 @@ def _persist_candidate(
     for key, value in (expected_universe or {}).items():
         universe[key] = list(dict.fromkeys((*universe.get(key, ()), *value)))
 
-    active_group_ids = _core_group_ids(legs, metadata)
+    old_groups = session.scalars(
+        select(RecommendationGroup)
+        .where(RecommendationGroup.run_id == run.id)
+        .order_by(RecommendationGroup.rank, RecommendationGroup.id)
+    ).all()
+    old_groups_by_core: dict[str, list[RecommendationGroup]] = {}
+    for old_group in old_groups:
+        impact = old_group.impact if isinstance(old_group.impact, dict) else {}
+        old_core_id = str(impact.get("core_group_id") or old_group.id)
+        old_groups_by_core.setdefault(old_core_id, []).append(old_group)
+
+    active_group_ids = _core_group_ids(legs)
     lots_by_id = {lot.broker_lot_id: lot for lot in prepared.inputs.lots}
+    sell_lots_by_core: dict[str, list[str]] = {core_id: [] for core_id in active_group_ids}
     for leg in legs:
+        core_ids = list(leg.group_ids) or [f"{leg.side.lower()}:{leg.ticker.upper()}"]
         if leg.side == "SELL":
-            core_group = leg.group_ids[0] if leg.group_ids else f"sale:{leg.ticker.upper()}"
-            universe[core_group] = list(
-                dict.fromkeys((*universe.get(core_group, ()), *(allocation.broker_lot_id for allocation in leg.selected_lots)))
-            )
+            for core_id in core_ids:
+                sell_lots_by_core.setdefault(core_id, []).extend(
+                    allocation.broker_lot_id for allocation in leg.selected_lots
+                )
 
     group_priorities = _priority_map(metadata)
+    alias_keys = set(universe) | set(old_annotations)
+    sources_by_core: dict[str, set[str]] = {core_id: {core_id} for core_id in active_group_ids}
+    assigned_aliases: set[str] = set()
+    if outcome.status != "search_incomplete":
+        for alias in sorted(alias_keys):
+            alias_lots = set(universe.get(alias, ()))
+            matches = [
+                (core_id, len(alias_lots.intersection(lot_ids)))
+                for core_id, lot_ids in sell_lots_by_core.items()
+                if alias_lots.intersection(lot_ids)
+            ]
+            if alias in active_group_ids:
+                matches.append((alias, 0))
+            if not matches:
+                continue
+            owner_core = min(
+                matches,
+                key=lambda item: (
+                    -item[1],
+                    item[0] != alias,
+                    getattr(group_priorities.get(item[0]), "rank", 10**6),
+                    item[0],
+                ),
+            )[0]
+            sources_by_core.setdefault(owner_core, {owner_core}).add(alias)
+            assigned_aliases.add(alias)
+
     group_ids = (
         []
         if outcome.status == "search_incomplete"
-        else sorted(set(universe) | set(active_group_ids), key=lambda key: (getattr(group_priorities.get(key), "rank", 10**6), key))
+        else sorted(
+            set(active_group_ids) | (alias_keys - assigned_aliases),
+            key=lambda key: (getattr(group_priorities.get(key), "rank", 10**6), key),
+        )
     )
+    sources_by_group = {
+        core_id: sources_by_core.get(core_id, {core_id})
+        for core_id in group_ids
+    }
+
+    current_lot_owner: dict[str, str] = {}
+    for core_id, lot_ids in sell_lots_by_core.items():
+        for lot_id in lot_ids:
+            previous_owner = current_lot_owner.setdefault(lot_id, core_id)
+            if previous_owner != core_id:
+                raise AppError(
+                    "optimizer_core_contract_error",
+                    "Optimizer output assigns a SELL lot to multiple trade groups",
+                    status_code=502,
+                )
+
+    ordered_group_ids = sorted(
+        group_ids,
+        key=lambda key: (getattr(group_priorities.get(key), "rank", 10**6), key),
+    )
+    candidate_universe: dict[str, list[str]] = {}
+    for core_id in group_ids:
+        source_keys = sorted(sources_by_group[core_id], key=lambda key: (key != core_id, key))
+        candidate_universe[core_id] = list(
+            dict.fromkeys(
+                lot_id
+                for source in source_keys
+                for lot_id in universe.get(source, ())
+            )
+        )
+        candidate_universe[core_id] = list(
+            dict.fromkeys((*candidate_universe[core_id], *sell_lots_by_core.get(core_id, ())))
+        )
+
+    # Review universes are ownership boundaries too: current SELL lots belong to
+    # their emitted component, and omitted historical lots may be restored only
+    # through one selectable opportunity.
+    universe = {core_id: [] for core_id in group_ids}
+    claimed_lots: set[str] = set()
+    for core_id in ordered_group_ids:
+        for lot_id in sell_lots_by_core.get(core_id, ()):
+            if lot_id not in claimed_lots:
+                universe[core_id].append(lot_id)
+                claimed_lots.add(lot_id)
+    for core_id in ordered_group_ids:
+        for lot_id in candidate_universe[core_id]:
+            if current_lot_owner.get(lot_id, core_id) != core_id or lot_id in claimed_lots:
+                continue
+            universe[core_id].append(lot_id)
+            claimed_lots.add(lot_id)
+
     next_rank = 1
     rank_for_group: dict[str, int] = {}
     for core_group_id in group_ids:
@@ -791,16 +884,74 @@ def _persist_candidate(
     metrics["selection_universe"] = universe
     annotations: dict[str, dict[str, object]] = {}
     for core_group_id in group_ids:
-        annotations[core_group_id] = dict(old_annotations.get(core_group_id, {}))
+        source_keys = sorted(
+            sources_by_group[core_group_id],
+            key=lambda key: (
+                key != core_group_id,
+                old_groups_by_core.get(key, [None])[0].rank
+                if old_groups_by_core.get(key)
+                else 10**6,
+                key,
+            ),
+        )
+        state: dict[str, object] = {}
+        source_notes: list[str] = []
+        rejection_reasons: list[str] = []
+        for source in source_keys:
+            previous = old_annotations.get(source, {})
+            state.update(previous)
+            note = previous.get("note")
+            rejection_reason = previous.get("rejection_reason")
+            if isinstance(note, str) and note:
+                source_notes.append(note)
+            if isinstance(rejection_reason, str) and rejection_reason:
+                rejection_reasons.append(rejection_reason)
+        if source_notes:
+            state["note"] = " / ".join(dict.fromkeys(source_notes))
+        if rejection_reasons:
+            state["rejection_reason"] = " / ".join(dict.fromkeys(rejection_reasons))
         if selected_groups is not None:
-            annotations[core_group_id]["selected"] = bool(selected_groups.get(core_group_id, core_group_id in active_group_ids))
-        annotations[core_group_id].setdefault("selected", core_group_id in active_group_ids)
-        annotations[core_group_id].setdefault("rejected", False)
-        annotations[core_group_id].setdefault("note", None)
-        annotations[core_group_id].setdefault("rejection_reason", None)
-    for core_group_id, values in (annotation_overrides or {}).items():
-        annotations.setdefault(core_group_id, {}).update(values)
+            selected_values = [selected_groups[key] for key in source_keys if key in selected_groups]
+            state["selected"] = any(selected_values) if selected_values else core_group_id in active_group_ids
+        else:
+            state.setdefault("selected", core_group_id in active_group_ids)
+        state["rejected"] = any(
+            bool(old_annotations.get(source, {}).get("rejected")) for source in source_keys
+        )
+        if state["rejected"]:
+            state["selected"] = False
+        state.setdefault("note", None)
+        state.setdefault("rejection_reason", None)
+        annotations[core_group_id] = state
+    for source, values in (annotation_overrides or {}).items():
+        target = source if source in annotations else next(
+            (core_id for core_id, sources in sources_by_group.items() if source in sources),
+            source,
+        )
+        annotations.setdefault(target, {}).update(values)
     metrics["group_annotations"] = annotations
+    persisted_group_ids: dict[str, str] = {}
+    claimed_group_ids: set[str] = set()
+    for core_group_id in group_ids:
+        previous_groups = [
+            old_group
+            for source in sources_by_group[core_group_id]
+            for old_group in old_groups_by_core.get(source, ())
+        ]
+        previous_groups.sort(
+            key=lambda old_group: (
+                str((old_group.impact or {}).get("core_group_id") or old_group.id) != core_group_id,
+                old_group.rank,
+                old_group.id,
+            )
+        )
+        prior_group = next(
+            (old_group for old_group in previous_groups if old_group.id not in claimed_group_ids),
+            None,
+        )
+        group_id = prior_group.id if prior_group is not None else _stable_id(run.id, "group", core_group_id)
+        persisted_group_ids[core_group_id] = group_id
+        claimed_group_ids.add(group_id)
 
     run.policy_revision_id = prepared.policy_revision_id
     run.source_generation = prepared.source_generation
@@ -892,7 +1043,7 @@ def _persist_candidate(
                 if resolution.assignment is not None:
                     sleeve_key = resolution.assignment.sleeve_key
                     break
-        group_id = _stable_id(run.id, "group", core_group_id)
+        group_id = persisted_group_ids[core_group_id]
         rationale_text = " ".join(rationale).strip() or "Production optimizer recommendation; see the saved solver diagnostics."
         group = RecommendationGroup(
             id=group_id,
@@ -912,6 +1063,8 @@ def _persist_candidate(
         session.add(group)
         groups_by_core[core_group_id] = group
 
+    # Membership rows are inserted without ORM relationships, so persist their groups first.
+    session.flush()
     leg_ids = {str(leg.leg_id): _stable_id(run.id, "leg", str(leg.leg_id)) for leg in legs}
     seen_leg_keys: set[tuple[str, str]] = set()
     for leg in legs:
@@ -966,6 +1119,8 @@ def _persist_candidate(
             },
         )
         session.add(persisted_leg)
+        # RecommendationGroupLeg has no ORM relationship; flush its parent before the FK row.
+        session.flush()
         for core_group in core_groups:
             session.add(RecommendationGroupLeg(group_id=groups_by_core[core_group].id, leg_id=persistent_id))
         for allocation, lot, realized, term in lot_rows:

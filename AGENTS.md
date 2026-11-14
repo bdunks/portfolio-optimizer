@@ -12,6 +12,13 @@ Implement a local, single-user, **single-account** decision-support app that tak
 
 All allocation sleeves, target percentages, ETF candidates, wash-sale assumptions, tax rates, carryforwards, retained TLH targets, gain budgets and small-batch limits are **configurable product data**, not constants. Demo examples must never be mistaken for live holdings.
 
+## Decision records
+
+- Read relevant `docs/decisions.md` entries before implementation or delegation; log cross-cutting financial, lifecycle, API and persistence decisions before dependent work.
+- Records need a stable ID, status (`Open`, `Provisional`, `Accepted`, `Superseded`), decision/rationale, authority, and affected contracts/tests. Tasks and worker briefs reference IDs rather than duplicating decisions.
+- The orchestrator resolves routine technical choices; ask the owner about business semantics, workflow restrictions or material trade-offs. Stop affected work on unresolved or conflicting assumptions; never infer approval.
+- Decisions cannot override specifications. Update affected specs for approved behavior changes, link superseded records, and verify agreed behavior end to end—not merely safe rejection.
+
 ## Engineering constraints
 
 - Use the **normalized current-state SQLite schema** in the technical spec for the **single managed E*TRADE account**. Keep queryable lots, positions, transactions, policies, overrides, cached look-through exposures, recommendations and orders in typed relational tables; reserve run-input JSON only for immutable provenance. Avoid periodic snapshot, multi-account, external-tax-event and corporate-action subsystems.

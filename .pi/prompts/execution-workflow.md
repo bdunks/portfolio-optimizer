@@ -10,7 +10,7 @@ The parent is the architect and orchestrator, delegating directly to implementat
 
 - The parent owns architecture, task decomposition, interface definitions, sequencing, delegation, and integration review.
 - The parent must never write implementation code, including patches or temporary files under /tmp. Delegate implementation directly rather than generating code for Luna to apply.
-- Resolve shared interfaces, configuration semantics, and acceptance criteria before large implementations. Surface decisions early rather than allowing workers to invent assumptions or wait silently.
+- Follow `AGENTS.md` decision-record rules: resolve relevant assumptions and log decisions before dependent work; include applicable decision IDs in tasks and worker briefs.
 - Delegate small, bounded, independently testable increments to Luna `implementation-worker` subagents. Split large implementations or review-fix lists into coherent changes with explicit dependencies and acceptance checks.
 - Launch implementation workers at the appropriate thinking levels for task complexity, erring higher if unsure:
   - Complex task: `gpt-6-luna` with `thinking: max`
@@ -19,7 +19,7 @@ The parent is the architect and orchestrator, delegating directly to implementat
 - Give each worker a concise brief: goal, owned files, interface contracts, dependency commits, acceptance checks, and unresolved decisions. Maintain one current checkpoint rather than accumulating overlapping instructions or forwarding orchestration history.
 - Each worker first verifies its checkout, dependencies, and relevant test commands using the project environment. Report blockers immediately; do not defer environment discovery until handoff or treat unrun checks as passing.
 - Each worker implements directly in its assigned checkout or worktree and commits a recoverable checkpoint after each coherent change, before lengthy validation or polishing. Clearly distinguish unvalidated checkpoints from verified results.
-- Allow only one writer per working directory or worktree. Parallelize genuinely independent tasks in separate worktrees; sequence shared-file changes through one integrating writer. Read-only review may run in parallel against a stable revision.
+- Run only one subagent at a time, including implementation workers and reviewers. Commit and validate each change before review; finish review and fixes before starting the next task.
 - Validate complete caller and user paths, persistence round trips, and compatibility—not only isolated helpers or components. Add regressions for reported failures before declaring fixes complete.
 - A fresh subagent reviews each bounded change, connected code, integration, and test evidence:
   - Broad and complex change: `gpt-6.1-sol` with `thinking: max`

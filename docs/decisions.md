@@ -1,6 +1,8 @@
 # Decisions and Acceptance Boundaries
 
-These decisions record owner approvals from planning. The specifications remain authoritative for financial semantics; do not use this file to override them silently.
+This is the canonical decision record; specifications retain precedence. See `AGENTS.md` for recording and escalation rules.
+
+New or revised records state: stable ID, status (`Open`, `Provisional`, `Accepted`, `Superseded`), decision/rationale, authority (owner approval or spec reference), and affected contracts/tests. Preserve existing IDs (`A`–`H`); link replacement records when superseding.
 
 ## A. Tax formulation — approved
 

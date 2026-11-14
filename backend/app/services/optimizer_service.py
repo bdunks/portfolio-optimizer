@@ -839,12 +839,12 @@ def _persist_candidate(
             ]
             if not matches:
                 continue
+            # Economic priority may change; it must not change lineage ownership.
             owner_core = min(
                 matches,
                 key=lambda item: (
                     -item[1],
                     item[0] != alias,
-                    getattr(group_priorities.get(item[0]), "rank", 10**6),
                     item[0],
                 ),
             )[0]
@@ -931,6 +931,15 @@ def _persist_candidate(
     prior_metrics = run.metrics if isinstance(run.metrics, dict) else {}
     basket_revision = int(prior_metrics.get("basket_revision", 0))
     metrics = _optimizer_metrics(prepared, outcome)
+
+    priority_metrics = metrics.get("trade_group_priorities")
+    if isinstance(priority_metrics, list):
+        for priority in priority_metrics:
+            if not isinstance(priority, dict):
+                continue
+            core_group_id = priority.get("core_group_id")
+            if isinstance(core_group_id, str):
+                priority["core_group_id"] = ownership_remap.get(core_group_id, core_group_id)
     metrics["basket_revision"] = basket_revision + 1
     metrics["selection_universe"] = universe
     annotations: dict[str, dict[str, object]] = {}

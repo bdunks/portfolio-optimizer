@@ -624,9 +624,17 @@ async def test_real_writer_reconciles_coherent_component_identity_through_review
     engine.dispose()
 
 
+@pytest.mark.parametrize(
+    ("aapl_shares", "msft_shares", "expected_first_group"),
+    [(1, 2, "sale:MSFT"), (2, 1, "sale:AAPL")],
+)
 @pytest.mark.asyncio
 async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_owns_active_sell(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    aapl_shares: int,
+    msft_shares: int,
+    expected_first_group: str
 ) -> None:
     inputs, baseline, screen, original_legs = _shared_funding_case()
     inputs, baseline, screen, _extra_lot = _inputs_with_disjoint_aapl_lot(inputs, screen)
@@ -667,15 +675,31 @@ async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_o
     extra_outcome, _ = _outcome_with_real_priorities(
         inputs, baseline, screen, (extra_sell, extra_buy)
     )
+    coherent_outcome, coherent_priorities = _outcome_with_real_priorities(
+        inputs, baseline, screen, canonical_legs
+    )
+    assert len(coherent_priorities) == 1
+    assert coherent_priorities[0].group_id == "sale:AAPL"
     split_legs = (
-        replace(aapl_sell, sequence=1, group_ids=("sale:AAPL",)),
-        replace(msft_sell, sequence=2, group_ids=("sale:MSFT",)),
+        replace(
+            aapl_sell,
+            shares=Decimal(aapl_shares),
+            selected_lots=(replace(aapl_sell.selected_lots[0], shares=Decimal(aapl_shares)),),
+            sequence=1,
+            group_ids=("sale:AAPL",),
+        ),
+        replace(
+            msft_sell,
+            shares=Decimal(msft_shares),
+            selected_lots=(replace(msft_sell.selected_lots[0], shares=Decimal(msft_shares)),),
+            sequence=2,
+            group_ids=("sale:MSFT",),
+        ),
     )
     split_outcome, split_priorities = _outcome_with_real_priorities(
         inputs, baseline, screen, split_legs
     )
-    assert [row.group_id for row in split_priorities] == ["sale:AAPL", "sale:MSFT"]
-
+    assert split_priorities[0].group_id == expected_first_group
     engine, session_factory, prepared, run_id = _seed_real_writer_run(
         tmp_path,
         inputs,
@@ -684,16 +708,42 @@ async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_o
             "sale:MSFT": ["loss-lot", "msft-loss-lot"],
         },
     )
-    _patch_real_review_solver(
-        monkeypatch,
-        prepared,
-        {
-            frozenset(): no_trade_outcome,
-            frozenset({"msft-loss-lot"}): msft_only_outcome,
-            frozenset({"aapl-extra-lot"}): extra_outcome,
-            frozenset({"loss-lot", "msft-loss-lot"}): split_outcome,
-        },
-    )
+    outcomes = {
+        frozenset(): no_trade_outcome,
+        frozenset({"msft-loss-lot"}): msft_only_outcome,
+        frozenset({"aapl-extra-lot"}): extra_outcome,
+        frozenset({"loss-lot", "msft-loss-lot"}): coherent_outcome,
+    }
+    _patch_real_review_solver(monkeypatch, prepared, outcomes)
+
+
+    def capture_priority_snapshot(session: Session, run: OptimizerRun, response: dict[str, object]):
+        saved_groups = session.scalars(
+            select(RecommendationGroup).where(RecommendationGroup.run_id == run_id)
+        ).all()
+        core_rows = {}
+        for group in saved_groups:
+            impact = group.impact if isinstance(group.impact, dict) else {}
+            core_id = str(impact.get("core_group_id") or group.id)
+            core_rows[core_id] = (group.id, group.rank)
+        return dict(run.metrics), response, core_rows
+
+    def assert_priority_snapshot(snapshot: tuple[dict[str, object], dict[str, object], dict[str, tuple[str, int]]]):
+        metrics, response, core_rows = snapshot
+        legs = response["consolidated_legs"]
+        active_core_ids = {
+            str(core_id)
+            for leg in legs
+            if leg["side"] == "SELL"
+            for core_id in leg["details"]["core_group_ids"]
+        }
+        priority_rows = metrics["trade_group_priorities"]
+        priority_map = {str(row["core_group_id"]): int(row["rank"]) for row in priority_rows}
+        assert priority_map == {core_id: core_rows[core_id][1] for core_id in active_core_ids}
+        for leg in legs:
+            core_group_ids = leg["details"]["core_group_ids"]
+            assert leg["group_ids"] == [core_rows[core_id][0] for core_id in core_group_ids]
+        return priority_map
     with session_factory() as session:
         run = session.get(OptimizerRun, run_id)
         assert run is not None
@@ -802,6 +852,48 @@ async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_o
             correlation_id="restore-original-lots-as-independent-sales",
         )
 
+
+    with session_factory() as session:
+        run = session.get(OptimizerRun, run_id)
+        assert run is not None
+        coherent_result = optimizer_service.real_run_recommendations(session, run)
+        coherent_core_ids = {
+            str(core_id)
+            for leg in coherent_result["consolidated_legs"]
+            if leg["side"] == "SELL"
+            for core_id in leg["details"]["core_group_ids"]
+        }
+        assert len(coherent_core_ids) == 1
+        coherent_core_id = next(iter(coherent_core_ids))
+        assert coherent_core_id not in {"sale:AAPL", "sale:MSFT"}
+        coherent_owner = session.get(RecommendationGroup, str(original_public_id))
+        assert coherent_owner is not None
+        assert coherent_owner.impact["core_group_id"] == coherent_core_id
+        coherent_priority_snapshot = capture_priority_snapshot(session, run, coherent_result)
+    with session_factory() as session:
+        await optimizer_service.annotate_real_group(
+            session,
+            run_id,
+            str(original_public_id),
+            RecommendationAnnotationInput(note="original selected opportunity"),
+            object(),
+            None,
+            correlation_id="annotate-restored-coherent-owner",
+        )
+    outcomes[frozenset({"loss-lot", "msft-loss-lot"})] = split_outcome
+    with session_factory() as session:
+        await optimizer_service.apply_real_lot_review_intent(
+            session,
+            run_id,
+            OptimizerLotReviewIntentInput(
+                source_generation=inputs.source_generation,
+                broker_lot_ids=["loss-lot", "msft-loss-lot"],
+            ),
+            object(),
+            None,
+            correlation_id="split-restored-original-owner",
+        )
+
     with session_factory() as session:
         run = session.get(OptimizerRun, run_id)
         assert run is not None
@@ -809,6 +901,33 @@ async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_o
         groups = {group["group_id"]: group for group in result["groups"]}
         legs = result["consolidated_legs"]
         assert isinstance(legs, list)
+
+        saved_original_group = session.get(RecommendationGroup, str(original_public_id))
+        assert saved_original_group is not None
+        inherited_core_id = str(saved_original_group.impact["core_group_id"])
+        inherited_ticker = next(
+            leg["ticker"]
+            for leg in legs
+            if leg["side"] == "SELL" and inherited_core_id in leg["details"]["core_group_ids"]
+        )
+        assert inherited_ticker == "AAPL"
+        assert_priority_snapshot(coherent_priority_snapshot)
+        split_priority_snapshot = capture_priority_snapshot(session, run, result)
+        split_priority_map = assert_priority_snapshot(split_priority_snapshot)
+        active_core_ids = {
+            str(core_id)
+            for leg in legs
+            if leg["side"] == "SELL"
+            for core_id in leg["details"]["core_group_ids"]
+        }
+        active_public_ids = {
+            str(group_id)
+            for leg in legs
+            if leg["side"] == "SELL"
+            for group_id in leg["group_ids"]
+        }
+        assert len(active_core_ids) == len(active_public_ids) == 2
+        assert set(split_priority_map) == active_core_ids
         group_by_id = groups
         for leg in legs:
             if leg["side"] == "SELL":
@@ -880,7 +999,13 @@ async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_o
             ["loss-lot", "msft-loss-lot"], correlation_id
         )
         restored_result, restored_metrics = current_readback()
+
+        assert (
+            restored_metrics["trade_group_priorities"]
+            == split_priority_snapshot[0]["trade_group_priorities"]
+        )
         restored_groups = {
+
             group["group_id"]: group for group in restored_result["groups"]
         }
         restored_legs = restored_result["consolidated_legs"]
@@ -900,6 +1025,8 @@ async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_o
             }
         )
         active_owner_snapshots.append(active_owners)
+
+        assert len(active_owners) == 2
         assert str(original_public_id) in active_owners
         assert str(disjoint_public_id) not in active_owners
         assert all(
@@ -929,6 +1056,8 @@ async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_o
             assert shares == sum(lot_shares, Decimal(0))
     assert active_owner_snapshots[0] == active_owner_snapshots[1]
     engine.dispose()
+
+
 
 
 @pytest.mark.parametrize(

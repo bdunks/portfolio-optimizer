@@ -44,7 +44,7 @@ def _coupled_sector_inputs() -> FinancialInputs:
         replace(inputs.lots[1], shares=Decimal(4), available_shares=Decimal(4)),
         replace(inputs.lots[2], shares=Decimal(3), available_shares=Decimal(3)),
     )
-    settings = dict(inputs.policy.settings.values)
+    settings: dict[str, object] = dict(inputs.policy.settings.values)
     settings["cash_reserve_usd"] = Decimal(4)
     return replace(
         inputs,

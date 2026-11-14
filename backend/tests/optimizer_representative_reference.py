@@ -596,7 +596,7 @@ def _incumbent_actions(
 def _local_neighbors(
     legs: tuple[ConsolidatedLeg, ...], pool: _Pool, policy: ObjectivePolicy, deadline: float
 ) -> Iterator[tuple[ConsolidatedLeg, ...]]:
-    actions = _incumbent_actions(legs, pool)
+    actions = _incumbent_actions(legs, pool, deadline)
     if actions is None:
         return
     base_sells, base_buys = actions
@@ -607,13 +607,13 @@ def _local_neighbors(
             if 0 < changed_quantity <= option.max_shares:
                 changed = dict(base_sells)
                 changed[key] = changed_quantity
-                candidate = _candidate_legs(pool, policy, changed, dict(base_buys))
+                candidate = _candidate_legs(pool, policy, changed, dict(base_buys), deadline)
                 if candidate is not None:
                     yield candidate
         if quantity == 1:
             changed = dict(base_sells)
             del changed[key]
-            candidate = _candidate_legs(pool, policy, changed, dict(base_buys))
+            candidate = _candidate_legs(pool, policy, changed, dict(base_buys), deadline)
             if candidate is not None:
                 yield candidate
     for ticker, quantity in base_buys.items():
@@ -623,13 +623,13 @@ def _local_neighbors(
             if 0 < changed_quantity <= option.max_shares:
                 changed = dict(base_buys)
                 changed[ticker] = changed_quantity
-                candidate = _candidate_legs(pool, policy, dict(base_sells), changed)
+                candidate = _candidate_legs(pool, policy, dict(base_sells), changed, deadline)
                 if candidate is not None:
                     yield candidate
         if quantity == 1:
             changed = dict(base_buys)
             del changed[ticker]
-            candidate = _candidate_legs(pool, policy, dict(base_sells), changed)
+            candidate = _candidate_legs(pool, policy, dict(base_sells), changed, deadline)
             if candidate is not None:
                 yield candidate
     existing_sells = set(base_sells)
@@ -637,13 +637,13 @@ def _local_neighbors(
         _check_deadline(deadline)
         key = (option.ticker, option.lot_id)
         if key not in existing_sells:
-            candidate = _candidate_legs(pool, policy, {**base_sells, key: 1}, dict(base_buys))
+            candidate = _candidate_legs(pool, policy, {**base_sells, key: 1}, dict(base_buys), deadline)
             if candidate is not None:
                 yield candidate
     for option in pool.buys:
         _check_deadline(deadline)
         if option.ticker not in base_buys:
-            candidate = _candidate_legs(pool, policy, dict(base_sells), {**base_buys, option.ticker: 1})
+            candidate = _candidate_legs(pool, policy, dict(base_sells), {**base_buys, option.ticker: 1}, deadline)
             if candidate is not None:
                 yield candidate
 
@@ -780,13 +780,13 @@ def search_representative_best_known(
             mode_counts[mode] += 1
             try:
                 if mode == "coupled":
-                    legs = _random_basket(mode, pool, built.objective_policy, rng)
+                    legs = _random_basket(mode, pool, built.objective_policy, rng, deadline)
                 elif mode == "multi_lot_sell":
-                    legs = _multi_lot_candidate(pool, built.objective_policy)
+                    legs = _multi_lot_candidate(pool, built.objective_policy, deadline)
                 elif mode == "local":
                     legs = next(local, None)
                 else:
-                    legs = _random_basket(mode, pool, built.objective_policy, rng)
+                    legs = _random_basket(mode, pool, built.objective_policy, rng, deadline)
             except _DeadlineExpired:
                 stop = "deadline"
                 break

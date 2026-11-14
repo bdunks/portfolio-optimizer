@@ -1,16 +1,23 @@
 from __future__ import annotations
 
+import asyncio
+import os
+import time
 from datetime import UTC, date, datetime
 from decimal import Decimal, localcontext
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.broker.fake import FakeBroker
-from app.db.models import OptimizerRun
+from app.db.models import OptimizerRun, RecommendationGroup, RecommendationLeg
 from app.main import create_app
+from app.optimizer.core import OptimizerRequest
 from app.optimizer.runtime import ProcessSupervisor
+from app.optimizer.validation import validate_candidate
 from app.schemas import BrokerSnapshot, ExposureInput
+from app.services import optimizer_service
 from app.services.optimizer_service import BoundedValidationExecutor
 
 TRADE_DATE = date(2026, 11, 15)
@@ -19,13 +26,24 @@ OLD_LOT_ID = "AAPL-OLD-001"
 RECENT_LOT_ID = "AAPL-RECENT-001"
 
 
+def hanging_optimizer_worker(request: OptimizerRequest, deadline: float) -> object:
+    del request, deadline
+    marker = os.environ.get("OPTIMIZER_TEST_HANG_MARKER")
+    if marker is not None:
+        Path(marker).write_text("started", encoding="utf-8")
+    while True:
+        time.sleep(0.01)
+
+
 def _fee_adjusted_snapshot() -> BrokerSnapshot:
     template = FakeBroker.demo_snapshot()
     aapl_position = next(position for position in template.positions if position.ticker == "AAPL")
     aapl_lot = next(lot for lot in template.lots if lot.ticker == "AAPL")
     aapl_quote = next(quote for quote in template.quotes if quote.ticker == "AAPL")
     vti_quote = next(quote for quote in template.quotes if quote.ticker == "VTI")
-    old_purchase = next(transaction for transaction in template.transactions if transaction.ticker == "AAPL")
+    old_purchase = next(
+        transaction for transaction in template.transactions if transaction.ticker == "AAPL"
+    )
 
     old_lot = aapl_lot.model_copy(
         update={
@@ -107,7 +125,11 @@ def _fee_adjusted_snapshot() -> BrokerSnapshot:
             "settled_buying_power_usd": Decimal(0),
             "positions": [
                 aapl_position.model_copy(
-                    update={"shares": Decimal(11), "market_value_usd": Decimal(1100), "as_of": SOURCE_AS_OF}
+                    update={
+                        "shares": Decimal(11),
+                        "market_value_usd": Decimal(1100),
+                        "as_of": SOURCE_AS_OF,
+                    }
                 )
             ],
             "lots": [old_lot, recent_lot],
@@ -168,9 +190,7 @@ def _activate_test_policy(client: TestClient) -> str:
         "/api/v1/policy/drafts",
         json={
             "source_revision_id": active["id"],
-            "sector_bands": [
-                {"sector_key": "TEST", "target_weight_pct": "100", "band_pct": "100"}
-            ],
+            "sector_bands": [{"sector_key": "TEST", "target_weight_pct": "100", "band_pct": "100"}],
             "settings": settings,
             "sleeves": [
                 {
@@ -268,7 +288,9 @@ def test_real_optimizer_http_pipeline_persists_fee_adjusted_reviewed_lots_and_re
         assert sell["ticker"] == "AAPL"
         assert buy["ticker"] == "VTI"
         assert buy["dependencies"] == [sell["leg_id"]]
-        assert all(_decimal(leg["shares"]).to_integral_value() == _decimal(leg["shares"]) for leg in legs)
+        assert all(
+            _decimal(leg["shares"]).to_integral_value() == _decimal(leg["shares"]) for leg in legs
+        )
         assert sell["estimated_unit_price_usd"] == "100"
         assert buy["estimated_unit_price_usd"] == "200"
 
@@ -291,12 +313,12 @@ def test_real_optimizer_http_pipeline_persists_fee_adjusted_reviewed_lots_and_re
             expected_old_realized = (Decimal(100) - Decimal(110)) * old_shares - old_fee
             expected_recent_realized = (Decimal(100) - Decimal(95)) * recent_shares - recent_fee
             expected_net_realized = expected_old_realized + expected_recent_realized
-        assert _to_eight_places(_decimal(selected_lots[OLD_LOT_ID]["realized_pl_usd"])) == _to_eight_places(
-            expected_old_realized
-        )
-        assert _to_eight_places(_decimal(selected_lots[RECENT_LOT_ID]["realized_pl_usd"])) == _to_eight_places(
-            expected_recent_realized
-        )
+        assert _to_eight_places(
+            _decimal(selected_lots[OLD_LOT_ID]["realized_pl_usd"])
+        ) == _to_eight_places(expected_old_realized)
+        assert _to_eight_places(
+            _decimal(selected_lots[RECENT_LOT_ID]["realized_pl_usd"])
+        ) == _to_eight_places(expected_recent_realized)
         persisted_net_realized = sum(
             (_decimal(lot["realized_pl_usd"]) for lot in selected_lots.values()), Decimal(0)
         )
@@ -316,7 +338,9 @@ def test_real_optimizer_http_pipeline_persists_fee_adjusted_reviewed_lots_and_re
 
         sell_notional = _decimal(sell["shares"]) * _decimal(sell["estimated_unit_price_usd"])
         buy_notional = _decimal(buy["shares"]) * _decimal(buy["estimated_unit_price_usd"])
-        expected_cash_after = _decimal(initial["cash_before_usd"]) + sell_notional - buy_notional - Decimal(2)
+        expected_cash_after = (
+            _decimal(initial["cash_before_usd"]) + sell_notional - buy_notional - Decimal(2)
+        )
         assert _decimal(initial["cash_after_usd"]) == expected_cash_after
         assert _decimal(initial["optimizer_metrics"]["estimated_trading_cost_usd"]) == Decimal(2)
 
@@ -364,7 +388,9 @@ def test_real_optimizer_http_pipeline_persists_fee_adjusted_reviewed_lots_and_re
         )
         assert intent_response.status_code == 200, intent_response.text
         confirmed = intent_response.json()
-        confirmed_sell = next(leg for leg in confirmed["consolidated_legs"] if leg["side"] == "SELL")
+        confirmed_sell = next(
+            leg for leg in confirmed["consolidated_legs"] if leg["side"] == "SELL"
+        )
         confirmed_buy = next(leg for leg in confirmed["consolidated_legs"] if leg["side"] == "BUY")
         assert confirmed["status"] == "complete"
         assert confirmed["constraints_satisfied"] is True
@@ -378,8 +404,10 @@ def test_real_optimizer_http_pipeline_persists_fee_adjusted_reviewed_lots_and_re
         assert _decimal(confirmed["optimizer_metrics"]["estimated_trading_cost_usd"]) == Decimal(2)
         confirmed_cash = (
             _decimal(confirmed["cash_before_usd"])
-            + _decimal(confirmed_sell["shares"]) * _decimal(confirmed_sell["estimated_unit_price_usd"])
-            - _decimal(confirmed_buy["shares"]) * _decimal(confirmed_buy["estimated_unit_price_usd"])
+            + _decimal(confirmed_sell["shares"])
+            * _decimal(confirmed_sell["estimated_unit_price_usd"])
+            - _decimal(confirmed_buy["shares"])
+            * _decimal(confirmed_buy["estimated_unit_price_usd"])
             - Decimal(2)
         )
         assert _decimal(confirmed["cash_after_usd"]) == confirmed_cash
@@ -388,16 +416,16 @@ def test_real_optimizer_http_pipeline_persists_fee_adjusted_reviewed_lots_and_re
             RECENT_LOT_ID,
         }
         assert confirmed_buy["dependencies"] == [confirmed_sell["leg_id"]]
-        confirmed_recommendations = client.get(
-            f"/api/v1/optimizer/runs/{run_id}/recommendations"
-        )
+        confirmed_recommendations = client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations")
         assert confirmed_recommendations.status_code == 200, confirmed_recommendations.text
         assert confirmed_recommendations.json() == confirmed
         assert broker.fetch_count == 1
         assert not hasattr(broker, "preview_order")
         assert not hasattr(broker, "submit_approved_order")
 
-    reopened_app = create_app(database_url=database_url, broker=FakeBroker(snapshot), seed_demo_data=False)
+    reopened_app = create_app(
+        database_url=database_url, broker=FakeBroker(snapshot), seed_demo_data=False
+    )
     with TestClient(reopened_app, base_url="http://localhost") as reopened_client:
         reopened_summary = reopened_client.get(f"/api/v1/optimizer/runs/{run_id}")
         reopened_recommendations = reopened_client.get(
@@ -411,3 +439,94 @@ def test_real_optimizer_http_pipeline_persists_fee_adjusted_reviewed_lots_and_re
         assert reopened_summary.json()["input_fingerprint"] == initial["input_fingerprint"]
         assert reopened_summary.json()["proposed_trade_date"] == TRADE_DATE.isoformat()
         assert reopened_app.state.broker.fetch_count == 0
+
+
+def test_real_optimizer_http_hang_persists_timeout_and_reaps_spawned_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database_path = tmp_path / "forced-hang.sqlite3"
+    marker_path = tmp_path / "worker-started"
+    monkeypatch.setenv("OPTIMIZER_TEST_HANG_MARKER", str(marker_path))
+    broker = FakeBroker(FakeBroker.demo_snapshot())
+    app = create_app(database_url=f"sqlite:///{database_path}", broker=broker, seed_demo_data=True)
+    supervisor = app.state.optimizer_supervisor
+    assert isinstance(supervisor, ProcessSupervisor)
+
+    monkeypatch.setattr(
+        optimizer_service,
+        "_core_contract",
+        lambda: (OptimizerRequest, hanging_optimizer_worker, validate_candidate),
+    )
+
+    original_run = supervisor.run
+    observed_processes: list[object] = []
+
+    async def bounded_real_run(worker_input: object, worker: object, **kwargs: object) -> object:
+        task = asyncio.create_task(
+            original_run(
+                worker_input,
+                worker,
+                timeout_seconds=3.0,
+                validation_reserve_seconds=0.2,
+            )
+        )
+        for _ in range(200):
+            if supervisor._active:
+                observed_processes.extend(supervisor._active)
+                break
+            await asyncio.sleep(0.005)
+        try:
+            return await task
+        finally:
+            if not observed_processes:
+                observed_processes.extend(supervisor._active)
+
+    monkeypatch.setattr(supervisor, "run", bounded_real_run)
+    reaped: list[tuple[bool, int | None]] = []
+    original_stop_and_reap = ProcessSupervisor._stop_and_reap
+
+    def record_reap(process: object) -> None:
+        original_stop_and_reap(process)  # type: ignore[arg-type]
+        reaped.append((process.is_alive(), process.exitcode))  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(ProcessSupervisor, "_stop_and_reap", staticmethod(record_reap))
+
+    with TestClient(app, base_url="http://localhost") as client:
+        response = client.post("/api/v1/optimizer/runs", json={"mode": "real_optimizer"})
+        assert response.status_code == 504, response.text
+        body = response.json()
+        assert body["code"] == "optimizer_timeout"
+        run_id = body["details"]["run_id"]
+        assert run_id
+
+        assert marker_path.read_text(encoding="utf-8") == "started"
+        assert len(observed_processes) == 1
+        assert len(reaped) == 1
+        assert reaped[0][0] is False
+        assert reaped[0][1] is not None
+        assert supervisor.active_workers == 0
+
+        summary = client.get(f"/api/v1/optimizer/runs/{run_id}")
+        recommendations = client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations")
+        assert summary.status_code == 200, summary.text
+        assert recommendations.status_code == 200, recommendations.text
+        assert summary.json()["status"] == "timeout"
+        assert recommendations.json()["groups"] == []
+        assert recommendations.json()["consolidated_legs"] == []
+
+        with app.state.session_factory() as session:
+            saved_run = session.get(OptimizerRun, run_id)
+            assert saved_run is not None
+            assert saved_run.status == "TIMEOUT"
+            assert session.query(RecommendationGroup).filter_by(run_id=run_id).count() == 0
+            assert (
+                session.query(RecommendationLeg)
+                .filter(
+                    RecommendationLeg.group_id.in_(
+                        session.query(RecommendationGroup.id).filter_by(run_id=run_id)
+                    )
+                )
+                .count()
+                == 0
+            )
+        assert broker.fetch_count == 1

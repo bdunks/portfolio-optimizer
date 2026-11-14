@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import (
     Account,
@@ -625,7 +625,7 @@ async def test_real_writer_reconciles_coherent_component_identity_through_review
 
 
 @pytest.mark.asyncio
-async def test_real_writer_fails_closed_when_rejected_disjoint_lot_alias_owns_active_sell(
+async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_owns_active_sell(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     inputs, baseline, screen, original_legs = _shared_funding_case()
@@ -727,6 +727,8 @@ async def test_real_writer_fails_closed_when_rejected_disjoint_lot_alias_owns_ac
         )
 
     with session_factory() as session:
+        run = session.get(OptimizerRun, run_id)
+        assert run is not None
         groups = session.scalars(
             select(RecommendationGroup).where(RecommendationGroup.run_id == run_id)
         ).all()
@@ -734,7 +736,10 @@ async def test_real_writer_fails_closed_when_rejected_disjoint_lot_alias_owns_ac
             group
             for group in groups
             if isinstance(group.impact, dict)
-            and group.impact.get("core_group_id") == "sale:AAPL"
+            and "aapl-extra-lot"
+            in run.metrics.get("selection_universe", {}).get(
+                str(group.impact.get("core_group_id") or group.id), []
+            )
         )
         disjoint_public_id = disjoint_group.id
         assert disjoint_group.selected is True
@@ -744,7 +749,7 @@ async def test_real_writer_fails_closed_when_rejected_disjoint_lot_alias_owns_ac
             session,
             run_id,
             disjoint_public_id,
-            RecommendationAnnotationInput(rejected=True, rejection_reason="extra lot excluded"),
+            RecommendationAnnotationInput(rejected=True, rejection_reason="extra lot excluded", note="disjoint-only annotation"),
             object(),
             None,
             correlation_id="reject-disjoint-aapl-opportunity",
@@ -756,7 +761,33 @@ async def test_real_writer_fails_closed_when_rejected_disjoint_lot_alias_owns_ac
         assert before["consolidated_legs"] == []
         assert run.metrics["basket_revision"] > 0
 
-    with pytest.raises(AppError) as ownership_error, session_factory() as session:
+    with pytest.raises(AppError) as rejected_intent, session_factory() as session:
+        await optimizer_service.apply_real_lot_review_intent(
+            session,
+            run_id,
+            OptimizerLotReviewIntentInput(
+                source_generation=inputs.source_generation,
+                broker_lot_ids=["aapl-extra-lot"],
+            ),
+            object(),
+            None,
+            correlation_id="do-not-restore-rejected-disjoint-lot",
+        )
+    assert rejected_intent.value.code == "rejected_recommendation_group"
+    with pytest.raises(AppError) as rejected_group_selection, session_factory() as session:
+        await optimizer_service.apply_real_selection(
+            session,
+            run_id,
+            OptimizerSelectionInput(
+                selected_group_ids=[str(disjoint_public_id)],
+                selected_sell_lots={str(disjoint_public_id): ["aapl-extra-lot"]},
+            ),
+            object(),
+            None,
+            correlation_id="do-not-select-rejected-disjoint-group",
+        )
+    assert rejected_group_selection.value.code == "rejected_recommendation_group"
+    with session_factory() as session:
         await optimizer_service.apply_real_selection(
             session,
             run_id,
@@ -770,8 +801,6 @@ async def test_real_writer_fails_closed_when_rejected_disjoint_lot_alias_owns_ac
             None,
             correlation_id="restore-original-lots-as-independent-sales",
         )
-    ownership_conflict = True
-    assert ownership_error.value.code == "optimizer_review_ownership_conflict"
 
     with session_factory() as session:
         run = session.get(OptimizerRun, run_id)
@@ -789,9 +818,116 @@ async def test_real_writer_fails_closed_when_rejected_disjoint_lot_alias_owns_ac
             group["group_id"] == disjoint_public_id and group["rejected"]
             for group in groups.values()
         )
-        if ownership_conflict:
-            assert legs == []
-            assert run.metrics["basket_revision"] == before["optimizer_metrics"]["basket_revision"]
+        assert {
+            lot["broker_lot_id"]
+            for leg in legs
+            if leg["side"] == "SELL"
+            for lot in leg["selected_lots"]
+        } == {"loss-lot", "msft-loss-lot"}
+        disjoint = groups[str(disjoint_public_id)]
+        assert disjoint["selected"] is False
+        assert disjoint["rejected"] is True
+        assert disjoint["rejection_reason"] == "extra lot excluded"
+        assert disjoint["note"] == "disjoint-only annotation"
+        saved_disjoint = session.get(RecommendationGroup, disjoint_public_id)
+        assert saved_disjoint is not None
+        disjoint_core_id = str(saved_disjoint.impact["core_group_id"])
+        selection_universe = run.metrics["selection_universe"]
+        assert set(selection_universe[disjoint_core_id]) == {"aapl-extra-lot"}
+        assert sum("aapl-extra-lot" in lot_ids for lot_ids in selection_universe.values()) == 1
+        assert str(original_public_id) in groups
+        assert groups[str(original_public_id)]["rejected"] is False
+        assert sum(group["note"] == "original selected opportunity" for group in groups.values()) == 1
+
+
+    async def apply_review_intent(lot_ids: list[str], correlation_id: str) -> None:
+        with session_factory() as review_session:
+            await optimizer_service.apply_real_lot_review_intent(
+                review_session,
+                run_id,
+                OptimizerLotReviewIntentInput(
+                    source_generation=inputs.source_generation,
+                    broker_lot_ids=lot_ids,
+                ),
+                object(),
+                None,
+                correlation_id=correlation_id,
+            )
+
+    def current_readback() -> tuple[dict[str, object], dict[str, object]]:
+        with session_factory() as read_session:
+            run = read_session.get(OptimizerRun, run_id)
+            assert run is not None
+            return optimizer_service.real_run_recommendations(read_session, run), dict(run.metrics)
+
+    await apply_review_intent(["msft-loss-lot"], "omit-original-aapl-lot")
+    narrowed_result, narrowed_metrics = current_readback()
+    narrowed_lots = {
+        lot["broker_lot_id"]
+        for leg in narrowed_result["consolidated_legs"]
+        if leg["side"] == "SELL"
+        for lot in leg["selected_lots"]
+    }
+    assert narrowed_lots == {"msft-loss-lot"}
+    narrowed_universe = narrowed_metrics["selection_universe"]
+    assert sum("loss-lot" in lot_ids for lot_ids in narrowed_universe.values()) == 1
+    assert sum("msft-loss-lot" in lot_ids for lot_ids in narrowed_universe.values()) == 1
+    assert sum("aapl-extra-lot" in lot_ids for lot_ids in narrowed_universe.values()) == 1
+
+    active_owner_snapshots: list[list[str]] = []
+    for correlation_id in ("restore-original-lots-by-intent", "repeat-original-lot-intent"):
+        await apply_review_intent(
+            ["loss-lot", "msft-loss-lot"], correlation_id
+        )
+        restored_result, restored_metrics = current_readback()
+        restored_groups = {
+            group["group_id"]: group for group in restored_result["groups"]
+        }
+        restored_legs = restored_result["consolidated_legs"]
+        restored_lots = {
+            lot["broker_lot_id"]
+            for leg in restored_legs
+            if leg["side"] == "SELL"
+            for lot in leg["selected_lots"]
+        }
+        assert restored_lots == {"loss-lot", "msft-loss-lot"}
+        active_owners = sorted(
+            {
+                group_id
+                for leg in restored_legs
+                if leg["side"] == "SELL"
+                for group_id in leg["group_ids"]
+            }
+        )
+        active_owner_snapshots.append(active_owners)
+        assert str(original_public_id) in active_owners
+        assert str(disjoint_public_id) not in active_owners
+        assert all(
+            restored_groups[group_id]["selected"]
+            and not restored_groups[group_id]["rejected"]
+            for group_id in active_owners
+        )
+        assert sum(
+            group["note"] == "original selected opportunity"
+            for group in restored_groups.values()
+        ) == 1
+        assert restored_groups[str(disjoint_public_id)]["rejected"] is True
+        assert restored_groups[str(disjoint_public_id)]["rejection_reason"] == "extra lot excluded"
+        assert restored_groups[str(disjoint_public_id)]["note"] == "disjoint-only annotation"
+        restored_universe = restored_metrics["selection_universe"]
+        assert sum("aapl-extra-lot" in lot_ids for lot_ids in restored_universe.values()) == 1
+        for original_lot_id in ("loss-lot", "msft-loss-lot"):
+            assert sum(original_lot_id in lot_ids for lot_ids in restored_universe.values()) == 1
+        for leg in restored_legs:
+            if leg["side"] != "SELL":
+                continue
+            shares = Decimal(leg["shares"])
+            lot_shares = [Decimal(lot["shares"]) for lot in leg["selected_lots"]]
+            assert shares > 0
+            assert shares == shares.to_integral_value()
+            assert all(value > 0 and value == value.to_integral_value() for value in lot_shares)
+            assert shares == sum(lot_shares, Decimal(0))
+    assert active_owner_snapshots[0] == active_owner_snapshots[1]
     engine.dispose()
 
 
@@ -926,4 +1062,201 @@ async def test_real_writer_reserves_inherited_group_id_before_split_fallbacks(
         readback = optimizer_service.real_run_recommendations(session, run)
         readback_groups = {group["group_id"]: group for group in readback["groups"]}
         assert readback_groups[inherited_public_id]["note"] is None
+    engine.dispose()
+
+
+
+@pytest.mark.asyncio
+async def test_real_writer_cas_rejects_intervening_basket_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inputs, baseline, screen, original_legs = _shared_funding_case()
+    canonical_legs = _cohere_trade_group_legs(original_legs)
+    full_outcome, _priorities = _outcome_with_real_priorities(
+        inputs, baseline, screen, canonical_legs
+    )
+    engine, session_factory, prepared, run_id = _seed_real_writer_run(
+        tmp_path,
+        inputs,
+        full_outcome,
+        expected_universe={"sale:MSFT": ["loss-lot", "msft-loss-lot"]},
+    )
+    _patch_real_review_solver(
+        monkeypatch,
+        prepared,
+        {frozenset({"loss-lot", "msft-loss-lot"}): full_outcome},
+    )
+    with session_factory() as session:
+        run = session.get(OptimizerRun, run_id)
+        assert run is not None
+        before = optimizer_service.real_run_recommendations(session, run)
+        before_revision = run.metrics["basket_revision"]
+
+    solve_before_race = optimizer_service.run_validated_candidate
+
+    async def solve_with_intervening_publication(*args: object, **kwargs: object) -> object:
+        outcome = await solve_before_race(*args, **kwargs)
+        with session_factory.begin() as competing_session:
+            competing_run = competing_session.get(OptimizerRun, run_id)
+            assert competing_run is not None
+            metrics = dict(competing_run.metrics)
+            metrics["basket_revision"] += 1
+            competing_run.metrics = metrics
+            competing_group = competing_session.scalars(
+                select(RecommendationGroup).where(RecommendationGroup.run_id == run_id)
+            ).first()
+            assert competing_group is not None
+            competing_group.note = "newer concurrent review"
+        return outcome
+
+    monkeypatch.setattr(
+        optimizer_service, "run_validated_candidate", solve_with_intervening_publication
+    )
+    with pytest.raises(AppError) as stale_error, session_factory() as session:
+        await optimizer_service.apply_real_lot_review_intent(
+            session,
+            run_id,
+            OptimizerLotReviewIntentInput(
+                source_generation=inputs.source_generation,
+                broker_lot_ids=["loss-lot", "msft-loss-lot"],
+            ),
+            object(),
+            None,
+            correlation_id="real-writer-cas-race",
+        )
+    assert stale_error.value.code == "stale_optimizer_basket"
+    with session_factory() as session:
+        run = session.get(OptimizerRun, run_id)
+        assert run is not None
+        after = optimizer_service.real_run_recommendations(session, run)
+        assert run.metrics["basket_revision"] == before_revision + 1
+        assert after["consolidated_legs"] == before["consolidated_legs"]
+        assert len(after["groups"]) == len(before["groups"])
+        assert sum(group["note"] == "newer concurrent review" for group in after["groups"]) == 1
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_real_writer_rolls_back_everything_after_post_flush_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inputs, baseline, screen, original_legs = _shared_funding_case()
+    canonical_legs = _cohere_trade_group_legs(original_legs)
+    full_outcome, _priorities = _outcome_with_real_priorities(
+        inputs, baseline, screen, canonical_legs
+    )
+    engine, session_factory, prepared, run_id = _seed_real_writer_run(
+        tmp_path,
+        inputs,
+        full_outcome,
+        expected_universe={"sale:MSFT": ["loss-lot", "msft-loss-lot"]},
+    )
+    _patch_real_review_solver(
+        monkeypatch,
+        prepared,
+        {frozenset({"loss-lot", "msft-loss-lot"}): full_outcome},
+    )
+    with session_factory() as session:
+        run = session.get(OptimizerRun, run_id)
+        assert run is not None
+        before_result = optimizer_service.real_run_recommendations(session, run)
+        before_metrics = dict(run.metrics)
+
+    persist_candidate = optimizer_service._persist_candidate
+
+    def persist_then_fail_after_flush(
+        session: Session, *args: object, **kwargs: object
+    ) -> None:
+        persist_candidate(session, *args, **kwargs)
+        session.flush()
+        raise RuntimeError("injected post-flush persistence failure")
+
+    monkeypatch.setattr(optimizer_service, "_persist_candidate", persist_then_fail_after_flush)
+    with pytest.raises(RuntimeError, match="injected post-flush persistence failure"), session_factory() as session:
+        await optimizer_service.apply_real_lot_review_intent(
+            session,
+            run_id,
+            OptimizerLotReviewIntentInput(
+                source_generation=inputs.source_generation,
+                broker_lot_ids=["loss-lot", "msft-loss-lot"],
+            ),
+            object(),
+            None,
+            correlation_id="real-writer-post-flush-rollback",
+        )
+    with session_factory() as session:
+        run = session.get(OptimizerRun, run_id)
+        assert run is not None
+        after_result = optimizer_service.real_run_recommendations(session, run)
+        assert after_result == before_result
+        assert run.metrics == before_metrics
+    engine.dispose()
+
+
+
+@pytest.mark.asyncio
+async def test_real_writer_rejects_solver_output_that_misses_exact_lot_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inputs, baseline, screen, original_legs = _shared_funding_case()
+    inputs, baseline, screen, _extra_lot = _inputs_with_disjoint_aapl_lot(inputs, screen)
+    canonical_legs = _cohere_trade_group_legs(original_legs)
+    full_outcome, _priorities = _outcome_with_real_priorities(
+        inputs, baseline, screen, canonical_legs
+    )
+    aapl_sell = next(
+        leg for leg in canonical_legs if leg.side == "SELL" and leg.ticker == "AAPL"
+    )
+    mismatched_aapl_sell = replace(
+        aapl_sell,
+        selected_lots=(
+            replace(aapl_sell.selected_lots[0], broker_lot_id="aapl-extra-lot"),
+        ),
+    )
+    mismatched_legs = tuple(
+        mismatched_aapl_sell if leg is aapl_sell else leg for leg in canonical_legs
+    )
+    mismatched_outcome, _priorities = _outcome_with_real_priorities(
+        inputs, baseline, screen, mismatched_legs
+    )
+    engine, session_factory, prepared, run_id = _seed_real_writer_run(
+        tmp_path,
+        inputs,
+        full_outcome,
+        expected_universe={"sale:MSFT": ["loss-lot", "msft-loss-lot"]},
+    )
+    _patch_real_review_solver(
+        monkeypatch,
+        prepared,
+        {frozenset({"loss-lot", "msft-loss-lot"}): mismatched_outcome},
+    )
+    with session_factory() as session:
+        run = session.get(OptimizerRun, run_id)
+        assert run is not None
+        before_result = optimizer_service.real_run_recommendations(session, run)
+        before_metrics = dict(run.metrics)
+
+    with pytest.raises(AppError) as intent_error, session_factory() as session:
+        await optimizer_service.apply_real_lot_review_intent(
+            session,
+            run_id,
+            OptimizerLotReviewIntentInput(
+                source_generation=inputs.source_generation,
+                broker_lot_ids=["loss-lot", "msft-loss-lot"],
+            ),
+            object(),
+            None,
+            correlation_id="reject-inexact-solver-intent",
+        )
+    assert intent_error.value.code == "optimizer_subset_rejected"
+    assert intent_error.value.details["intent_errors"] == ["sell_lot_ids_do_not_match_intent"]
+    assert intent_error.value.details["actual_sell_lot_ids"] == [
+        "aapl-extra-lot",
+        "msft-loss-lot",
+    ]
+    with session_factory() as session:
+        run = session.get(OptimizerRun, run_id)
+        assert run is not None
+        assert optimizer_service.real_run_recommendations(session, run) == before_result
+        assert run.metrics == before_metrics
     engine.dispose()

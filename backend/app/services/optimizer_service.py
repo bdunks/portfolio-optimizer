@@ -772,13 +772,66 @@ def _persist_candidate(
                     allocation.broker_lot_id for allocation in leg.selected_lots
                 )
 
+    raw_active_group_ids = set(active_group_ids)
+    ownership_remap: dict[str, str] = {}
+    saved_owner_keys = set(old_universe) | set(old_annotations) | set(old_groups_by_core)
+    for core_id in sorted(raw_active_group_ids):
+        current_lots = sorted(set(sell_lots_by_core.get(core_id, ())))
+        saved_lots = set(old_universe.get(core_id, ()))
+        if not current_lots or core_id not in saved_owner_keys or saved_lots.intersection(current_lots):
+            continue
+        lineage = f"{core_id}:{','.join(current_lots)}"
+        owner_key = _stable_id(run.id, "review-owner", lineage)
+        collision_index = 0
+        while owner_key in saved_owner_keys and not set(old_universe.get(owner_key, ())).intersection(current_lots):
+            collision_index += 1
+            owner_key = _stable_id(run.id, "review-owner", f"{lineage}:replacement:{collision_index}")
+        ownership_remap[core_id] = owner_key
+
+    if ownership_remap:
+        remapped_legs: list[ConsolidatedLeg] = []
+        for leg in legs:
+            original_ids = tuple(leg.group_ids)
+            source_ids = original_ids or (f"{leg.side.lower()}:{leg.ticker.upper()}",)
+            mapped_ids = tuple(ownership_remap.get(core_id, core_id) for core_id in source_ids)
+            remapped_legs.append(replace(leg, group_ids=mapped_ids) if mapped_ids != source_ids else leg)
+        legs = tuple(remapped_legs)
+        active_group_ids = _core_group_ids(legs)
+        sell_lots_by_core = {core_id: [] for core_id in active_group_ids}
+        for leg in legs:
+            core_ids = list(leg.group_ids) or [f"{leg.side.lower()}:{leg.ticker.upper()}"]
+            if leg.side == "SELL":
+                for core_id in core_ids:
+                    sell_lots_by_core.setdefault(core_id, []).extend(
+                        allocation.broker_lot_id for allocation in leg.selected_lots
+                    )
+
+    if selected_groups is not None and ownership_remap:
+        remapped_selection = dict(selected_groups)
+        for old_core_id, owner_key in ownership_remap.items():
+            if old_core_id in remapped_selection:
+                remapped_selection[owner_key] = bool(
+                    remapped_selection.get(owner_key, False) or remapped_selection[old_core_id]
+                )
+                remapped_selection[old_core_id] = False
+        selected_groups = remapped_selection
     group_priorities = _priority_map(metadata)
+    for old_core_id, owner_key in ownership_remap.items():
+        priority = group_priorities.pop(old_core_id, None)
+        if priority is not None:
+            group_priorities[owner_key] = priority
     alias_keys = set(universe) | set(old_annotations)
     sources_by_core: dict[str, set[str]] = {core_id: {core_id} for core_id in active_group_ids}
     assigned_aliases: set[str] = set()
     if outcome.status != "search_incomplete":
         for alias in sorted(alias_keys):
-            alias_lots = set(universe.get(alias, ()))
+            alias_lots = (
+                    set(old_universe.get(alias, ()))
+                    if alias in old_universe
+                    else set((expected_universe or {}).get(alias, ()))
+                    if alias not in old_annotations
+                    else set()
+                )
             matches = [
                 (core_id, len(alias_lots.intersection(lot_ids)))
                 for core_id, lot_ids in sell_lots_by_core.items()
@@ -881,6 +934,14 @@ def _persist_candidate(
     metrics["basket_revision"] = basket_revision + 1
     metrics["selection_universe"] = universe
     annotations: dict[str, dict[str, object]] = {}
+    selected_source_lots: set[str] = set()
+    if selected_groups is not None:
+        for source, selected_value in selected_groups.items():
+            if selected_value and not old_annotations.get(source, {}).get("rejected"):
+                selected_source_lots.update(old_universe.get(source, ()))
+    expected_selected_lots = {
+        lot_id for lot_ids in (expected_universe or {}).values() for lot_id in lot_ids
+    }
     for core_group_id in group_ids:
         source_keys = sorted(
             sources_by_group[core_group_id],
@@ -910,7 +971,13 @@ def _persist_candidate(
             state["rejection_reason"] = " / ".join(dict.fromkeys(rejection_reasons))
         if selected_groups is not None:
             selected_values = [selected_groups[key] for key in source_keys if key in selected_groups]
-            state["selected"] = any(selected_values) if selected_values else core_group_id in active_group_ids
+            active_lots = set(sell_lots_by_core.get(core_group_id, ()))
+            state["selected"] = (
+                any(selected_values)
+                or bool(active_lots.intersection(selected_source_lots))
+                or bool(active_lots.intersection(expected_selected_lots))
+                or (not selected_values and core_group_id in active_group_ids)
+            )
         else:
             state.setdefault("selected", core_group_id in active_group_ids)
         state["rejected"] = any(
@@ -1426,18 +1493,13 @@ def _validate_intent_lots(state: _RunState, request: OptimizerLotReviewIntentInp
             details={"missing_lot_ids": missing, "unavailable_lot_ids": unavailable, "basket_unchanged": True},
         )
     rejected_groups_by_lot: dict[str, set[str]] = {}
-    rejected_core_ids: set[str] = set()
     for row in state.group_rows:
         if row["rejected"]:
             core_id = str(row["core_group_id"])
-            rejected_core_ids.add(core_id)
             for lot_id in state.selection_universe.get(core_id, ()):
                 rejected_groups_by_lot.setdefault(lot_id, set()).add(str(row["id"]))
     rejected_lots = [
-        lot_id
-        for lot_id in request.broker_lot_ids
-        if lot_id in rejected_groups_by_lot
-        or f"sale:{by_id[lot_id].ticker.upper()}" in rejected_core_ids
+        lot_id for lot_id in request.broker_lot_ids if lot_id in rejected_groups_by_lot
     ]
     if rejected_lots:
         rejected_group_ids = sorted(
@@ -1445,13 +1507,6 @@ def _validate_intent_lots(state: _RunState, request: OptimizerLotReviewIntentInp
                 group_id
                 for lot_id in rejected_lots
                 for group_id in rejected_groups_by_lot.get(lot_id, ())
-            }
-            | {
-                str(row["id"])
-                for lot_id in rejected_lots
-                for row in state.group_rows
-                if row["rejected"]
-                and f"sale:{by_id[lot_id].ticker.upper()}" == str(row["core_group_id"])
             }
         )
         raise AppError(

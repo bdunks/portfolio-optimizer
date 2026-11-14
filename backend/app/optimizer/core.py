@@ -36,7 +36,13 @@ from app.domain.tax import (
     tax_value,
 )
 from app.domain.trade_dates import classify_holding_period
-from app.domain.wash import ProposedBuy, ProposedLotSale, assess_proposed_buys, assess_wash_sales
+from app.domain.wash import (
+    ProposedBuy,
+    ProposedLotSale,
+    WashAssessmentDeadlineError,
+    assess_proposed_buys,
+    assess_wash_sales,
+)
 from app.optimizer.validation import (
     CandidateValidation,
     ObjectivePolicy,
@@ -116,6 +122,16 @@ class _SaleCandidate:
     term: str
     categories: tuple[str, ...]
     rank: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class _SaleUnit:
+    priority: Decimal
+    tie_ticker: str
+    tie_lot_id: str
+    trigger: _SaleCandidate
+    clearance_lot_ids: frozenset[str]
+    clearance_candidates: tuple[_SaleCandidate, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -546,9 +562,13 @@ def _screen(
     candidates_by_ticker: dict[str, list[_SaleCandidate]] = defaultdict(list)
     for candidate in candidates:
         candidates_by_ticker[candidate.lot.ticker.upper()].append(candidate)
+    limits = _configured_limits(inputs)
+    if limits is None:
+        return None, ("configuration_required:batch_limits_and_cash_policy",)
+    sell_ticker_limit, sell_lot_limit, order_limit, turnover_pct, buy_minimum, cash_reserve = limits
     wash_blocked: set[str] = set()
-    wash_dependency_bundles: list[set[str]] = []
-    wash_clearance_lot_ids: set[str] = set()
+    wash_dependency_groups: list[tuple[frozenset[str], tuple[_SaleCandidate, ...]]] = []
+
     requested_lots = set(request.sell_lot_ids) if request.sell_lot_ids is not None else None
 
     def proposed_sale(candidate: _SaleCandidate) -> ProposedLotSale:
@@ -596,11 +616,30 @@ def _screen(
         if not loss_candidates:
             continue
 
+        recent_ids = recent_acquisition_ids.get(ticker.upper(), set())
+        if recent_ids and requested_lots is None:
+            feasible_losses: list[_SaleCandidate] = []
+            for index, candidate in enumerate(loss_candidates):
+                if index % 64 == 0 and time.monotonic() >= deadline:
+                    return None, ("deadline_during_sell_wash_screening",)
+                lot_id = candidate.lot.broker_lot_id
+                required_lots = len(recent_ids) + (lot_id not in recent_ids)
+                if required_lots <= sell_lot_limit:
+                    feasible_losses.append(candidate)
+                else:
+                    wash_blocked.add(lot_id)
+                    warnings.append(
+                        f"sell_wash_sale_ineligible:{ticker}:{lot_id}:"
+                        "clearance_exceeds_max_sell_lots_per_batch"
+                    )
+            loss_candidates = tuple(feasible_losses)
+            if not loss_candidates:
+                continue
+
         # Every loss in this same-ticker, same-date trade group has identical wash-rule
         # conditions. Check one representative with the shared recent-lot clearances;
         # the final basket still goes through the authoritative owner validation.
         representative = loss_candidates[0]
-        recent_ids = recent_acquisition_ids.get(ticker.upper(), set())
         owner_candidates = {representative.lot.broker_lot_id: representative}
         for index, candidate in enumerate(eligible_group):
             if index % 64 == 0 and time.monotonic() >= deadline:
@@ -614,7 +653,10 @@ def _screen(
             owner_proposals.append(proposed_sale(candidate))
         if time.monotonic() >= deadline:
             return None, ("deadline_during_sell_wash_screening",)
-        assessments = assess_wash_sales(inputs, tuple(owner_proposals))
+        try:
+            assessments = assess_wash_sales(inputs, tuple(owner_proposals), deadline=deadline)
+        except WashAssessmentDeadlineError:
+            return None, ("deadline_during_sell_wash_screening",)
         if time.monotonic() >= deadline:
             return None, ("deadline_during_sell_wash_screening",)
         representative_assessment = None
@@ -637,31 +679,38 @@ def _screen(
                     for reason in representative_assessment.reasons
                 )
         elif recent_ids:
-            # The owner assessment above establishes that these available lots, at their
-            # maximum quantities, clear the shared recent acquisitions. Keep each loss
-            # trigger as a separate unit; selection counts an already-selected clearance once.
-            wash_clearance_lot_ids.update(recent_ids)
-            for index, candidate in enumerate(loss_candidates):
-                if index % 64 == 0 and time.monotonic() >= deadline:
-                    return None, ("deadline_during_sell_wash_screening",)
-                wash_dependency_bundles.append({candidate.lot.broker_lot_id, *recent_ids})
+            # The owner assessment establishes that these available lots, at their maximum
+            # quantities, clear the shared recent acquisitions. Keep triggers separate while
+            # retaining one immutable clearance requirement set for the ticker.
+            clearance_ids = frozenset(recent_ids)
+
+            wash_dependency_groups.append((clearance_ids, loss_candidates))
 
     if wash_blocked:
         candidates = [
             candidate for candidate in candidates if candidate.lot.broker_lot_id not in wash_blocked
         ]
-    limits = _configured_limits(inputs)
-    if limits is None:
-        return None, ("configuration_required:batch_limits_and_cash_policy",)
-    sell_ticker_limit, sell_lot_limit, order_limit, turnover_pct, buy_minimum, cash_reserve = limits
     sell_order_capacity = min(sell_ticker_limit, order_limit)
     if config.estimated_spread_bps >= _BASIS_POINTS:
         return None, ("invalid_configuration:estimated_spread_bps_must_be_less_than_10000",)
+    if time.monotonic() >= deadline:
+        return None, ("deadline_during_sell_wash_screening",)
     candidates.sort(key=lambda row: (-row.rank, row.lot.ticker.upper(), row.lot.broker_lot_id))
+    if time.monotonic() >= deadline:
+        return None, ("deadline_during_sell_wash_screening",)
     if request.sell_lot_ids is not None:
         requested = set(request.sell_lot_ids)
-        matched = {candidate.lot.broker_lot_id for candidate in candidates}
-        unknown = requested - {lot.broker_lot_id for lot in inputs.lots}
+        matched: set[str] = set()
+        for index, candidate in enumerate(candidates):
+            if index % 64 == 0 and time.monotonic() >= deadline:
+                return None, ("deadline_during_sell_wash_screening",)
+            matched.add(candidate.lot.broker_lot_id)
+        known_lots: set[str] = set()
+        for index, lot in enumerate(inputs.lots):
+            if index % 64 == 0 and time.monotonic() >= deadline:
+                return None, ("deadline_during_sell_wash_screening",)
+            known_lots.add(lot.broker_lot_id)
+        unknown = requested - known_lots
         ineligible = requested - matched
         if unknown:
             return None, tuple(f"unknown_selected_lot:{lot_id}" for lot_id in sorted(unknown))
@@ -676,60 +725,129 @@ def _screen(
             return None, ("selected_subset_exceeds_max_sell_lots_per_batch",)
         if len({candidate.lot.ticker.upper() for candidate in candidates}) > sell_order_capacity:
             return None, ("selected_subset_exceeds_max_sell_tickers_per_batch",)
-    candidate_by_id = {candidate.lot.broker_lot_id: candidate for candidate in candidates}
+
+    candidate_by_id: dict[str, _SaleCandidate] = {}
+    for index, candidate in enumerate(candidates):
+        if index % 64 == 0 and time.monotonic() >= deadline:
+            return None, ("deadline_during_sell_wash_screening",)
+        candidate_by_id[candidate.lot.broker_lot_id] = candidate
+
+    def candidate_order_key(candidate: _SaleCandidate) -> tuple[Decimal, str, str]:
+        return (-candidate.rank, candidate.lot.ticker.upper(), candidate.lot.broker_lot_id)
+
     bundled_ids: set[str] = set()
-    sale_units: list[tuple[Decimal, tuple[_SaleCandidate, ...]]] = []
-    for bundle in wash_dependency_bundles:
-        members = tuple(
-            sorted(
-                (candidate_by_id[lot_id] for lot_id in bundle if lot_id in candidate_by_id),
-                key=lambda candidate: (
-                    -candidate.rank,
+    sale_units: list[_SaleUnit] = []
+    for group_index, (clearance_ids, triggers) in enumerate(wash_dependency_groups):
+        if group_index % 64 == 0 and time.monotonic() >= deadline:
+            return None, ("deadline_during_sell_wash_screening",)
+        clearance_candidates: list[_SaleCandidate] = []
+        for clearance_index, lot_id in enumerate(clearance_ids):
+            if clearance_index % 64 == 0 and time.monotonic() >= deadline:
+                return None, ("deadline_during_sell_wash_screening",)
+            clearance_candidate = candidate_by_id.get(lot_id)
+            if clearance_candidate is None:
+                return None, ("sell_wash_owner_assessment_mismatch",)
+            clearance_candidates.append(clearance_candidate)
+            bundled_ids.add(lot_id)
+        clearance_candidates.sort(key=candidate_order_key)
+        if time.monotonic() >= deadline:
+            return None, ("deadline_during_sell_wash_screening",)
+        shared_clearances = tuple(clearance_candidates)
+
+        for trigger_index, trigger in enumerate(triggers):
+            if trigger_index % 64 == 0 and time.monotonic() >= deadline:
+                return None, ("deadline_during_sell_wash_screening",)
+            selected_trigger = candidate_by_id.get(trigger.lot.broker_lot_id)
+            if selected_trigger is None:
+                return None, ("sell_wash_owner_assessment_mismatch",)
+            bundled_ids.add(selected_trigger.lot.broker_lot_id)
+            first_member = selected_trigger
+            if shared_clearances and candidate_order_key(
+                shared_clearances[0]
+            ) < candidate_order_key(first_member):
+                first_member = shared_clearances[0]
+            sale_units.append(
+                _SaleUnit(
+                    max(
+                        selected_trigger.rank,
+                        shared_clearances[0].rank if shared_clearances else selected_trigger.rank,
+                    ),
+                    first_member.lot.ticker.upper(),
+                    first_member.lot.broker_lot_id,
+                    selected_trigger,
+                    clearance_ids,
+                    shared_clearances,
+                )
+            )
+    for index, candidate in enumerate(candidates):
+        if index % 64 == 0 and time.monotonic() >= deadline:
+            return None, ("deadline_during_sell_wash_screening",)
+        if candidate.lot.broker_lot_id not in bundled_ids:
+            sale_units.append(
+                _SaleUnit(
+                    candidate.rank,
                     candidate.lot.ticker.upper(),
                     candidate.lot.broker_lot_id,
-                ),
+                    candidate,
+                    frozenset(),
+                    (),
+                )
             )
-        )
-        if members:
-            sale_units.append((max(candidate.rank for candidate in members), members))
-            bundled_ids.update(candidate.lot.broker_lot_id for candidate in members)
-    sale_units.extend(
-        (candidate.rank, (candidate,))
-        for candidate in candidates
-        if candidate.lot.broker_lot_id not in bundled_ids
-    )
-    sale_units.sort(
-        key=lambda unit: (
-            -unit[0],
-            unit[1][0].lot.ticker.upper(),
-            unit[1][0].lot.broker_lot_id,
-        )
-    )
+    if time.monotonic() >= deadline:
+        return None, ("deadline_during_sell_wash_screening",)
+    sale_units.sort(key=lambda unit: (-unit.priority, unit.tie_ticker, unit.tie_lot_id))
+    if time.monotonic() >= deadline:
+        return None, ("deadline_during_sell_wash_screening",)
 
-    def select_sales(order_capacity: int) -> tuple[list[_SaleCandidate], set[str]]:
+    def select_sales(
+        order_capacity: int,
+    ) -> tuple[list[_SaleCandidate], set[str]] | None:
         if request.sell_lot_ids is not None:
             selected = list(candidates)
             return selected, {candidate.lot.ticker.upper() for candidate in selected}
         selected: list[_SaleCandidate] = []
         selected_ids: set[str] = set()
         selected_tickers: set[str] = set()
-        for _, unit in sale_units:
-            new_members = [
-                candidate for candidate in unit if candidate.lot.broker_lot_id not in selected_ids
-            ]
-            if not new_members:
+        for unit_index, unit in enumerate(sale_units):
+            if unit_index % 64 == 0 and time.monotonic() >= deadline:
+                return None
+            new_count = 0
+            over_lot_limit = False
+            for clearance_index, candidate in enumerate(unit.clearance_candidates):
+                if clearance_index % 64 == 0 and time.monotonic() >= deadline:
+                    return None
+                if candidate.lot.broker_lot_id not in selected_ids:
+                    new_count += 1
+                    if len(selected) + new_count > sell_lot_limit:
+                        over_lot_limit = True
+                        break
+            trigger_id = unit.trigger.lot.broker_lot_id
+            if trigger_id not in selected_ids and trigger_id not in unit.clearance_lot_ids:
+                new_count += 1
+                if len(selected) + new_count > sell_lot_limit:
+                    over_lot_limit = True
+            if over_lot_limit or new_count == 0:
                 continue
-            unit_tickers = {candidate.lot.ticker.upper() for candidate in new_members}
-            if len(selected) + len(new_members) > sell_lot_limit:
+            ticker = unit.trigger.lot.ticker.upper()
+            if ticker not in selected_tickers and len(selected_tickers) + 1 > order_capacity:
                 continue
-            if len(selected_tickers | unit_tickers) > order_capacity:
-                continue
-            selected.extend(new_members)
-            selected_ids.update(candidate.lot.broker_lot_id for candidate in new_members)
-            selected_tickers.update(unit_tickers)
+            for clearance_index, candidate in enumerate(unit.clearance_candidates):
+                if clearance_index % 64 == 0 and time.monotonic() >= deadline:
+                    return None
+                lot_id = candidate.lot.broker_lot_id
+                if lot_id not in selected_ids:
+                    selected.append(candidate)
+                    selected_ids.add(lot_id)
+            if trigger_id not in selected_ids:
+                selected.append(unit.trigger)
+                selected_ids.add(trigger_id)
+            selected_tickers.add(ticker)
         return selected, selected_tickers
 
-    selected_sales, selected_tickers = select_sales(sell_order_capacity)
+    selection = select_sales(sell_order_capacity)
+    if selection is None:
+        return None, ("deadline_during_sell_wash_screening",)
+    selected_sales, selected_tickers = selection
     enabled_allowed = _enabled_allowed(inputs)
     buy_candidates: list[_BuyCandidate] = []
     exposure_buy_cache: dict[str, bool] = {}
@@ -817,7 +935,10 @@ def _screen(
     # later global BUY truncation cannot discard the witness for reserving its order slot.
     reserved_buy_ticker: str | None = None
     if request.sell_lot_ids is None and order_limit > 1 and len(selected_tickers) >= order_limit:
-        reserve_sales, reserve_tickers = select_sales(min(sell_ticker_limit, order_limit - 1))
+        reserve_selection = select_sales(min(sell_ticker_limit, order_limit - 1))
+        if reserve_selection is None:
+            return None, ("deadline_during_sell_wash_screening",)
+        reserve_sales, reserve_tickers = reserve_selection
         potential_buys = [
             candidate for candidate in buy_candidates if candidate.ticker not in reserve_tickers
         ]
@@ -875,18 +996,48 @@ def _screen(
         if reserved_buy_ticker is not None:
             selected_sales, selected_tickers = reserve_sales, reserve_tickers
 
-    selected_sale_ids = {candidate.lot.broker_lot_id for candidate in selected_sales}
-    mandatory_clearance_ids: set[str] = set()
-    for index, dependency in enumerate(wash_dependency_bundles):
+    selected_sale_ids: set[str] = set()
+    for index, candidate in enumerate(selected_sales):
         if index % 64 == 0 and time.monotonic() >= deadline:
             return None, ("deadline_during_sell_wash_screening",)
-        if dependency <= selected_sale_ids:
-            mandatory_clearance_ids.update(dependency & wash_clearance_lot_ids)
-    mandatory_clearance_shares = tuple(
-        sorted(
-            (lot_id, candidate_by_id[lot_id].maximum_shares) for lot_id in mandatory_clearance_ids
-        )
-    )
+        selected_sale_ids.add(candidate.lot.broker_lot_id)
+    mandatory_clearance_ids: set[str] = set()
+    for group_index, (clearance_ids, triggers) in enumerate(wash_dependency_groups):
+        if group_index % 64 == 0 and time.monotonic() >= deadline:
+            return None, ("deadline_during_sell_wash_screening",)
+        if len(clearance_ids) > len(selected_sale_ids):
+            continue
+        all_clearances_selected = True
+        for clearance_index, lot_id in enumerate(clearance_ids):
+            if clearance_index % 64 == 0 and time.monotonic() >= deadline:
+                return None, ("deadline_during_sell_wash_screening",)
+            if lot_id not in selected_sale_ids:
+                all_clearances_selected = False
+                break
+        if not all_clearances_selected:
+            continue
+        for trigger_index, trigger in enumerate(triggers):
+            if trigger_index % 64 == 0 and time.monotonic() >= deadline:
+                return None, ("deadline_during_sell_wash_screening",)
+            if trigger.lot.broker_lot_id in selected_sale_ids:
+                for clearance_index, lot_id in enumerate(clearance_ids):
+                    if clearance_index % 64 == 0 and time.monotonic() >= deadline:
+                        return None, ("deadline_during_sell_wash_screening",)
+                    mandatory_clearance_ids.add(lot_id)
+                break
+    mandatory_clearance_shares_list: list[tuple[str, Decimal]] = []
+    for index, lot_id in enumerate(mandatory_clearance_ids):
+        if index % 64 == 0 and time.monotonic() >= deadline:
+            return None, ("deadline_during_sell_wash_screening",)
+        candidate = candidate_by_id.get(lot_id)
+        if candidate is None:
+            return None, ("sell_wash_owner_assessment_mismatch",)
+        mandatory_clearance_shares_list.append((lot_id, candidate.maximum_shares))
+    if time.monotonic() >= deadline:
+        return None, ("deadline_during_sell_wash_screening",)
+    mandatory_clearance_shares = tuple(sorted(mandatory_clearance_shares_list))
+    if time.monotonic() >= deadline:
+        return None, ("deadline_during_sell_wash_screening",)
     # A replacement BUY must be distinct from every source ticker in this basket.
     buy_candidates = [
         candidate for candidate in buy_candidates if candidate.ticker not in selected_tickers

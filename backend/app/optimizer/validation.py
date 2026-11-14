@@ -21,7 +21,13 @@ from app.domain.portfolio_accounting import (
     evaluate_portfolio,
 )
 from app.domain.tax import TaxEvaluation, TaxProfile, evaluate_tax
-from app.domain.wash import ProposedBuy, ProposedLotSale, WashSaleAssessment, assess_wash_sales
+from app.domain.wash import (
+    ProposedBuy,
+    ProposedLotSale,
+    WashAssessmentDeadlineError,
+    WashSaleAssessment,
+    assess_wash_sales,
+)
 
 _ZERO = Decimal(0)
 _HUNDRED = Decimal(100)
@@ -364,6 +370,7 @@ def _wash_validation(
     inputs: FinancialInputs,
     legs: Sequence[ConsolidatedLeg],
     evaluation: PortfolioEvaluation,
+    deadline: float | None = None,
 ) -> tuple[list[str], tuple[WashSaleAssessment, ...], tuple[object, ...]]:
     sales: list[ProposedLotSale] = []
     group_by_lot = {
@@ -394,7 +401,7 @@ def _wash_validation(
         for leg in legs
         if leg.side == "BUY"
     )
-    sale_assessments = assess_wash_sales(inputs, tuple(sales), buys)
+    sale_assessments = assess_wash_sales(inputs, tuple(sales), buys, deadline=deadline)
     reasons = [
         f"wash_sale_ineligible:{assessment.ticker}:{assessment.broker_lot_id}:{reason}"
         for assessment in sale_assessments
@@ -758,10 +765,26 @@ def validate_candidate(
             estimated_tax_benefit_usd=tax.estimated_tax_benefit_usd,
             estimated_trading_cost_usd=None,
         )
-    wash_errors, wash_assessments, buy_wash_assessments = _wash_validation(
-        inputs, normalized_legs, evaluation
-    )
+    try:
+        wash_errors, wash_assessments, buy_wash_assessments = _wash_validation(
+            inputs, normalized_legs, evaluation, deadline
+        )
+    except WashAssessmentDeadlineError:
+        return CandidateValidation(
+            accepted=False,
+            reasons=tuple(dict.fromkeys((*errors, "validation_deadline_exceeded"))),
+            warnings=tuple(dict.fromkeys(warnings)),
+            evaluation=evaluation,
+            tax=tax,
+            wash_assessments=(),
+            exposure_coverage=None,
+            objective_value=None,
+            estimated_tax_benefit_usd=None,
+            estimated_trading_cost_usd=None,
+            buy_wash_assessments=(),
+        )
     errors.extend(wash_errors)
+
     if deadline is not None and time.monotonic() >= deadline:
         errors.append("validation_deadline_exceeded")
         return CandidateValidation(

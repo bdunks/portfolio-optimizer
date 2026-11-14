@@ -11,6 +11,7 @@ import cvxpy as cp
 import numpy as np
 import pytest
 
+import app.domain.wash as wash_module
 import app.optimizer.core as core_module
 import app.optimizer.validation as validation_module
 from app.domain.allocation import (
@@ -36,7 +37,12 @@ from app.domain.financial_inputs import (
 )
 from app.domain.portfolio_accounting import ConsolidatedLeg, LotAllocation
 from app.domain.tax import TaxAffineRegion, TaxProfile
-from app.domain.wash import ProposedLotSale
+from app.domain.wash import (
+    ProposedBuy,
+    ProposedLotSale,
+    WashAssessmentDeadlineError,
+    WashSaleAssessment,
+)
 from app.optimizer.core import (
     OptimizerRequest,
     TradeGroupPriority,
@@ -838,6 +844,34 @@ def test_validation_rejects_deadline_exceeded_during_wash(monkeypatch: pytest.Mo
     assert validation.objective_value is None
 
 
+def test_validation_catches_wash_owner_deadline_and_rejects_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    deadline = time.monotonic() + 10
+    forwarded_deadlines: list[float | None] = []
+
+    def expired_assessment(
+        _inputs: FinancialInputs,
+        proposed_sales: tuple[ProposedLotSale, ...],
+        proposed_buys: tuple[ProposedBuy, ...] = (),
+        *,
+        deadline: float | None = None,
+    ) -> tuple[WashSaleAssessment, ...]:
+        assert proposed_sales == ()
+        assert proposed_buys == ()
+        forwarded_deadlines.append(deadline)
+        raise WashAssessmentDeadlineError("wash-sale assessment deadline exceeded")
+
+    monkeypatch.setattr(validation_module, "assess_wash_sales", expired_assessment)
+    validation = validate_candidate(_inputs(), (), deadline)
+
+    assert not validation.accepted
+    assert validation.reasons == ("validation_deadline_exceeded",)
+    assert validation.wash_assessments == ()
+    assert forwarded_deadlines == [deadline]
+
+
 def test_worker_owner_rechecks_deadline_after_group_priorities(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -846,6 +880,8 @@ def test_worker_owner_rechecks_deadline_after_group_priorities(
     fake_time = SimpleNamespace(monotonic=lambda: clock[0])
     monkeypatch.setattr(core_module, "time", fake_time)
     monkeypatch.setattr(validation_module, "time", fake_time)
+
+    monkeypatch.setattr(wash_module, "time", fake_time)
     _install_objective_accessor(monkeypatch)
 
     def expire_after_ranking(*_args: object) -> tuple[tuple[object, ...], tuple[str, ...]]:
@@ -868,6 +904,8 @@ def test_worker_metadata_separates_solve_and_repair_rank_timings(
     fake_time = SimpleNamespace(monotonic=lambda: clock[0])
     monkeypatch.setattr(core_module, "time", fake_time)
     monkeypatch.setattr(validation_module, "time", fake_time)
+
+    monkeypatch.setattr(wash_module, "time", fake_time)
     _install_objective_accessor(monkeypatch)
     calls = {"model": 0, "solve": 0, "repair": 0, "rank": 0}
     original_model = core_module._model_region
@@ -2175,6 +2213,73 @@ def test_shared_wash_clearance_does_not_merge_independent_losses(
     assert selected_ids & {"loss-lot", "older-aapl-loss-b"}
 
 
+def test_recent_loss_clearance_over_batch_cap_skips_owner_assessment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _wash_clearance_inputs(lot_limit=2)
+    recent_date = TRADE_DATE - timedelta(days=10)
+    recent_lots = tuple(
+        replace(
+            inputs.lots[0],
+            broker_lot_id=f"recent-loss-{index}",
+            acquired_date=recent_date,
+            shares=Decimal(1),
+            available_shares=Decimal(1),
+            adjusted_unit_basis_usd=Decimal(101),
+        )
+        for index in range(2500)
+    )
+    transactions = tuple(
+        replace(
+            inputs.transactions[0],
+            broker_transaction_key=f"recent-buy-{index}",
+            broker_lot_id=lot.broker_lot_id,
+            shares=Decimal(1),
+        )
+        for index, lot in enumerate(recent_lots)
+    )
+    inputs = replace(
+        inputs,
+        positions=(
+            replace(inputs.positions[0], shares=Decimal(2500), market_value_usd=Decimal(250000)),
+        ),
+        lots=recent_lots,
+        transactions=transactions,
+    )
+    owner_calls = 0
+
+    def unexpected_owner_assessment(
+        _inputs: FinancialInputs,
+        proposed_sales: tuple[ProposedLotSale, ...],
+        *,
+        deadline: float | None = None,
+    ) -> tuple[WashSaleAssessment, ...]:
+        nonlocal owner_calls
+        owner_calls += 1
+        pytest.fail(
+            f"over-cap clearance materialized {len(proposed_sales)} owner proposals; {deadline=}"
+        )
+
+    monkeypatch.setattr(core_module, "assess_wash_sales", unexpected_owner_assessment)
+    config, config_errors = read_objective_policy(inputs)
+    assert config is not None
+    assert config_errors == ()
+
+    screen, screen_errors = core_module._screen(
+        OptimizerRequest(inputs), config, time.monotonic() + 60
+    )
+
+    assert screen_errors == ()
+    assert screen is not None
+    assert screen.sales == ()
+    assert owner_calls == 0
+    assert (
+        sum("clearance_exceeds_max_sell_lots_per_batch" in warning for warning in screen.warnings)
+        == 2500
+    )
+
+
 def test_wash_dependency_owner_assessment_call_count_is_bounded_for_2500_lots(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2205,11 +2310,24 @@ def test_wash_dependency_owner_assessment_call_count_is_bounded_for_2500_lots(
     calls: list[int] = []
 
     def counted_assessment(
-        _inputs: FinancialInputs, proposed_sales: tuple[ProposedLotSale, ...]
-    ) -> tuple[SimpleNamespace, ...]:
+        _inputs: FinancialInputs,
+        proposed_sales: tuple[ProposedLotSale, ...],
+        *,
+        deadline: float | None = None,
+    ) -> tuple[WashSaleAssessment, ...]:
+        assert deadline is not None
         calls.append(len(proposed_sales))
         return tuple(
-            SimpleNamespace(broker_lot_id=sale.broker_lot_id, eligible=True, reasons=())
+            WashSaleAssessment(
+                sale.ticker,
+                sale.broker_lot_id,
+                sale.trade_group_id,
+                True,
+                (),
+                (),
+                None,
+                None,
+            )
             for sale in proposed_sales
         )
 
@@ -2237,11 +2355,25 @@ def test_wash_dependency_checks_deadline_after_owner_assessment(
     monkeypatch.setattr(core_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
 
     def expire_during_assessment(
-        _inputs: FinancialInputs, proposed_sales: tuple[ProposedLotSale, ...]
-    ) -> tuple[SimpleNamespace, ...]:
+        _inputs: FinancialInputs,
+        proposed_sales: tuple[ProposedLotSale, ...],
+        *,
+        deadline: float | None = None,
+    ) -> tuple[WashSaleAssessment, ...]:
+        assert deadline is not None
+        assert deadline == 5.0
         clock[0] = deadline
         return tuple(
-            SimpleNamespace(broker_lot_id=sale.broker_lot_id, eligible=True, reasons=())
+            WashSaleAssessment(
+                sale.ticker,
+                sale.broker_lot_id,
+                sale.trade_group_id,
+                True,
+                (),
+                (),
+                None,
+                None,
+            )
             for sale in proposed_sales
         )
 
@@ -2254,6 +2386,33 @@ def test_wash_dependency_checks_deadline_after_owner_assessment(
 
     assert screen is None
     assert any("deadline" in error for error in errors)
+
+
+def test_wash_owner_deadline_exception_stops_screen_without_partial_assessment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    monkeypatch.setattr(core_module, "time", SimpleNamespace(monotonic=lambda: 0.0))
+
+    def expired_assessment(
+        _inputs: FinancialInputs,
+        proposed_sales: tuple[ProposedLotSale, ...],
+        *,
+        deadline: float | None = None,
+    ) -> tuple[WashSaleAssessment, ...]:
+        assert proposed_sales
+        assert deadline == 5.0
+        raise WashAssessmentDeadlineError("wash-sale assessment deadline exceeded")
+
+    monkeypatch.setattr(core_module, "assess_wash_sales", expired_assessment)
+    config, config_errors = read_objective_policy(_inputs())
+    assert config is not None
+    assert config_errors == ()
+
+    screen, errors = core_module._screen(OptimizerRequest(_inputs()), config, 5.0)
+
+    assert screen is None
+    assert errors == ("deadline_during_sell_wash_screening",)
 
 
 def test_fractional_recent_lot_cannot_clear_an_older_loss(

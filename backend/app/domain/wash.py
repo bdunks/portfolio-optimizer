@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import time
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
-from app.domain.financial_inputs import FinancialInputs, TransactionInput
+from app.domain.financial_inputs import FinancialInputs, LotInput, TransactionInput
+
+
+class WashAssessmentDeadlineError(TimeoutError):
+    """Raised when wash-sale owner assessment reaches its shared deadline."""
+
+
+def _check_deadline(deadline: float | None, index: int = 0) -> None:
+    if deadline is not None and index % 64 == 0 and time.monotonic() >= deadline:
+        raise WashAssessmentDeadlineError("wash-sale assessment deadline exceeded")
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,14 +85,18 @@ def _recent_lot_issues(
     sale: ProposedLotSale,
     group_sales: Sequence[ProposedLotSale],
     recent_buys: Sequence[TransactionInput],
+    deadline: float | None = None,
 ) -> tuple[set[str], set[str]]:
     reasons: set[str] = set()
     transaction_keys: set[str] = set()
-    lots_by_id = {
-        lot.broker_lot_id: lot for lot in inputs.lots if lot.ticker.upper() == sale.ticker.upper()
-    }
+    lots_by_id: dict[str, LotInput] = {}
+    for index, lot in enumerate(inputs.lots):
+        _check_deadline(deadline, index)
+        if lot.ticker.upper() == sale.ticker.upper():
+            lots_by_id[lot.broker_lot_id] = lot
     buys_by_lot: dict[str, list[TransactionInput]] = defaultdict(list)
-    for transaction in recent_buys:
+    for index, transaction in enumerate(recent_buys):
+        _check_deadline(deadline, index)
         if transaction.broker_lot_id is None:
             reasons.add("unattributed_recent_acquisition")
             transaction_keys.add(transaction.broker_transaction_key)
@@ -90,7 +104,8 @@ def _recent_lot_issues(
             buys_by_lot[transaction.broker_lot_id].append(transaction)
 
     recent_lot_ids = set(buys_by_lot)
-    for lot in inputs.lots:
+    for index, lot in enumerate(inputs.lots):
+        _check_deadline(deadline, index)
         if (
             lot.ticker.upper() == sale.ticker.upper()
             and sale.sale_date - timedelta(days=30) <= lot.acquired_date <= sale.sale_date
@@ -98,35 +113,40 @@ def _recent_lot_issues(
             recent_lot_ids.add(lot.broker_lot_id)
 
     group_sold_by_lot: dict[str, Decimal] = defaultdict(Decimal)
-    for group_sale in group_sales:
+    for index, group_sale in enumerate(group_sales):
+        _check_deadline(deadline, index)
         if group_sale.ticker.upper() == sale.ticker.upper():
             group_sold_by_lot[group_sale.broker_lot_id] += group_sale.shares
 
-    for lot_id in recent_lot_ids:
+    for index, lot_id in enumerate(recent_lot_ids):
+        _check_deadline(deadline, index)
         acquisitions = buys_by_lot.get(lot_id, [])
         lot = lots_by_id.get(lot_id)
         if lot is None:
             reasons.add("recent_acquisition_not_fully_disposed")
-            transaction_keys.update(
-                transaction.broker_transaction_key for transaction in acquisitions
-            )
+            for acquisition_index, transaction in enumerate(acquisitions):
+                _check_deadline(deadline, acquisition_index)
+                transaction_keys.add(transaction.broker_transaction_key)
             continue
 
-        acquired_shares = sum((transaction.shares for transaction in acquisitions), Decimal(0))
+        acquired_shares = Decimal(0)
+        for acquisition_index, transaction in enumerate(acquisitions):
+            _check_deadline(deadline, acquisition_index)
+            acquired_shares += transaction.shares
         if acquisitions and acquired_shares != lot.shares:
             reasons.add("recent_acquisition_quantity_mismatch")
-            transaction_keys.update(
-                transaction.broker_transaction_key for transaction in acquisitions
-            )
+            for acquisition_index, transaction in enumerate(acquisitions):
+                _check_deadline(deadline, acquisition_index)
+                transaction_keys.add(transaction.broker_transaction_key)
             continue
         if (
             group_sold_by_lot.get(lot_id, Decimal(0)) != lot.shares
             or lot.available_shares != lot.shares
         ):
             reasons.add("recent_acquisition_not_fully_disposed")
-            transaction_keys.update(
-                transaction.broker_transaction_key for transaction in acquisitions
-            )
+            for acquisition_index, transaction in enumerate(acquisitions):
+                _check_deadline(deadline, acquisition_index)
+                transaction_keys.add(transaction.broker_transaction_key)
 
     return reasons, transaction_keys
 
@@ -135,27 +155,40 @@ def _validate_action_dates(
     inputs: FinancialInputs,
     proposed_sales: Sequence[ProposedLotSale],
     proposed_buys: Sequence[ProposedBuy],
+    deadline: float | None = None,
 ) -> None:
-    if any(sale.sale_date != inputs.proposed_trade_date for sale in proposed_sales) or any(
-        buy.buy_date != inputs.proposed_trade_date for buy in proposed_buys
-    ):
-        raise ValueError("wash-sale action date must match frozen proposed trade date")
+    _check_deadline(deadline)
+    for index, sale in enumerate(proposed_sales):
+        _check_deadline(deadline, index)
+        if sale.sale_date != inputs.proposed_trade_date:
+            raise ValueError("wash-sale action date must match frozen proposed trade date")
+    for index, buy in enumerate(proposed_buys):
+        _check_deadline(deadline, index)
+        if buy.buy_date != inputs.proposed_trade_date:
+            raise ValueError("wash-sale action date must match frozen proposed trade date")
 
 
 def assess_wash_sales(
     inputs: FinancialInputs,
     proposed_sales: Sequence[ProposedLotSale],
     proposed_buys: Sequence[ProposedBuy] = (),
+    *,
+    deadline: float | None = None,
 ) -> tuple[WashSaleAssessment, ...]:
     """Check same-security 30-day wash rules on exact proposed lot sales and basket buys.
 
     A recent acquisition is cleared only when its currently retained shares are fully
     available and sold in the same trade group as the loss sale. History must explicitly
     cover the complete lookback interval and the proposed trade date; unknown coverage fails closed.
+
+    When supplied, ``deadline`` is an absolute monotonic deadline shared with the optimizer
+    and owner validation. Expiration raises :class:`WashAssessmentDeadlineError`; no partial
+    assessment tuple is returned.
     """
-    _validate_action_dates(inputs, proposed_sales, proposed_buys)
+    _validate_action_dates(inputs, proposed_sales, proposed_buys, deadline)
     assessments: list[WashSaleAssessment] = []
-    for sale in proposed_sales:
+    for sale_index, sale in enumerate(proposed_sales):
+        _check_deadline(deadline, sale_index)
         ticker = sale.ticker.upper()
         if sale.realized_pl_usd >= 0:
             assessments.append(
@@ -177,42 +210,47 @@ def assess_wash_sales(
         if not _has_required_history(inputs, sale.sale_date):
             reasons.add("incomplete_acquisition_history")
         else:
-            recent_buys = tuple(
-                transaction
-                for transaction in inputs.transactions
-                if _is_recent_buy(transaction, ticker, sale.sale_date)
-            )
-            same_group_sales = tuple(
-                candidate
-                for candidate in proposed_sales
-                if candidate.trade_group_id == sale.trade_group_id
-            )
+            recent_buys: list[TransactionInput] = []
+            for transaction_index, transaction in enumerate(inputs.transactions):
+                _check_deadline(deadline, transaction_index)
+                if _is_recent_buy(transaction, ticker, sale.sale_date):
+                    recent_buys.append(transaction)
+            same_group_sales: list[ProposedLotSale] = []
+            for proposal_index, candidate in enumerate(proposed_sales):
+                _check_deadline(deadline, proposal_index)
+                if candidate.trade_group_id == sale.trade_group_id:
+                    same_group_sales.append(candidate)
             acquisition_reasons, acquisition_keys = _recent_lot_issues(
-                inputs, sale, same_group_sales, recent_buys
+                inputs, sale, same_group_sales, recent_buys, deadline
             )
             reasons.update(acquisition_reasons)
             transaction_keys.update(acquisition_keys)
 
         no_buy_through = sale.sale_date + timedelta(days=30)
         next_eligible = no_buy_through + timedelta(days=1)
-        if any(
-            buy.ticker.upper() == ticker and sale.sale_date <= buy.buy_date <= no_buy_through
-            for buy in proposed_buys
-        ):
-            reasons.add("proposed_same_security_buy")
+        for buy_index, buy in enumerate(proposed_buys):
+            _check_deadline(deadline, buy_index)
+            if buy.ticker.upper() == ticker and sale.sale_date <= buy.buy_date <= no_buy_through:
+                reasons.add("proposed_same_security_buy")
+                break
 
+        _check_deadline(deadline)
+        sorted_reasons = tuple(sorted(reasons))
+        sorted_transaction_keys = tuple(sorted(transaction_keys))
+        _check_deadline(deadline)
         assessments.append(
             WashSaleAssessment(
                 ticker=ticker,
                 broker_lot_id=sale.broker_lot_id,
                 trade_group_id=sale.trade_group_id,
                 eligible=not reasons,
-                reasons=tuple(sorted(reasons)),
-                conflicting_transaction_keys=tuple(sorted(transaction_keys)),
+                reasons=sorted_reasons,
+                conflicting_transaction_keys=sorted_transaction_keys,
                 no_buy_through=no_buy_through,
                 next_eligible_purchase_date=next_eligible,
             )
         )
+    _check_deadline(deadline)
     return tuple(assessments)
 
 

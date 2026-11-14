@@ -5,6 +5,7 @@ from decimal import Decimal
 
 import pytest
 
+import app.domain.wash as wash_module
 from app.domain.allocation import AllocationPolicy, SecurityIdentity
 from app.domain.exposure import (
     ExposureSourceFreshness,
@@ -27,6 +28,7 @@ from app.domain.financial_inputs import (
 from app.domain.wash import (
     ProposedBuy,
     ProposedLotSale,
+    WashAssessmentDeadlineError,
     assess_proposed_buys,
     assess_wash_sales,
 )
@@ -397,6 +399,40 @@ def test_unknown_or_incomplete_history_fails_closed_for_loss_sales() -> None:
     assert not assessment.eligible
     assert assessment.reasons == ("incomplete_acquisition_history",)
     assert assess_wash_sales(inputs, (_loss_sale(realized_pl="0"),))[0].eligible
+
+
+def test_assess_wash_sales_without_deadline_keeps_legacy_results() -> None:
+    inputs = _inputs()
+    sales = (_loss_sale(),)
+
+    assert assess_wash_sales(inputs, sales) == assess_wash_sales(inputs, sales, deadline=None)
+
+
+def test_assess_wash_sales_checks_deadline_during_transaction_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _inputs(
+        transactions=tuple(
+            _transaction(
+                f"recent-buy-{index}",
+                trade_date=TRADE_DATE,
+                lot_id=f"recent-lot-{index}",
+            )
+            for index in range(65)
+        )
+    )
+    clock_reads = 0
+
+    def expire_during_scan() -> float:
+        nonlocal clock_reads
+        clock_reads += 1
+        return 1.0 if clock_reads >= 5 else 0.0
+
+    monkeypatch.setattr(wash_module.time, "monotonic", expire_during_scan)
+    with pytest.raises(WashAssessmentDeadlineError, match="wash-sale assessment deadline exceeded"):
+        assess_wash_sales(inputs, (_loss_sale(),), deadline=1.0)
+
+    assert clock_reads == 5
 
 
 def test_lookthrough_aggregates_duplicate_and_direct_overlapping_holdings() -> None:

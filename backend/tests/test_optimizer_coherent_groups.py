@@ -634,7 +634,7 @@ async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_o
     monkeypatch: pytest.MonkeyPatch,
     aapl_shares: int,
     msft_shares: int,
-    expected_first_group: str
+    expected_first_group: str,
 ) -> None:
     inputs, baseline, screen, original_legs = _shared_funding_case()
     inputs, baseline, screen, _extra_lot = _inputs_with_disjoint_aapl_lot(inputs, screen)
@@ -716,8 +716,9 @@ async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_o
     }
     _patch_real_review_solver(monkeypatch, prepared, outcomes)
 
-
-    def capture_priority_snapshot(session: Session, run: OptimizerRun, response: dict[str, object]):
+    def capture_priority_snapshot(
+        session: Session, run: OptimizerRun, response: dict[str, object]
+    ) -> tuple[dict[str, object], dict[str, object], dict[str, tuple[str, int]]]:
         saved_groups = session.scalars(
             select(RecommendationGroup).where(RecommendationGroup.run_id == run_id)
         ).all()
@@ -728,7 +729,9 @@ async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_o
             core_rows[core_id] = (group.id, group.rank)
         return dict(run.metrics), response, core_rows
 
-    def assert_priority_snapshot(snapshot: tuple[dict[str, object], dict[str, object], dict[str, tuple[str, int]]]):
+    def assert_priority_snapshot(
+        snapshot: tuple[dict[str, object], dict[str, object], dict[str, tuple[str, int]]],
+    ) -> dict[str, int]:
         metrics, response, core_rows = snapshot
         legs = response["consolidated_legs"]
         active_core_ids = {
@@ -744,6 +747,7 @@ async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_o
             core_group_ids = leg["details"]["core_group_ids"]
             assert leg["group_ids"] == [core_rows[core_id][0] for core_id in core_group_ids]
         return priority_map
+
     with session_factory() as session:
         run = session.get(OptimizerRun, run_id)
         assert run is not None
@@ -852,7 +856,6 @@ async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_o
             correlation_id="restore-original-lots-as-independent-sales",
         )
 
-
     with session_factory() as session:
         run = session.get(OptimizerRun, run_id)
         assert run is not None
@@ -921,10 +924,7 @@ async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_o
             for core_id in leg["details"]["core_group_ids"]
         }
         active_public_ids = {
-            str(group_id)
-            for leg in legs
-            if leg["side"] == "SELL"
-            for group_id in leg["group_ids"]
+            str(group_id) for leg in legs if leg["side"] == "SELL" for group_id in leg["group_ids"]
         }
         assert len(active_core_ids) == len(active_public_ids) == 2
         assert set(split_priority_map) == active_core_ids

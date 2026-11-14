@@ -784,8 +784,6 @@ def _persist_candidate(
                 for core_id, lot_ids in sell_lots_by_core.items()
                 if alias_lots.intersection(lot_ids)
             ]
-            if alias in active_group_ids:
-                matches.append((alias, 0))
             if not matches:
                 continue
             owner_core = min(
@@ -929,10 +927,28 @@ def _persist_candidate(
             source,
         )
         annotations.setdefault(target, {}).update(values)
+    invalid_active_owners = sorted(
+        core_group_id
+        for core_group_id in active_group_ids
+        if not annotations.get(core_group_id, {}).get("selected")
+        or annotations.get(core_group_id, {}).get("rejected")
+    )
+    if invalid_active_owners:
+        raise AppError(
+            "optimizer_review_ownership_conflict",
+            "Active optimizer legs cannot be reconciled to selected, non-rejected review opportunities",
+            status_code=409,
+            details={
+                "core_group_ids": invalid_active_owners,
+                "basket_unchanged": True,
+            },
+        )
     metrics["group_annotations"] = annotations
     persisted_group_ids: dict[str, str] = {}
+    inherited_group_ids: dict[str, str] = {}
     claimed_group_ids: set[str] = set()
-    for core_group_id in group_ids:
+    reserved_group_ids = {old_group.id for old_group in old_groups}
+    for core_group_id in sorted(group_ids):
         previous_groups = [
             old_group
             for source in sources_by_group[core_group_id]
@@ -949,9 +965,24 @@ def _persist_candidate(
             (old_group for old_group in previous_groups if old_group.id not in claimed_group_ids),
             None,
         )
-        group_id = prior_group.id if prior_group is not None else _stable_id(run.id, "group", core_group_id)
+        if prior_group is not None:
+            inherited_group_ids[core_group_id] = prior_group.id
+            claimed_group_ids.add(prior_group.id)
+
+    for core_group_id in group_ids:
+        group_id = inherited_group_ids.get(core_group_id)
+        if group_id is None:
+            group_id = _stable_id(run.id, "group", core_group_id)
+            collision_index = 0
+            while group_id in reserved_group_ids or group_id in claimed_group_ids:
+                collision_index += 1
+                group_id = _stable_id(
+                    run.id,
+                    "group",
+                    f"{core_group_id}:replacement:{collision_index}",
+                )
+            claimed_group_ids.add(group_id)
         persisted_group_ids[core_group_id] = group_id
-        claimed_group_ids.add(group_id)
 
     run.policy_revision_id = prepared.policy_revision_id
     run.source_generation = prepared.source_generation

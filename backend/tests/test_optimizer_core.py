@@ -1532,6 +1532,156 @@ def test_order_budget_funds_minimum_buy_with_existing_cash_and_small_loss_sale(
     assert validation.evaluation.proposed.cash_usd == Decimal(20)
 
 
+def test_replacement_reservation_rejects_buy_that_worsens_sibling_upper_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _add_msft_loss_candidate(_inputs())
+    settings = dict(inputs.policy.settings.values)
+    settings["max_sell_tickers_per_batch"] = 2
+    allocation = replace(
+        inputs.policy.allocation,
+        sleeves=(
+            AllocationSleeve(
+                "equity", None, True, target_pct=Decimal(90), drift_band_pp=Decimal(10)
+            ),
+            AllocationSleeve(
+                "cash",
+                None,
+                True,
+                cash_sleeve=True,
+                target_pct=Decimal(10),
+                drift_band_pp=Decimal(10),
+            ),
+            AllocationSleeve(
+                "legacy", "equity", True, target_pct=Decimal(50), drift_band_pp=Decimal(0)
+            ),
+            AllocationSleeve(
+                "destination", "equity", True, target_pct=Decimal(50), drift_band_pp=Decimal(0)
+            ),
+            AllocationSleeve(
+                "old", "destination", True, target_pct=Decimal(100), drift_band_pp=Decimal(100)
+            ),
+        ),
+        allowed_securities=(
+            AllowedSecurity("NEWETF", "equity", "destination", 0, True, "replacement"),
+        ),
+    )
+    inputs = replace(
+        inputs,
+        policy=replace(
+            inputs.policy,
+            allocation=allocation,
+            settings=PolicySettings(tuple(sorted(settings.items()))),
+        ),
+        positions=tuple(
+            replace(
+                row,
+                assignment=(
+                    SleeveAssignment("equity", "legacy")
+                    if row.ticker == "AAPL"
+                    else SleeveAssignment("destination", "old")
+                ),
+            )
+            for row in inputs.positions
+        ),
+        lots=tuple(
+            replace(row, shares=Decimal(1), available_shares=Decimal(1)) for row in inputs.lots
+        ),
+    )
+
+    result = optimize_worker(OptimizerRequest(inputs), time.monotonic() + 10)
+
+    sells = [leg for leg in result.legs if leg.side == "SELL"]
+    assert result.status == "ready", (result.metadata.warnings, result.legs)
+    assert {leg.ticker for leg in sells} == {"AAPL", "MSFT"}
+    assert all(leg.shares == Decimal(1) for leg in sells)
+    assert not any(leg.side == "BUY" for leg in result.legs)
+    validation = validate_candidate(inputs, result.legs)
+    assert validation.accepted, validation.reasons
+
+
+def test_replacement_reservation_respects_joint_turnover_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _add_msft_loss_candidate(_inputs())
+    settings = dict(inputs.policy.settings.values)
+    settings.update(
+        {
+            "max_sell_tickers_per_batch": 2,
+            "max_batch_turnover_pct": Decimal(10),
+        }
+    )
+    allocation = replace(
+        inputs.policy.allocation,
+        sleeves=(
+            *inputs.policy.allocation.sleeves,
+            AllocationSleeve("A", "equity", True, target_pct=Decimal(50), drift_band_pp=Decimal(0)),
+            AllocationSleeve("B", "equity", True, target_pct=Decimal(50), drift_band_pp=Decimal(0)),
+        ),
+        allowed_securities=(AllowedSecurity("NEWETF", "equity", "A", 0, True, "replacement"),),
+    )
+    inputs = replace(
+        inputs,
+        account=replace(
+            inputs.account,
+            cash_usd=Decimal(100),
+            settled_buying_power_usd=Decimal(100),
+        ),
+        policy=replace(
+            inputs.policy,
+            allocation=allocation,
+            settings=PolicySettings(tuple(sorted(settings.items()))),
+        ),
+        positions=tuple(
+            replace(
+                row,
+                shares=Decimal(20),
+                market_value_usd=Decimal(400 if row.ticker == "AAPL" else 600),
+                assignment=SleeveAssignment("equity", "A" if row.ticker == "AAPL" else "B"),
+            )
+            for row in inputs.positions
+        ),
+        lots=tuple(
+            replace(
+                row,
+                shares=Decimal(1),
+                available_shares=Decimal(1),
+                adjusted_unit_basis_usd=Decimal(40),
+            )
+            for row in inputs.lots
+        ),
+        quotes=tuple(
+            replace(
+                row,
+                bid_usd=Decimal(
+                    20 if row.ticker == "AAPL" else 30 if row.ticker == "MSFT" else 100
+                ),
+                ask_usd=Decimal(
+                    20 if row.ticker == "AAPL" else 30 if row.ticker == "MSFT" else 100
+                ),
+            )
+            for row in inputs.quotes
+        ),
+    )
+
+    result = optimize_worker(OptimizerRequest(inputs), time.monotonic() + 10)
+
+    sells = [leg for leg in result.legs if leg.side == "SELL"]
+    assert result.status == "ready", (
+        result.metadata.warnings,
+        result.metadata.solver_statuses,
+        result.legs,
+    )
+    assert {leg.ticker for leg in sells} == {"AAPL", "MSFT"}
+    assert all(leg.shares == Decimal(1) for leg in sells)
+    assert sum(leg.shares * leg.estimated_unit_price_usd for leg in result.legs) == Decimal(50)
+    assert not any(leg.side == "BUY" for leg in result.legs)
+    validation = validate_candidate(inputs, result.legs)
+    assert validation.accepted, validation.reasons
+
+
 @pytest.mark.parametrize(
     ("cash_usd", "settled_buying_power_usd", "cash_reserve_usd", "fee_per_order_usd"),
     [

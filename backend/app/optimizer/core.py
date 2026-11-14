@@ -18,7 +18,7 @@ from typing import Any
 import cvxpy as cp
 
 from app.domain.allocation import AllocationSleeve, assignment_path, resolve_cash, resolve_holding
-from app.domain.decimal_math import exact_product, exact_sum
+from app.domain.decimal_math import exact_product, exact_sum, percentage
 from app.domain.exposure import aggregate_lookthrough_exposure
 from app.domain.financial_inputs import FinancialInputs, LotInput, PositionInput, QuoteInput
 from app.domain.portfolio_accounting import (
@@ -278,6 +278,117 @@ def _unit_sector_weights(
 
 def _whole_floor(value: Decimal) -> Decimal:
     return value.to_integral_value(rounding=ROUND_FLOOR)
+
+
+def _whole_ceil(value: Decimal) -> Decimal:
+    floor = _whole_floor(value)
+    return floor if floor == value else floor + _ONE
+
+
+def _replacement_witness_shares(
+    inputs: FinancialInputs,
+    evaluation: PortfolioEvaluation,
+    buy: _BuyCandidate,
+    violated_sleeves: set[str],
+    minimum_shares: Decimal,
+    maximum_shares: Decimal,
+    deadline: float,
+) -> Decimal | None:
+    """Find a whole-share BUY witness that keeps every affected sleeve within its owner bounds."""
+    if not violated_sleeves or minimum_shares > maximum_shares:
+        return None
+
+    sleeve_policy = {row.key: row for row in inputs.policy.allocation.sleeves if row.enabled}
+    target_rows = {row.sleeve_key: row for row in evaluation.allocation.target.sleeves}
+    current_values = dict(evaluation.current.sleeve_values_usd)
+    proposed_values = dict(evaluation.proposed.sleeve_values_usd)
+    buy_path = set(buy.assignment_path)
+    cash_resolution = resolve_cash(inputs.policy.allocation)
+    cash_path = (
+        set(
+            assignment_path(
+                inputs.policy.allocation,
+                cash_resolution.assignment.sleeve_key,
+                cash_resolution.assignment.sub_sleeve_key,
+            )
+            or ()
+        )
+        if cash_resolution.assignment is not None
+        else set()
+    )
+    affected_sleeves = {
+        key
+        for key, sleeve in sleeve_policy.items()
+        if key in violated_sleeves
+        or key in buy_path
+        or key in cash_path
+        or sleeve.parent_key in buy_path
+        or sleeve.parent_key in cash_path
+    }
+    minimum = minimum_shares
+    maximum = maximum_shares
+    buy_price = buy.execution_price
+
+    for index, key in enumerate(affected_sleeves):
+        if index % 64 == 0 and time.monotonic() >= deadline:
+            return None
+        sleeve = sleeve_policy.get(key)
+        target_row = target_rows.get(key)
+        if sleeve is None or target_row is None:
+            return None
+        parent_key = sleeve.parent_key
+        target = (
+            target_row.target_whole_portfolio_pct
+            if parent_key is None
+            else target_row.target_within_parent_pct
+        )
+        band = sleeve.drift_band_pp or _ZERO
+        current_parent = (
+            evaluation.current.portfolio_total_usd
+            if parent_key is None
+            else current_values.get(parent_key, _ZERO)
+        )
+        current_pct = (
+            percentage(current_values.get(key, _ZERO), current_parent)
+            if current_parent > _ZERO
+            else _ZERO
+        )
+        lower_bound = min(current_pct, target - band)
+        upper_bound = max(current_pct, target + band)
+        denominator = (
+            evaluation.proposed.portfolio_total_usd
+            if parent_key is None
+            else proposed_values.get(parent_key, _ZERO)
+        )
+        numerator = proposed_values.get(key, _ZERO) * _HUNDRED
+        key_delta = buy_price * _HUNDRED * (int(key in buy_path) - int(key in cash_path))
+        parent_delta = (
+            buy_price * (int(parent_key in buy_path) - int(parent_key in cash_path))
+            if parent_key is not None
+            else _ZERO
+        )
+
+        lower_coefficient = key_delta - lower_bound * parent_delta
+        lower_required = lower_bound * denominator - numerator
+        if lower_coefficient > _ZERO:
+            minimum = max(minimum, lower_required / lower_coefficient)
+        elif lower_coefficient < _ZERO:
+            maximum = min(maximum, lower_required / lower_coefficient)
+        elif lower_required > _ZERO:
+            return None
+
+        upper_coefficient = key_delta - upper_bound * parent_delta
+        upper_allowed = upper_bound * denominator - numerator
+        if upper_coefficient > _ZERO:
+            maximum = min(maximum, upper_allowed / upper_coefficient)
+        elif upper_coefficient < _ZERO:
+            minimum = max(minimum, upper_allowed / upper_coefficient)
+        elif upper_allowed < _ZERO:
+            return None
+
+    whole_minimum = _whole_ceil(minimum)
+    whole_maximum = _whole_floor(maximum)
+    return whole_minimum if whole_minimum <= whole_maximum else None
 
 
 def _mark_price(quote: QuoteInput) -> Decimal | None:
@@ -955,6 +1066,8 @@ def _screen(
         )
         fundable_notional = min(cash_fundable, settled_fundable)
 
+        reserve_sale_ids = {candidate.lot.broker_lot_id for candidate in reserve_sales}
+        max_turnover_usd = baseline.current.portfolio_total_usd * turnover_pct / _HUNDRED
         for candidate in reserve_sales:
             if time.monotonic() >= deadline:
                 return None, ("deadline_during_sell_buy_capacity_screening",)
@@ -972,8 +1085,12 @@ def _screen(
                 (f"sale:{candidate.lot.ticker.upper()}",),
             )
             validation = validate_candidate(inputs, (sale_leg,), deadline)
-            if not validation.reasons or not all(
-                reason.startswith("sleeve_drift_worsened:") for reason in validation.reasons
+            if (
+                not validation.reasons
+                or not all(
+                    reason.startswith("sleeve_drift_worsened:") for reason in validation.reasons
+                )
+                or validation.evaluation is None
             ):
                 continue
             violated_sleeves = {
@@ -982,12 +1099,57 @@ def _screen(
             for buy in potential_buys:
                 if time.monotonic() >= deadline:
                     return None, ("deadline_during_sell_buy_capacity_screening",)
-                if not violated_sleeves.intersection(buy.assignment_path):
-                    continue
                 fundable_shares = min(
                     buy.maximum_shares, _whole_floor(fundable_notional / buy.execution_price)
                 )
-                if fundable_shares < _ONE or buy.execution_price * fundable_shares < buy_minimum:
+                minimum_shares = max(_ONE, _whole_ceil(buy_minimum / buy.execution_price))
+                witness_shares = _replacement_witness_shares(
+                    inputs,
+                    validation.evaluation,
+                    buy,
+                    violated_sleeves,
+                    minimum_shares,
+                    fundable_shares,
+                    deadline,
+                )
+                if time.monotonic() >= deadline:
+                    return None, ("deadline_during_sell_buy_capacity_screening",)
+                if witness_shares is None:
+                    continue
+
+                mandatory_clearance_ids: set[str] = set()
+                for group_index, (clearance_ids, triggers) in enumerate(wash_dependency_groups):
+                    if group_index % 64 == 0 and time.monotonic() >= deadline:
+                        return None, ("deadline_during_sell_buy_capacity_screening",)
+                    if not any(
+                        trigger.lot.broker_lot_id == candidate.lot.broker_lot_id
+                        for trigger in triggers
+                    ) or not all(lot_id in reserve_sale_ids for lot_id in clearance_ids):
+                        continue
+                    mandatory_clearance_ids.update(clearance_ids)
+                mandatory_clearance_turnover = exact_sum(
+                    exact_product(
+                        candidate_by_id[lot_id].execution_price,
+                        _whole_floor(candidate_by_id[lot_id].maximum_shares),
+                    )
+                    for lot_id in mandatory_clearance_ids
+                )
+                candidate_sale_turnover = (
+                    _ZERO
+                    if candidate.lot.broker_lot_id in mandatory_clearance_ids
+                    else candidate.execution_price
+                )
+                buy_notional = exact_product(witness_shares, buy.execution_price)
+                required_sale_proceeds = max(
+                    _ZERO,
+                    buy_notional + cash_reserve + order_fees - inputs.account.cash_usd,
+                    buy_notional + order_fees - inputs.account.settled_buying_power_usd,
+                )
+                required_sell_turnover = max(
+                    required_sale_proceeds,
+                    mandatory_clearance_turnover + candidate_sale_turnover,
+                )
+                if required_sell_turnover + buy_notional > max_turnover_usd:
                     continue
                 reserved_buy_ticker = buy.ticker
                 break

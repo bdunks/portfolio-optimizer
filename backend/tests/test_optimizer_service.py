@@ -261,6 +261,30 @@ async def test_run_validated_candidate_rejects_fee_underfunded_nonempty_basket(
         "basket_unchanged": True,
     }
 
+def test_sell_persistence_rejects_missing_owner_validated_lot_effects() -> None:
+    leg = ConsolidatedLeg(
+        "sell:ABC",
+        "SELL",
+        "ABC",
+        Decimal(1),
+        Decimal(10),
+        (LotAllocation("LOT-1", Decimal(1)),),
+        (),
+        0,
+        ("sale:ABC",),
+    )
+    outcome = optimizer_service.ValidatedOptimizerCandidate(
+        Candidate((leg,)), Validation(True), time.monotonic() + 1, "ready"
+    )
+
+    with pytest.raises(
+        AppError, match="missing accepted owner-validated lot effects"
+    ) as error:
+        optimizer_service._validated_lot_effects(outcome, (leg,))
+
+    assert error.value.code == "optimizer_core_contract_error"
+
+
 
 @pytest.mark.asyncio
 async def test_run_validated_candidate_rejects_late_owner_validation(monkeypatch: pytest.MonkeyPatch) -> None:

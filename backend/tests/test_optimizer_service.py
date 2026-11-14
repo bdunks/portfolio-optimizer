@@ -33,6 +33,7 @@ from app.db.session import create_database_engine
 from app.domain.decimal_math import exact_difference, exact_product, exact_sum
 from app.domain.financial_inputs import PolicySettings
 from app.domain.portfolio_accounting import ConsolidatedLeg, LotAllocation
+from app.optimizer.core import OptimizerResult
 from app.optimizer.runtime import (
     ProcessSupervisor,
     WorkerCapacityError,
@@ -1543,7 +1544,8 @@ async def test_create_run_persists_native_fee_adjusted_multilot_basket(
             run_id = run.id
 
         assert len(native_candidates) == 1
-        native_legs = cast(tuple[ConsolidatedLeg, ...], getattr(native_candidates[0], "legs"))
+        native_result = cast(OptimizerResult, native_candidates[0])
+        native_legs = native_result.legs
         sells = [leg for leg in native_legs if leg.side == "SELL"]
         buys = [leg for leg in native_legs if leg.side == "BUY"]
         assert len(sells) == len(buys) == 1

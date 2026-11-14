@@ -1282,6 +1282,7 @@ def _persist_candidate(
             lot_rows.append((allocation, lot, realized, term))
         st_realized = exact_sum(st_realized_values)
         lt_realized = exact_sum(lt_realized_values)
+        primary_group = min(core_groups, key=lambda group_id: rank_for_group[group_id])
         persisted_leg = RecommendationLeg(
             id=persistent_id,
             group_id=groups_by_core[primary_group].id,

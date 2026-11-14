@@ -30,9 +30,15 @@ from app.db.models import (
     Security,
 )
 from app.db.session import create_database_engine
+from app.domain.decimal_math import exact_difference, exact_product, exact_sum
 from app.domain.financial_inputs import PolicySettings
 from app.domain.portfolio_accounting import ConsolidatedLeg, LotAllocation
-from app.optimizer.runtime import WorkerCapacityError, WorkerResult, WorkerTimeoutError
+from app.optimizer.runtime import (
+    ProcessSupervisor,
+    WorkerCapacityError,
+    WorkerResult,
+    WorkerTimeoutError,
+)
 from app.optimizer.validation import CandidateValidation, validate_candidate
 from app.schemas import (
     OptimizerLotReviewIntentInput,
@@ -42,6 +48,7 @@ from app.schemas import (
 from app.services import optimizer_service
 from app.services.errors import AppError
 from tests.optimizer_benchmark_fixture import build_optimizer_benchmark_inputs
+from tests.test_optimizer_core import _fee_safety_inputs, _inputs
 
 
 @dataclass(frozen=True)
@@ -201,6 +208,57 @@ async def test_run_validated_candidate_does_not_publish_rejected_candidate(monke
     assert error.value.code == "optimizer_candidate_rejected"
     assert error.value.details == {"reasons": ["cash_shortfall"], "basket_unchanged": True}
 
+
+
+@pytest.mark.asyncio
+async def test_run_validated_candidate_rejects_fee_underfunded_nonempty_basket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _inputs()
+    settings = dict(inputs.policy.settings.values)
+    settings["estimated_fee_per_order_usd"] = Decimal(1)
+    inputs = replace(
+        inputs,
+        account=replace(
+            inputs.account,
+            cash_usd=Decimal(100),
+            settled_buying_power_usd=Decimal(100),
+        ),
+        policy=replace(
+            inputs.policy,
+            settings=PolicySettings(tuple(sorted(settings.items()))),
+        ),
+    )
+    buy = ConsolidatedLeg(
+        "buy:NEWETF",
+        "BUY",
+        "NEWETF",
+        Decimal(1),
+        Decimal(100),
+        (),
+        (),
+        1,
+        ("buy:NEWETF",),
+    )
+    candidate = Candidate(
+        (buy,),
+        metadata=Metadata(inputs.source_generation, inputs.source_checksum),
+    )
+    supervisor = FakeSupervisor(candidate)
+    monkeypatch.setattr(
+        optimizer_service,
+        "_core_contract",
+        lambda: (Request, lambda request, deadline: candidate, validate_candidate),
+    )
+
+    with pytest.raises(AppError) as error:
+        await optimizer_service.run_validated_candidate(inputs, supervisor)  # type: ignore[arg-type]
+
+    assert error.value.code == "optimizer_candidate_rejected"
+    assert error.value.details == {
+        "reasons": ["accounting:insufficient_cash"],
+        "basket_unchanged": True,
+    }
 
 @pytest.mark.asyncio
 async def test_run_validated_candidate_rejects_late_owner_validation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1400,6 +1458,159 @@ def test_published_financial_metrics_use_owner_validation_and_survive_summary_re
         assert summary["optimizer_metrics"]["estimated_tax_benefit_usd"] is None
         assert summary["optimizer_metrics"]["estimated_trading_cost_usd"] == "1.23"
     engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_create_run_persists_native_fee_adjusted_multilot_basket(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inputs = _fee_safety_inputs()
+    settings = inputs.policy.settings
+    batch_settings: dict[str, object] = {
+        "max_sell_tickers_per_batch": settings.get("max_sell_tickers_per_batch"),
+        "max_sell_lots_per_batch": settings.get("max_sell_lots_per_batch"),
+        "max_total_orders_per_batch": settings.get("max_total_orders_per_batch"),
+        "max_batch_turnover_pct": str(settings.get("max_batch_turnover_pct")),
+        "min_buy_order_notional_usd": str(settings.get("min_buy_order_notional_usd")),
+        "cash_reserve_usd": str(settings.get("cash_reserve_usd")),
+    }
+    frozen_bundle = inputs.to_provenance()
+    frozen_bundle["batch_settings"] = batch_settings
+    frozen_bundle["mode"] = "real_optimizer"
+    input_fingerprint = optimizer_service._fingerprint_bundle(frozen_bundle)
+    frozen_bundle["input_fingerprint"] = input_fingerprint
+    prepared = optimizer_service.PreparedOptimizerRun(
+        inputs=inputs,
+        batch_settings=batch_settings,
+        frozen_input_bundle=frozen_bundle,
+        input_fingerprint=input_fingerprint,
+        policy_revision_id=_POLICY_ID,
+        source_generation=inputs.source_generation,
+        as_of=inputs.account.as_of,
+        proposed_trade_date=inputs.proposed_trade_date,
+    )
+    engine, session_factory = _create_sqlite_optimizer_run(tmp_path, selected=False)
+    with session_factory.begin() as session:
+        session.add_all(
+            (
+                Security(id=2, ticker="AAPL", asset_type="EQUITY"),
+                Security(id=3, ticker="NEWETF", asset_type="ETF"),
+            )
+        )
+
+    def prepare(
+        _session: Session,
+        _request: object,
+        *,
+        proposed_trade_date: date | None = None,
+        batch_limits: object | None = None,
+    ) -> optimizer_service.PreparedOptimizerRun:
+        del proposed_trade_date, batch_limits
+        return prepared
+
+    def current(
+        _session: Session,
+        _prepared: optimizer_service.PreparedOptimizerRun,
+        *,
+        deadline: float | None = None,
+    ) -> None:
+        del deadline
+
+    monkeypatch.setattr(optimizer_service, "prepare_optimizer_run", prepare)
+    monkeypatch.setattr(optimizer_service, "assert_optimizer_run_current", current)
+
+    supervisor = ProcessSupervisor()
+    native_candidates: list[object] = []
+    run_native = supervisor.run
+
+    async def capture_native_candidate(
+        request: object, worker: Callable[..., object]
+    ) -> WorkerResult[object]:
+        result = await run_native(request, worker)
+        native_candidates.append(result.value)
+        return result
+
+    monkeypatch.setattr(supervisor, "run", capture_native_candidate)
+    try:
+        with session_factory() as session:
+            run = await optimizer_service.create_production_run(
+                session,
+                optimizer_service.OptimizerRunInput(mode="real_optimizer"),
+                supervisor,
+                cast(optimizer_service.BoundedValidationExecutor, None),
+                correlation_id="fee-safety-native-run",
+            )
+            run_id = run.id
+
+        assert len(native_candidates) == 1
+        native_legs = cast(tuple[ConsolidatedLeg, ...], getattr(native_candidates[0], "legs"))
+        sells = [leg for leg in native_legs if leg.side == "SELL"]
+        buys = [leg for leg in native_legs if leg.side == "BUY"]
+        assert len(sells) == len(buys) == 1
+        assert len(sells[0].selected_lots) == 2
+        assert all(leg.shares == leg.shares.to_integral_value() for leg in native_legs)
+        assert buys[0].depends_on_leg_ids == (sells[0].leg_id,)
+
+        validation = validate_candidate(inputs, native_legs)
+        assert validation.accepted, validation.reasons
+        assert validation.evaluation is not None
+        assert validation.estimated_trading_cost_usd == Decimal(2)
+        assert validation.evaluation.proposed.cash_usd == Decimal(198)
+        assert {effect.term for effect in validation.evaluation.lot_effects} == {"ST", "LT"}
+        effects = {effect.broker_lot_id: effect for effect in validation.evaluation.lot_effects}
+        gross_realized = exact_sum(
+            exact_product(
+                exact_difference(sells[0].estimated_unit_price_usd, lot.adjusted_unit_basis_usd),
+                effects[lot.broker_lot_id].shares_sold,
+            )
+            for lot in inputs.lots
+            if lot.broker_lot_id in effects
+        )
+        assert exact_difference(
+            gross_realized,
+            exact_sum(effect.realized_pl_usd for effect in effects.values()),
+        ) == Decimal(1)
+
+        with session_factory() as session:
+            saved_run = session.get(OptimizerRun, run_id)
+            assert saved_run is not None
+            response = optimizer_service.real_run_recommendations(session, saved_run)
+            assert saved_run.status == "COMPLETE"
+            assert saved_run.metrics["orders_count"] == 2
+            assert saved_run.metrics["constraints_satisfied"] is True
+            assert saved_run.metrics["cash_after_usd"] == "198"
+            assert saved_run.metrics["estimated_trading_cost_usd"] == "2"
+            policy = cast(dict[str, object], saved_run.frozen_input_bundle["policy"])
+            fee_settings = cast(dict[str, object], policy["settings"])
+            assert fee_settings["estimated_fee_per_order_usd"] == "1"
+
+            readback_legs = cast(list[dict[str, object]], response["consolidated_legs"])
+            assert len(readback_legs) == 2
+            readback_sell = next(leg for leg in readback_legs if leg["side"] == "SELL")
+            readback_buy = next(leg for leg in readback_legs if leg["side"] == "BUY")
+            assert readback_buy["dependencies"] == [readback_sell["leg_id"]]
+            assert Decimal(str(readback_buy["shares"])).to_integral_value() == Decimal(
+                str(readback_buy["shares"])
+            )
+            selected = cast(list[dict[str, object]], readback_sell["selected_lots"])
+            readback_lots = {str(row["broker_lot_id"]): row for row in selected}
+            assert set(readback_lots) == set(effects)
+            for lot_id, effect in effects.items():
+                row = readback_lots[lot_id]
+                assert row["st_lt"] == effect.term
+                assert Decimal(str(row["shares"])) == effect.shares_sold
+                assert Decimal(str(row["realized_pl_usd"])) == effect.realized_pl_usd
+            assert Decimal(str(readback_sell["net_st_realized_usd"])) == validation.evaluation.realized_st_usd
+            assert Decimal(str(readback_sell["net_lt_realized_usd"])) == validation.evaluation.realized_lt_usd
+
+            groups = cast(list[dict[str, object]], response["groups"])
+            assert len(groups) == 1
+            impact = cast(dict[str, object], groups[0]["impact"])
+            assert Decimal(str(impact["realized_st_usd"])) == validation.evaluation.realized_st_usd
+            assert Decimal(str(impact["realized_lt_usd"])) == validation.evaluation.realized_lt_usd
+    finally:
+        await supervisor.aclose()
+        engine.dispose()
 
 
 class RaisingSupervisor:

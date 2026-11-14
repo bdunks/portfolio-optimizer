@@ -32,10 +32,10 @@ from app.db.models import (
     SyncState,
 )
 from app.domain.allocation import resolve_holding
-from app.domain.decimal_math import exact_difference, exact_product, exact_sum
+from app.domain.decimal_math import exact_product, exact_sum
 from app.domain.financial_inputs import FinancialInputs, PolicySettings
-from app.domain.portfolio_accounting import ConsolidatedLeg
-from app.domain.trade_dates import classify_holding_period, resolve_proposed_trade_date
+from app.domain.portfolio_accounting import ConsolidatedLeg, LotEffect
+from app.domain.trade_dates import resolve_proposed_trade_date
 from app.optimizer.runtime import (
     DEFAULT_TIMEOUT_SECONDS,
     ProcessSupervisor,
@@ -732,6 +732,70 @@ def _clear_run_recommendations(session: Session, run: OptimizerRun) -> None:
     session.execute(delete(RecommendationGroup).where(RecommendationGroup.id.in_(group_ids)))
 
 
+def _validated_lot_effects(
+    outcome: ValidatedOptimizerCandidate, legs: Sequence[ConsolidatedLeg]
+) -> dict[str, LotEffect]:
+    """Use owner-validated per-lot results when publishing consolidated SELLs."""
+    expected: dict[str, tuple[str, Decimal]] = {}
+    for leg in legs:
+        if leg.side != "SELL":
+            continue
+        for allocation in leg.selected_lots:
+            if allocation.broker_lot_id in expected:
+                raise AppError(
+                    "optimizer_core_contract_error",
+                    "Optimizer output assigns a SELL lot more than once",
+                    status_code=502,
+                )
+            expected[allocation.broker_lot_id] = (leg.ticker.upper(), allocation.shares)
+    if not expected:
+        return {}
+
+    validation = outcome.validation
+    evaluation = getattr(validation, "evaluation", None)
+    raw_effects = getattr(evaluation, "lot_effects", None)
+    if getattr(validation, "accepted", None) is not True or not isinstance(raw_effects, tuple):
+        raise AppError(
+            "optimizer_core_contract_error",
+            "Optimizer SELL output is missing accepted owner-validated lot effects",
+            status_code=502,
+        )
+
+    effects: dict[str, LotEffect] = {}
+    for effect in raw_effects:
+        if (
+            not isinstance(effect, LotEffect)
+            or not effect.broker_lot_id
+            or effect.broker_lot_id in effects
+        ):
+            raise AppError(
+                "optimizer_core_contract_error",
+                "Optimizer owner validation returned invalid or duplicate lot effects",
+                status_code=502,
+            )
+        effects[effect.broker_lot_id] = effect
+    if set(effects) != set(expected):
+        raise AppError(
+            "optimizer_core_contract_error",
+            "Optimizer owner-validated lot effects do not match emitted SELL intent",
+            status_code=502,
+        )
+    for lot_id, (ticker, shares) in expected.items():
+        effect = effects[lot_id]
+        if (
+            effect.ticker.strip().upper() != ticker
+            or effect.shares_sold != shares
+            or effect.term not in {"ST", "LT"}
+            or not effect.realized_pl_usd.is_finite()
+        ):
+            raise AppError(
+                "optimizer_core_contract_error",
+                "Optimizer owner-validated lot effects do not match emitted SELL intent",
+                status_code=502,
+            )
+    return effects
+
+
 def _persist_candidate(
     session: Session,
     run: OptimizerRun,
@@ -763,6 +827,7 @@ def _persist_candidate(
 
     active_group_ids = _core_group_ids(legs)
     lots_by_id = {lot.broker_lot_id: lot for lot in prepared.inputs.lots}
+    validated_lot_effects = _validated_lot_effects(outcome, legs)
     sell_lots_by_core: dict[str, list[str]] = {core_id: [] for core_id in active_group_ids}
     for leg in legs:
         core_ids = list(leg.group_ids) or [f"{leg.side.lower()}:{leg.ticker.upper()}"]
@@ -1091,22 +1156,29 @@ def _persist_candidate(
         group_sells = [leg for leg in group_legs if leg.side == "SELL"]
         group_buys = [leg for leg in group_legs if leg.side == "BUY"]
         selected_lots = [
-            (leg, allocation, lots_by_id.get(allocation.broker_lot_id))
+            (
+                allocation,
+                lots_by_id.get(allocation.broker_lot_id),
+                validated_lot_effects.get(allocation.broker_lot_id),
+            )
             for leg in group_sells
             for allocation in leg.selected_lots
         ]
         proceeds = exact_sum(exact_product(leg.estimated_unit_price_usd, leg.shares) for leg in group_sells)
-        realized_st = Decimal(0)
-        realized_lt = Decimal(0)
-        for leg, allocation, lot in selected_lots:
-            if lot is None:
-                raise AppError("optimizer_core_contract_error", "Optimizer selected a lot outside frozen inputs", status_code=502)
-            realized = exact_product(exact_difference(leg.estimated_unit_price_usd, lot.adjusted_unit_basis_usd), allocation.shares)
-            term = classify_holding_period(lot.acquired_date, prepared.proposed_trade_date)
-            if term == "ST":
-                realized_st += realized
-            else:
-                realized_lt += realized
+        realized_st_values: list[Decimal] = []
+        realized_lt_values: list[Decimal] = []
+        for _allocation, lot, effect in selected_lots:
+            if lot is None or effect is None:
+                raise AppError(
+                    "optimizer_core_contract_error",
+                    "Optimizer owner-validated lot effects do not match frozen SELL lots",
+                    status_code=502,
+                )
+            (realized_st_values if effect.term == "ST" else realized_lt_values).append(
+                effect.realized_pl_usd
+            )
+        realized_st = exact_sum(realized_st_values)
+        realized_lt = exact_sum(realized_lt_values)
         exclusive_buys = [leg for leg in group_buys if len(leg.group_ids) == 1]
         buy_is_fully_attributed = len(exclusive_buys) == len(group_buys)
         rationale = tuple(getattr(priority, "rationale", ())) if priority is not None else ()
@@ -1192,21 +1264,24 @@ def _persist_candidate(
         persistent_dependencies = [leg_ids[item] for item in leg.depends_on_leg_ids if item in leg_ids]
         if len(persistent_dependencies) != len(leg.depends_on_leg_ids):
             raise AppError("optimizer_core_contract_error", "Optimizer leg references an unknown dependency", status_code=502)
-        st_realized = Decimal(0)
-        lt_realized = Decimal(0)
+        st_realized_values: list[Decimal] = []
+        lt_realized_values: list[Decimal] = []
         lot_rows: list[tuple[object, object, Decimal, str]] = []
         for allocation in leg.selected_lots:
             lot = lots_by_id.get(allocation.broker_lot_id)
-            if lot is None or allocation.shares <= 0:
-                raise AppError("optimizer_core_contract_error", "Optimizer lot attribution is invalid", status_code=502)
-            term = classify_holding_period(lot.acquired_date, prepared.proposed_trade_date)
-            realized = exact_product(exact_difference(leg.estimated_unit_price_usd, lot.adjusted_unit_basis_usd), allocation.shares)
-            if term == "ST":
-                st_realized += realized
-            else:
-                lt_realized += realized
+            effect = validated_lot_effects.get(allocation.broker_lot_id)
+            if lot is None or effect is None or allocation.shares <= 0:
+                raise AppError(
+                    "optimizer_core_contract_error",
+                    "Optimizer lot attribution is missing owner-validated effects",
+                    status_code=502,
+                )
+            term = effect.term
+            realized = effect.realized_pl_usd
+            (st_realized_values if term == "ST" else lt_realized_values).append(realized)
             lot_rows.append((allocation, lot, realized, term))
-        primary_group = min(core_groups, key=lambda group_id: rank_for_group[group_id])
+        st_realized = exact_sum(st_realized_values)
+        lt_realized = exact_sum(lt_realized_values)
         persisted_leg = RecommendationLeg(
             id=persistent_id,
             group_id=groups_by_core[primary_group].id,

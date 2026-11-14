@@ -646,6 +646,43 @@ def test_consolidated_multi_lot_sell_allocates_one_fee_across_tax_terms(
     assert result.estimated_trading_cost_usd == Decimal(2)
 
 
+def test_validator_rejects_buy_funding_shortfall_after_order_fee(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_objective_accessor(monkeypatch)
+    inputs = _inputs()
+    settings = dict(inputs.policy.settings.values)
+    settings["estimated_fee_per_order_usd"] = Decimal(1)
+    inputs = replace(
+        inputs,
+        account=replace(
+            inputs.account,
+            cash_usd=Decimal(100),
+            settled_buying_power_usd=Decimal(100),
+        ),
+        policy=replace(
+            inputs.policy,
+            settings=PolicySettings(tuple(sorted(settings.items()))),
+        ),
+    )
+    buy = ConsolidatedLeg(
+        "buy:NEWETF",
+        "BUY",
+        "NEWETF",
+        Decimal(1),
+        Decimal(100),
+        (),
+        (),
+        1,
+        ("buy:NEWETF",),
+    )
+
+    result = validate_candidate(inputs, (buy,))
+
+    assert not result.accepted
+    assert result.reasons == ("accounting:insufficient_cash",)
+    assert result.evaluation is None
+
 @pytest.mark.parametrize(
     ("equity_value", "cash_value", "side", "shares", "accepted"),
     [
@@ -2322,25 +2359,59 @@ def _wash_clearance_inputs(
     )
 
 
+def _fee_safety_inputs() -> FinancialInputs:
+    inputs = _wash_clearance_inputs()
+    settings = dict(inputs.policy.settings.values)
+    settings["estimated_fee_per_order_usd"] = Decimal(1)
+    lots = tuple(
+        replace(lot, acquired_date=TRADE_DATE - timedelta(days=400))
+        if lot.broker_lot_id == "loss-lot"
+        else lot
+        for lot in inputs.lots
+    )
+    return replace(
+        inputs,
+        lots=lots,
+        policy=replace(
+            inputs.policy,
+            settings=PolicySettings(tuple(sorted(settings.items()))),
+        ),
+    )
+
+
 def test_worker_sells_full_recent_wash_clearance_quantity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _install_objective_accessor(monkeypatch)
-    inputs = _wash_clearance_inputs()
+    inputs = _fee_safety_inputs()
 
     result = optimize_worker(OptimizerRequest(inputs), time.monotonic() + 10)
 
     assert result.status == "ready"
+    sells = [leg for leg in result.legs if leg.side == "SELL"]
+    buys = [leg for leg in result.legs if leg.side == "BUY"]
+    assert len(sells) == 1
+    assert len(buys) == 1
+    assert len(result.legs) <= inputs.policy.settings.get("max_total_orders_per_batch")
+    assert len(sells) <= inputs.policy.settings.get("max_sell_tickers_per_batch")
+    assert len(sells[0].selected_lots) <= inputs.policy.settings.get("max_sell_lots_per_batch")
     sold_lots = {
-        allocation.broker_lot_id: allocation.shares
-        for leg in result.legs
-        if leg.side == "SELL"
-        for allocation in leg.selected_lots
+        allocation.broker_lot_id: allocation.shares for allocation in sells[0].selected_lots
     }
-    assert sold_lots["loss-lot"] > 0
-    assert sold_lots["recent-aapl-clearance-lot"] == Decimal(1)
-    assert validate_candidate(inputs, result.legs).accepted
+    assert sold_lots == {
+        "loss-lot": Decimal(5),
+        "recent-aapl-clearance-lot": Decimal(1),
+    }
+    assert buys[0].depends_on_leg_ids == (sells[0].leg_id,)
+    assert all(leg.shares == leg.shares.to_integral_value() for leg in result.legs)
 
+    validation = validate_candidate(inputs, result.legs)
+    assert validation.accepted, validation.reasons
+    assert validation.evaluation is not None
+    assert validation.estimated_trading_cost_usd == Decimal(2)
+    assert validation.evaluation.proposed.cash_usd == Decimal(198)
+    assert validation.evaluation.proposed.cash_usd >= inputs.policy.settings.get("cash_reserve_usd")
+    assert {effect.term for effect in validation.evaluation.lot_effects} == {"ST", "LT"}
 
 def test_shared_wash_clearance_does_not_merge_independent_losses(
     monkeypatch: pytest.MonkeyPatch,

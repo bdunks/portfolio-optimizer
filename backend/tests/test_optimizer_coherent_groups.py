@@ -257,7 +257,6 @@ def _inputs_with_disjoint_aapl_lot(
     assert updated_baseline.accepted
     assert updated_baseline.evaluation is not None
     original_sale = next(row for row in screen.sales if row.lot.broker_lot_id == "loss-lot")
-    updated_sales = tuple(
     updated_sales = (
         *(
             replace(row, lot=loss_lot, maximum_shares=Decimal(9))
@@ -700,7 +699,8 @@ async def test_real_writer_fails_closed_when_rejected_disjoint_lot_alias_owns_ac
         assert run is not None
         initial = optimizer_service.real_run_recommendations(session, run)
         initial_groups = initial["groups"]
-        assert isinstance(initial_groups, list) and len(initial_groups) == 1
+        assert isinstance(initial_groups, list)
+        assert len(initial_groups) == 1
         original_public_id = initial_groups[0]["group_id"]
 
     with session_factory() as session:
@@ -756,25 +756,22 @@ async def test_real_writer_fails_closed_when_rejected_disjoint_lot_alias_owns_ac
         assert before["consolidated_legs"] == []
         assert run.metrics["basket_revision"] > 0
 
-    ownership_conflict = False
-    try:
-        with session_factory() as session:
-            await optimizer_service.apply_real_selection(
-                session,
-                run_id,
-                OptimizerSelectionInput(
-                    selected_group_ids=[str(original_public_id)],
-                    selected_sell_lots={
-                        str(original_public_id): ["loss-lot", "msft-loss-lot"]
-                    },
-                ),
-                object(),
-                None,
-                correlation_id="restore-original-lots-as-independent-sales",
-            )
-    except AppError as error:
-        ownership_conflict = True
-        assert error.code == "optimizer_review_ownership_conflict"
+    with pytest.raises(AppError) as ownership_error, session_factory() as session:
+        await optimizer_service.apply_real_selection(
+            session,
+            run_id,
+            OptimizerSelectionInput(
+                selected_group_ids=[str(original_public_id)],
+                selected_sell_lots={
+                    str(original_public_id): ["loss-lot", "msft-loss-lot"]
+                },
+            ),
+            object(),
+            None,
+            correlation_id="restore-original-lots-as-independent-sales",
+        )
+    ownership_conflict = True
+    assert ownership_error.value.code == "optimizer_review_ownership_conflict"
 
     with session_factory() as session:
         run = session.get(OptimizerRun, run_id)
@@ -800,7 +797,7 @@ async def test_real_writer_fails_closed_when_rejected_disjoint_lot_alias_owns_ac
 
 @pytest.mark.parametrize(
     ("aapl_shares", "msft_shares", "expected_first_group"),
-    ((1, 2, "sale:MSFT"), (2, 1, "sale:AAPL")),
+    [(1, 2, "sale:MSFT"), (2, 1, "sale:AAPL")],
 )
 @pytest.mark.asyncio
 async def test_real_writer_reserves_inherited_group_id_before_split_fallbacks(
@@ -877,7 +874,8 @@ async def test_real_writer_reserves_inherited_group_id_before_split_fallbacks(
         assert run is not None
         initial = optimizer_service.real_run_recommendations(session, run)
         initial_groups = initial["groups"]
-        assert isinstance(initial_groups, list) and len(initial_groups) == 1
+        assert isinstance(initial_groups, list)
+        assert len(initial_groups) == 1
         inherited_public_id = initial_groups[0]["group_id"]
     with session_factory() as session:
         await optimizer_service.apply_real_lot_review_intent(
@@ -896,7 +894,8 @@ async def test_real_writer_reserves_inherited_group_id_before_split_fallbacks(
         assert run is not None
         narrowed = optimizer_service.real_run_recommendations(session, run)
         narrowed_groups = narrowed["groups"]
-        assert isinstance(narrowed_groups, list) and len(narrowed_groups) == 1
+        assert isinstance(narrowed_groups, list)
+        assert len(narrowed_groups) == 1
         assert narrowed_groups[0]["group_id"] == inherited_public_id
     with session_factory() as session:
         await optimizer_service.apply_real_lot_review_intent(

@@ -16,6 +16,9 @@ from app.services.errors import AppError
 
 logger = logging.getLogger(__name__)
 
+# OAuth dependency DEBUG records include signed headers and verifier parameters.
+for _dependency_logger in ("requests_oauthlib", "oauthlib"):
+    logging.getLogger(_dependency_logger).setLevel(logging.WARNING)
 REQUEST_TOKEN_URL = "https://api.etrade.com/oauth/request_token"
 ACCESS_TOKEN_URL = "https://api.etrade.com/oauth/access_token"
 RENEW_TOKEN_URL = "https://api.etrade.com/oauth/renew_access_token"
@@ -282,7 +285,13 @@ class EtradeOAuthService:
         try:
             fields = parse_qs(body, keep_blank_values=True, strict_parsing=True, max_num_fields=20)
         except ValueError:
-            fields = {}
+            logger.warning("E*TRADE OAuth renew-access-token response was invalid")
+            raise AppError(
+                "etrade_oauth_invalid_response",
+                "E*TRADE returned an invalid renew-access-token response.",
+                status_code=502,
+                details={"operation": "renew-access-token"},
+            ) from None
         token_values = fields.get("oauth_token", [])
         secret_values = fields.get("oauth_token_secret", [])
         if not token_values and not secret_values:

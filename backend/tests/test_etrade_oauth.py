@@ -530,6 +530,126 @@ def test_renewal_idle_boundaries_activity_and_hard_expiry() -> None:
     service.close()
 
 
+def test_malformed_renewal_response_expires_tokens_without_extending_activity(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    initial = datetime(2026, 11, 5, 16, 0, tzinfo=UTC)
+    clock = FixedClock(initial)
+    service, _, calls = _active_service(
+        clock,
+        [
+            _token_response("request-token", "request-secret-marker"),
+            _token_response("access-token-marker", "access-secret-marker"),
+            _response(200, text="oauth_token=partial-token-marker"),
+        ],
+    )
+    clock.now += timedelta(minutes=90, seconds=1)
+
+    with pytest.raises(AppError) as error:
+        service.auth_for_read()
+
+    assert error.value.status_code == 502
+    assert error.value.code == "etrade_oauth_invalid_response"
+    assert error.value.details == {"operation": "renew-access-token"}
+    status = service.status()
+    assert status["status"] == "expired"
+    assert status["authenticated"] is False
+    assert status["last_activity_at"] == initial
+    assert len(calls) == 3
+    with pytest.raises(AppError) as unusable:
+        service.auth_for_read()
+    assert unusable.value.status_code == 401
+    assert all(
+        value not in caplog.text
+        for value in (
+            "consumer-secret-test",
+            "request-secret-marker",
+            "access-token-marker",
+            "access-secret-marker",
+            "partial-token-marker",
+        )
+    )
+    service.close()
+
+
+def test_empty_body_renewal_retains_active_tokens() -> None:
+    initial = datetime(2026, 11, 5, 16, 0, tzinfo=UTC)
+    clock = FixedClock(initial)
+    service, _, calls = _active_service(
+        clock,
+        [
+            _token_response("request-token", "request-secret"),
+            _token_response("access-token", "access-secret"),
+            _response(200),
+        ],
+    )
+    clock.now += timedelta(minutes=90, seconds=1)
+
+    session = service.auth_for_read()
+    session.close()
+    status = service.status()
+    assert status["status"] == "authenticated"
+    assert status["last_activity_at"] == clock.now
+    assert status["renewal_due"] is False
+    assert len(calls) == 3
+    service.close()
+
+
+def test_oauth_dependency_debug_logging_does_not_expose_credentials(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    clock = FixedClock(datetime(2026, 11, 5, 16, 0, tzinfo=UTC))
+    service, _, calls = _service(
+        clock,
+        [
+            _token_response("request-public-token", "request-private-secret"),
+            _token_response("access-private-token", "access-private-secret"),
+            _token_response("rotated-access-token", "rotated-access-secret"),
+            _response(200, text="{}"),
+        ],
+    )
+    started = service.start()
+    assert parse_qs(urlsplit(started["authorize_url"]).query)["token"] == [
+        "request-public-token"
+    ]
+    service.verify("246810")
+    clock.now += timedelta(minutes=90, seconds=1)
+
+    session = service.auth_for_read()
+    try:
+        response = session.get(
+            "https://api.etrade.com/v1/future-read?count=200",
+            timeout=10,
+            allow_redirects=False,
+        )
+    finally:
+        session.close()
+    assert response.status_code == 200
+    assert [call.url for call in calls] == [
+        "https://api.etrade.com/oauth/request_token",
+        "https://api.etrade.com/oauth/access_token",
+        "https://api.etrade.com/oauth/renew_access_token",
+        "https://api.etrade.com/v1/future-read?count=200",
+    ]
+    assert "OAuth request-token request completed (HTTP 200)" in caplog.text
+    assert "OAuth access-token request completed (HTTP 200)" in caplog.text
+    assert "OAuth renew-access-token request completed (HTTP 200)" in caplog.text
+    assert all(
+        value not in caplog.text
+        for value in (
+            "consumer-private-secret",
+            "request-private-secret",
+            "access-private-token",
+            "access-private-secret",
+            "rotated-access-token",
+            "rotated-access-secret",
+            "246810",
+        )
+    )
+    service.close()
+
 def test_renewal_failure_expires_tokens_and_hides_broker_body(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

@@ -90,7 +90,6 @@ def _fixture_dimensions(inputs: FinancialInputs) -> dict[str, Any]:
         "held_position_count": len(inputs.positions),
         "security_count": len(inputs.securities),
         "lot_count": len(inputs.lots),
-        "eligible_lot_count": sum(lot.available_shares > 0 for lot in inputs.lots),
         "available_lot_count": sum(lot.available_shares > 0 for lot in inputs.lots),
         "controlled_restrictions": {
             key: settings.get(key)
@@ -269,7 +268,6 @@ async def run_benchmark(trials: int, seed: int, scenario: str = "baseline") -> d
             "held_positions": records[0].get("held_position_count") if records else None,
             "securities": records[0].get("security_count") if records else None,
             "lots": records[0].get("lot_count") if records else None,
-            "eligible_lots": records[0].get("eligible_lot_count") if records else None,
             "available_lots": records[0].get("available_lot_count") if records else None,
             "controlled_restrictions": records[0].get("controlled_restrictions")
             if records
@@ -277,7 +275,7 @@ async def run_benchmark(trials: int, seed: int, scenario: str = "baseline") -> d
             "seed_start": seed,
             "trial_count": trials,
             "seed_variants_change_basis_data": True,
-            "description": "Synthetic one-account taxable portfolio; scenario restrictions and available lots are disclosed per trial. No broker, database, or network access.",
+            "description": "Synthetic one-account taxable portfolio; scenario restrictions and available-lot counts (available_shares > 0) are disclosed per trial; actual optimizer eligibility counts are not measured. No broker, database, or network access.",
         },
         "environment": {
             "platform": platform.platform(),

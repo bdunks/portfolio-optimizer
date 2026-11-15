@@ -83,7 +83,7 @@ def test_trial_defaults_to_baseline_and_forwards_scenario(monkeypatch: object) -
     assert scenario_row["scenario"] == "recent_loss"
     assert scenario_row["held_position_count"] == 1
     assert scenario_row["security_count"] == 2
-    assert scenario_row["eligible_lot_count"] == 1
+    assert scenario_row["available_lot_count"] == 1
     assert (
         scenario_row["repair_all_validation_rank_seconds"]
         >= scenario_row["repair_validate_rank_seconds"]

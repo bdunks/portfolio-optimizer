@@ -4,16 +4,16 @@ import asyncio
 import multiprocessing
 import os
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from multiprocessing.synchronize import Event
 from pathlib import Path
-from types import SimpleNamespace
 from typing import cast
 
 import pytest
+import pytest_asyncio
 from sqlalchemy import Engine, delete, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -30,10 +30,23 @@ from app.db.models import (
     Security,
 )
 from app.db.session import create_database_engine
+from app.domain.allocation import SecurityIdentity
 from app.domain.decimal_math import exact_difference, exact_product, exact_sum
-from app.domain.financial_inputs import PolicySettings
+from app.domain.financial_inputs import (
+    FinancialInputs,
+    LotInput,
+    PolicySettings,
+    PositionInput,
+    QuoteInput,
+    SecurityInput,
+)
 from app.domain.portfolio_accounting import ConsolidatedLeg, LotAllocation
-from app.optimizer.core import OptimizerResult
+from app.optimizer.core import (
+    OptimizerMetadata,
+    OptimizerRequest,
+    OptimizerResult,
+    TradeGroupPriority,
+)
 from app.optimizer.runtime import (
     ProcessSupervisor,
     WorkerCapacityError,
@@ -53,15 +66,9 @@ from tests.test_optimizer_core import _fee_safety_inputs, _inputs
 
 
 @dataclass(frozen=True)
-class Request:
-    inputs: object
-    sell_lot_ids: tuple[str, ...] | None
-
-
-@dataclass(frozen=True)
 class Metadata:
     input_generation: int = 1
-    source_checksum: str = "checksum"
+    source_checksum: str | None = "test-checksum"
 
 
 @dataclass(frozen=True)
@@ -92,78 +99,205 @@ def _validated_outcome(
     )
 
 
-@dataclass(frozen=True)
-class Policy:
-    settings: PolicySettings
+def _error_details(error: AppError) -> dict[str, object]:
+    details = error.details
+    assert isinstance(details, dict)
+    return details
 
 
-@dataclass(frozen=True)
-class Inputs:
-    policy: Policy
-    source_generation: int = 1
-    source_checksum: str = "checksum"
+@pytest_asyncio.fixture
+async def optimizer_runtime() -> AsyncIterator[
+    tuple[ProcessSupervisor, optimizer_service.BoundedValidationExecutor]
+]:
+    supervisor = ProcessSupervisor()
+    validation_executor = optimizer_service.BoundedValidationExecutor()
+    try:
+        yield supervisor, validation_executor
+    finally:
+        await validation_executor.aclose()
+        await supervisor.aclose()
 
 
-@dataclass(frozen=True)
-class ServiceLot:
-    ticker: str
-    broker_lot_id: str
-    available_shares: Decimal = Decimal(1)
-    acquired_date: date = date(2025, 1, 1)
-    adjusted_unit_basis_usd: Decimal = Decimal(10)
+def _patch_supervisor_run(
+    monkeypatch: pytest.MonkeyPatch,
+    supervisor: ProcessSupervisor,
+    value: object,
+    *,
+    deadline: float | None = None,
+    seen_requests: list[OptimizerRequest] | None = None,
+) -> None:
+    async def run(
+        request: OptimizerRequest,
+        worker: Callable[..., object],
+        *,
+        timeout_seconds: float = 10.0,
+        validation_reserve_seconds: float = 2.0,
+    ) -> WorkerResult[object]:
+        if seen_requests is not None:
+            seen_requests.append(request)
+        overall_deadline = deadline if deadline is not None else time.monotonic() + timeout_seconds
+        computation_deadline = overall_deadline - validation_reserve_seconds
+        result = worker(request, computation_deadline)
+        assert result is value
+        return WorkerResult(result, computation_deadline, overall_deadline)
+
+    monkeypatch.setattr(supervisor, "run", run)
 
 
-@dataclass(frozen=True)
-class ServiceInputs:
-    lots: tuple[ServiceLot, ...]
+def _patch_supervisor_error(
+    monkeypatch: pytest.MonkeyPatch,
+    supervisor: ProcessSupervisor,
+    error: Exception,
+) -> None:
+    async def run(
+        request: OptimizerRequest,
+        worker: Callable[..., object],
+        *,
+        timeout_seconds: float = 10.0,
+        validation_reserve_seconds: float = 2.0,
+    ) -> WorkerResult[object]:
+        del request, worker, timeout_seconds, validation_reserve_seconds
+        raise error
 
-    @property
-    def account(self) -> SimpleNamespace:
-        return SimpleNamespace(cash_usd=Decimal(0))
-
-
-class FakeSupervisor:
-    def __init__(self, value: object, *, deadline: float | None = None) -> None:
-        self.value = value
-        self.deadline = deadline
-        self.request: object | None = None
-
-    async def run(self, request: object, worker: Callable[..., object]) -> WorkerResult[object]:
-        self.request = request
-        deadline = self.deadline if self.deadline is not None else time.monotonic() + 2
-        value = worker(request, deadline - 1)
-        assert value is self.value
-        return WorkerResult(value, deadline - 1, deadline)
+    monkeypatch.setattr(supervisor, "run", run)
 
 
-def _batch_inputs() -> Inputs:
-    return Inputs(
-        Policy(
-            PolicySettings.from_mapping(
-                {
-                    "max_sell_tickers_per_batch": 5,
-                    "max_sell_lots_per_batch": 8,
-                    "max_total_orders_per_batch": 6,
-                    "max_batch_turnover_pct": "5.0",
-                    "min_buy_order_notional_usd": "500.00",
-                    "cash_reserve_usd": "25.00",
-                }
-            )
+def _worker_returning(
+    candidate: object,
+) -> Callable[[OptimizerRequest, float], object]:
+    def worker(request: OptimizerRequest, deadline: float) -> object:
+        del request, deadline
+        return candidate
+
+    return worker
+
+
+def _validator_returning(validation: object) -> Callable[..., object]:
+    def validator(
+        _inputs: FinancialInputs,
+        _legs: tuple[object, ...],
+        *,
+        deadline: float | None = None,
+    ) -> object:
+        del deadline
+        return validation
+
+    return validator
+
+
+def _core_contract_for(
+    worker: Callable[[OptimizerRequest, float], object],
+    validator: Callable[..., object],
+) -> Callable[[], tuple[type[OptimizerRequest], Callable[..., object], Callable[..., object]]]:
+    def contract() -> tuple[type[OptimizerRequest], Callable[..., object], Callable[..., object]]:
+        return OptimizerRequest, worker, validator
+
+    return contract
+
+
+def _batch_inputs() -> FinancialInputs:
+    inputs = _inputs()
+    settings = inputs.policy.settings.to_provenance()
+    settings.update(
+        {
+            "max_sell_tickers_per_batch": 5,
+            "max_sell_lots_per_batch": 8,
+            "max_total_orders_per_batch": 6,
+            "max_batch_turnover_pct": "5.0",
+            "min_buy_order_notional_usd": "500.00",
+            "cash_reserve_usd": "25.00",
+        }
+    )
+    return replace(
+        inputs,
+        policy=replace(
+            inputs.policy,
+            settings=PolicySettings.from_mapping(settings),
+        ),
+    )
+
+
+def _service_inputs(
+    ticker_lot_ids: tuple[tuple[str, str], ...], *, cash: Decimal = Decimal(0)
+) -> FinancialInputs:
+    inputs = _inputs()
+    shares_by_ticker: dict[str, Decimal] = {}
+    for ticker, _lot_id in ticker_lot_ids:
+        shares_by_ticker[ticker] = shares_by_ticker.get(ticker, Decimal(0)) + Decimal(1)
+
+    lots = tuple(
+        LotInput(
+            ticker=ticker,
+            broker_lot_id=lot_id,
+            acquired_date=date(2025, 1, 1),
+            shares=Decimal(1),
+            available_shares=Decimal(1),
+            adjusted_unit_basis_usd=Decimal(10),
+            broker_wash_adjustment_usd=None,
+            source="TEST",
+            as_of=inputs.account.as_of,
+            fractional_cleanup_unsupported=False,
+            quality_flags=(),
+            sync_generation=inputs.source_generation,
         )
+        for ticker, lot_id in ticker_lot_ids
+    )
+    securities = tuple(
+        SecurityInput(SecurityIdentity(ticker, "EQUITY")) for ticker in sorted(shares_by_ticker)
+    ) + tuple(
+        security
+        for security in inputs.securities
+        if security.identity.ticker not in shares_by_ticker
+    )
+    positions = tuple(
+        PositionInput(
+            ticker=ticker,
+            asset_type="EQUITY",
+            is_completion_etf=False,
+            shares=shares,
+            sync_generation=inputs.source_generation,
+            as_of=inputs.account.as_of,
+            market_value_usd=Decimal(10) * shares,
+            assignment=inputs.positions[0].assignment,
+        )
+        for ticker, shares in sorted(shares_by_ticker.items())
+    )
+    quotes = tuple(
+        QuoteInput(
+            ticker=ticker,
+            bid_usd=Decimal(10),
+            ask_usd=Decimal(10),
+            last_usd=Decimal(10),
+            source="TEST",
+            as_of=inputs.account.as_of,
+            quality="fresh",
+            sync_generation=inputs.source_generation,
+        )
+        for ticker in sorted(shares_by_ticker)
+    ) + tuple(quote for quote in inputs.quotes if quote.ticker not in shares_by_ticker)
+    account = replace(
+        inputs.account,
+        cash_usd=cash,
+        settled_buying_power_usd=cash,
+    )
+    return replace(
+        inputs,
+        account=account,
+        securities=securities,
+        positions=positions,
+        lots=lots,
+        quotes=quotes,
     )
 
 
 def test_batch_overrides_are_immutable_tightenings() -> None:
     inputs = _batch_inputs()
-    request = type(
-        "RunInput",
-        (),
-        {
-            "max_sell_tickers_per_batch": 3,
-            "max_sell_lots_per_batch": None,
-            "max_total_orders_per_batch": 4,
-        },
-    )()
+    request = optimizer_service.OptimizerRunInput(
+        mode="real_optimizer",
+        max_sell_tickers_per_batch=3,
+        max_sell_lots_per_batch=None,
+        max_total_orders_per_batch=4,
+    )
 
     limited, settings = optimizer_service.apply_run_batch_limits(inputs, request)
 
@@ -177,7 +311,9 @@ def test_batch_overrides_are_immutable_tightenings() -> None:
 
 def test_batch_override_cannot_widen_active_policy() -> None:
     inputs = _batch_inputs()
-    request = type("RunInput", (), {"max_sell_tickers_per_batch": 6})()
+    request = optimizer_service.OptimizerRunInput(
+        mode="real_optimizer", max_sell_tickers_per_batch=6
+    )
 
     with pytest.raises(AppError, match="tighten but cannot widen") as error:
         optimizer_service.apply_run_batch_limits(inputs, request)
@@ -188,32 +324,38 @@ def test_batch_override_cannot_widen_active_policy() -> None:
 @pytest.mark.asyncio
 async def test_run_validated_candidate_passes_explicit_lot_subset_to_core(
     monkeypatch: pytest.MonkeyPatch,
+    optimizer_runtime: tuple[ProcessSupervisor, optimizer_service.BoundedValidationExecutor],
 ) -> None:
+    supervisor, _validation_executor = optimizer_runtime
     candidate = Candidate((object(),))
-    supervisor = FakeSupervisor(candidate)
     seen: dict[str, object] = {}
+    seen_requests: list[OptimizerRequest] = []
 
-    def worker(request: Request, deadline: float) -> Candidate:
+    def worker(request: OptimizerRequest, deadline: float) -> Candidate:
         assert deadline > time.monotonic()
         return candidate
 
-    def validator(inputs: object, legs: tuple[object, ...], *, deadline: float) -> Validation:
+    def validator(
+        inputs: FinancialInputs, legs: tuple[object, ...], *, deadline: float
+    ) -> Validation:
         seen.update(inputs=inputs, legs=legs, deadline=deadline)
         return Validation(True)
 
     monkeypatch.setattr(
         optimizer_service,
         "_core_contract",
-        lambda: (Request, worker, validator),
+        _core_contract_for(worker, validator),
     )
+    _patch_supervisor_run(monkeypatch, supervisor, candidate, seen_requests=seen_requests)
     inputs = _batch_inputs()
     lots = ("LOT-1", "LOT-2")
 
-    result = await optimizer_service.run_validated_candidate(inputs, supervisor, sell_lot_ids=lots)  # type: ignore[arg-type]
+    result = await optimizer_service.run_validated_candidate(inputs, supervisor, sell_lot_ids=lots)
 
-    assert isinstance(supervisor.request, Request)
-    assert supervisor.request.inputs is inputs
-    assert supervisor.request.sell_lot_ids == lots
+    assert len(seen_requests) == 1
+    request = seen_requests[0]
+    assert request.inputs is inputs
+    assert request.sell_lot_ids == lots
     assert result.candidate is candidate
     assert result.validation is not None
     assert result.validation.accepted is True
@@ -223,23 +365,23 @@ async def test_run_validated_candidate_passes_explicit_lot_subset_to_core(
 @pytest.mark.asyncio
 async def test_run_validated_candidate_does_not_publish_rejected_candidate(
     monkeypatch: pytest.MonkeyPatch,
+    optimizer_runtime: tuple[ProcessSupervisor, optimizer_service.BoundedValidationExecutor],
 ) -> None:
+    supervisor, _validation_executor = optimizer_runtime
     candidate = Candidate((), status="no_trade")
     inputs = _batch_inputs()
-    supervisor = FakeSupervisor(candidate)
-
     monkeypatch.setattr(
         optimizer_service,
         "_core_contract",
-        lambda: (
-            Request,
-            lambda request, deadline: candidate,
-            lambda *args, **kwargs: Validation(False, ("cash_shortfall",)),
+        _core_contract_for(
+            _worker_returning(candidate),
+            _validator_returning(Validation(False, ("cash_shortfall",))),
         ),
     )
+    _patch_supervisor_run(monkeypatch, supervisor, candidate)
 
     with pytest.raises(AppError) as error:
-        await optimizer_service.run_validated_candidate(inputs, supervisor)  # type: ignore[arg-type]
+        await optimizer_service.run_validated_candidate(inputs, supervisor)
 
     assert error.value.code == "optimizer_candidate_rejected"
     assert error.value.details == {"reasons": ["cash_shortfall"], "basket_unchanged": True}
@@ -248,7 +390,9 @@ async def test_run_validated_candidate_does_not_publish_rejected_candidate(
 @pytest.mark.asyncio
 async def test_run_validated_candidate_rejects_fee_underfunded_nonempty_basket(
     monkeypatch: pytest.MonkeyPatch,
+    optimizer_runtime: tuple[ProcessSupervisor, optimizer_service.BoundedValidationExecutor],
 ) -> None:
+    supervisor, _validation_executor = optimizer_runtime
     inputs = _inputs()
     settings = dict(inputs.policy.settings.values)
     settings["estimated_fee_per_order_usd"] = Decimal(1)
@@ -279,15 +423,15 @@ async def test_run_validated_candidate_rejects_fee_underfunded_nonempty_basket(
         (buy,),
         metadata=Metadata(inputs.source_generation, inputs.source_checksum),
     )
-    supervisor = FakeSupervisor(candidate)
     monkeypatch.setattr(
         optimizer_service,
         "_core_contract",
-        lambda: (Request, lambda request, deadline: candidate, validate_candidate),
+        _core_contract_for(_worker_returning(candidate), validate_candidate),
     )
+    _patch_supervisor_run(monkeypatch, supervisor, candidate)
 
     with pytest.raises(AppError) as error:
-        await optimizer_service.run_validated_candidate(inputs, supervisor)  # type: ignore[arg-type]
+        await optimizer_service.run_validated_candidate(inputs, supervisor)
 
     assert error.value.code == "optimizer_candidate_rejected"
     assert error.value.details == {
@@ -319,22 +463,23 @@ def test_sell_persistence_rejects_missing_owner_validated_lot_effects() -> None:
 @pytest.mark.asyncio
 async def test_run_validated_candidate_rejects_late_owner_validation(
     monkeypatch: pytest.MonkeyPatch,
+    optimizer_runtime: tuple[ProcessSupervisor, optimizer_service.BoundedValidationExecutor],
 ) -> None:
+    supervisor, _validation_executor = optimizer_runtime
     candidate = Candidate((), status="no_trade")
     inputs = _batch_inputs()
-    supervisor = FakeSupervisor(candidate, deadline=time.monotonic() - 1)
     monkeypatch.setattr(
         optimizer_service,
         "_core_contract",
-        lambda: (
-            Request,
-            lambda request, deadline: candidate,
-            lambda *args, **kwargs: Validation(True),
+        _core_contract_for(
+            _worker_returning(candidate),
+            _validator_returning(Validation(True)),
         ),
     )
+    _patch_supervisor_run(monkeypatch, supervisor, candidate, deadline=time.monotonic() - 1)
 
     with pytest.raises(WorkerTimeoutError):
-        await optimizer_service.run_validated_candidate(inputs, supervisor)  # type: ignore[arg-type]
+        await optimizer_service.run_validated_candidate(inputs, supervisor)
 
 
 def _owner_validation_hang(started: Event, *, deadline: float) -> str:
@@ -526,9 +671,9 @@ class PublicationCandidate:
 
 
 def _sell_legs_for_ids(
-    inputs: object, broker_lot_ids: tuple[str, ...]
+    inputs: FinancialInputs, broker_lot_ids: tuple[str, ...]
 ) -> tuple[ConsolidatedLeg, ...]:
-    lots_by_id = {lot.broker_lot_id: lot for lot in getattr(inputs, "lots", ())}
+    lots_by_id = {lot.broker_lot_id: lot for lot in inputs.lots}
     grouped: dict[str, list[str]] = {}
     for broker_lot_id in broker_lot_ids:
         assert broker_lot_id in lots_by_id
@@ -553,7 +698,7 @@ def _sell_legs_for_ids(
 
 def _create_sqlite_optimizer_run(
     tmp_path: Path, *, selected: bool
-) -> tuple[Engine, Callable[[], Session]]:
+) -> tuple[Engine, sessionmaker[Session]]:
     engine = create_database_engine(f"sqlite:///{tmp_path / 'optimizer-service.db'}")
     Base.metadata.create_all(engine)
     now = datetime.now(UTC)
@@ -620,7 +765,7 @@ def _create_sqlite_optimizer_run(
 
 def _create_sqlite_subset_optimizer_run(
     tmp_path: Path,
-) -> tuple[Engine, Callable[[], Session]]:
+) -> tuple[Engine, sessionmaker[Session]]:
     engine = create_database_engine(f"sqlite:///{tmp_path / 'optimizer-subset-service.db'}")
     Base.metadata.create_all(engine)
     now = datetime.now(UTC)
@@ -740,18 +885,12 @@ def _create_sqlite_subset_optimizer_run(
 
 
 def _patch_real_run_dependencies(
-    monkeypatch: pytest.MonkeyPatch, *, inputs: object | None = None
+    monkeypatch: pytest.MonkeyPatch, *, inputs: FinancialInputs | None = None
 ) -> None:
     prepared_inputs = (
         inputs
         if inputs is not None
-        else ServiceInputs(
-            (
-                ServiceLot("ABC", "LOT-1"),
-                ServiceLot("ABC", "LOT-OLDER"),
-                ServiceLot("ABC", "LOT-NEWER"),
-            )
-        )
+        else _service_inputs((("ABC", "LOT-1"), ("ABC", "LOT-OLDER"), ("ABC", "LOT-NEWER")))
     )
     prepared = optimizer_service.PreparedOptimizerRun(
         inputs=prepared_inputs,
@@ -763,17 +902,17 @@ def _patch_real_run_dependencies(
         frozen_input_bundle={"mode": "real_optimizer"},
         input_fingerprint="service-fingerprint",
         policy_revision_id=_POLICY_ID,
-        source_generation=1,
-        as_of=datetime(2026, 11, 13, tzinfo=UTC),
-        proposed_trade_date=date(2026, 11, 13),
+        source_generation=prepared_inputs.source_generation,
+        as_of=prepared_inputs.account.as_of,
+        proposed_trade_date=prepared_inputs.proposed_trade_date,
     )
 
     def prepare(
         _session: Session,
-        _request: object,
+        _request: optimizer_service.OptimizerRunInput,
         *,
         proposed_trade_date: date | None = None,
-        batch_limits: object | None = None,
+        batch_limits: Mapping[str, object] | None = None,
     ) -> optimizer_service.PreparedOptimizerRun:
         del proposed_trade_date, batch_limits
         return prepared
@@ -802,9 +941,9 @@ def _persist_test_candidate(
     _prepared: optimizer_service.PreparedOptimizerRun,
     outcome: optimizer_service.ValidatedOptimizerCandidate,
     *,
-    selected_groups: object = None,
-    annotation_overrides: object = None,
-    expected_universe: object = None,
+    selected_groups: Mapping[str, bool] | None = None,
+    annotation_overrides: Mapping[str, Mapping[str, object]] | None = None,
+    expected_universe: Mapping[str, list[str]] | None = None,
 ) -> None:
     del selected_groups, expected_universe
     if isinstance(annotation_overrides, dict):
@@ -845,9 +984,9 @@ def _persist_subset_candidate(
     prepared: optimizer_service.PreparedOptimizerRun,
     outcome: optimizer_service.ValidatedOptimizerCandidate,
     *,
-    selected_groups: object = None,
-    annotation_overrides: object = None,
-    expected_universe: object = None,
+    selected_groups: Mapping[str, bool] | None = None,
+    annotation_overrides: Mapping[str, Mapping[str, object]] | None = None,
+    expected_universe: Mapping[str, list[str]] | None = None,
 ) -> None:
     metrics = dict(run.metrics)
     revision = int(metrics.get("basket_revision", 0)) + 1
@@ -871,7 +1010,7 @@ def _persist_subset_candidate(
         .execution_options(populate_existing=True)
     ).all()
     groups_by_core = {
-        str(group.impact["core_group_id"]): group
+        group.impact["core_group_id"]: group
         for group in groups
         if isinstance(group.impact, dict) and isinstance(group.impact.get("core_group_id"), str)
     }
@@ -882,7 +1021,7 @@ def _persist_subset_candidate(
         impact["candidate_sell_lot_ids"] = universe.get(core_id, [])
         group.impact = impact
         if isinstance(selected_groups, dict):
-            group.selected = bool(selected_groups.get(core_id, core_id in active_core_ids))
+            group.selected = selected_groups.get(core_id, core_id in active_core_ids)
         values = overrides.get(core_id)
         if isinstance(values, dict):
             for field in ("selected", "rejected", "note", "rejection_reason"):
@@ -951,7 +1090,7 @@ def _persist_subset_candidate(
 
 
 def _get_run_rows(
-    session_factory: Callable[[], Session],
+    session_factory: sessionmaker[Session],
 ) -> tuple[OptimizerRun, RecommendationGroup, int]:
     with session_factory() as session:
         run = session.scalar(select(OptimizerRun).where(OptimizerRun.id == _RUN_ID))
@@ -964,17 +1103,25 @@ def _get_run_rows(
         return run, group, leg_count
 
 
-def _subset_inputs() -> ServiceInputs:
-    return ServiceInputs(
+def _subset_inputs() -> FinancialInputs:
+    return _service_inputs(
         (
-            ServiceLot("AAA", "LOT-A1"),
-            ServiceLot("AAA", "LOT-A2"),
-            ServiceLot("BBB", "LOT-B1"),
+            ("AAA", "LOT-A1"),
+            ("AAA", "LOT-A2"),
+            ("BBB", "LOT-B1"),
         )
     )
 
 
-def _subset_snapshot(session_factory: Callable[[], Session]) -> tuple[object, ...]:
+def _subset_snapshot(
+    session_factory: sessionmaker[Session],
+) -> tuple[
+    int,
+    tuple[tuple[str, bool, bool], ...],
+    tuple[str, ...],
+    tuple[object, ...],
+    int,
+]:
     with session_factory() as session:
         run = session.scalar(select(OptimizerRun).where(OptimizerRun.id == _SUBSET_RUN_ID))
         assert run is not None
@@ -1024,7 +1171,7 @@ async def test_concurrent_subset_publication_cannot_overwrite_newer_basket(
     release_older = asyncio.Event()
 
     async def fake_solve(
-        _inputs: object,
+        _inputs: FinancialInputs,
         _supervisor: optimizer_service.ProcessSupervisor,
         *,
         sell_lot_ids: tuple[str, ...] | None = None,
@@ -1112,7 +1259,7 @@ async def test_inflight_solve_is_invalidated_by_non_solving_rejection(
     release_solve = asyncio.Event()
 
     async def fake_solve(
-        _inputs: object,
+        _inputs: FinancialInputs,
         _supervisor: optimizer_service.ProcessSupervisor,
         *,
         sell_lot_ids: tuple[str, ...] | None = None,
@@ -1212,7 +1359,9 @@ async def test_note_only_annotation_does_not_increment_basket_revision(
 
 @pytest.mark.asyncio
 async def test_lot_intent_roundtrip_preserves_actual_selected_lots_and_rejected_groups(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    optimizer_runtime: tuple[ProcessSupervisor, optimizer_service.BoundedValidationExecutor],
 ) -> None:
     inputs = _subset_inputs()
     engine, session_factory = _create_sqlite_subset_optimizer_run(tmp_path)
@@ -1221,11 +1370,11 @@ async def test_lot_intent_roundtrip_preserves_actual_selected_lots_and_rejected_
     solve_lot_sets: list[tuple[str, ...]] = []
 
     async def fake_solve(
-        _inputs: object,
-        _supervisor: object,
+        _inputs: FinancialInputs,
+        _supervisor: ProcessSupervisor,
         *,
         sell_lot_ids: tuple[str, ...] | None = None,
-        validation_executor: object = None,
+        validation_executor: optimizer_service.BoundedValidationExecutor | None = None,
     ) -> optimizer_service.ValidatedOptimizerCandidate:
         del validation_executor
         assert sell_lot_ids is not None
@@ -1237,7 +1386,7 @@ async def test_lot_intent_roundtrip_preserves_actual_selected_lots_and_rejected_
         return _validated_outcome(candidate, Validation(True), time.monotonic() + 60, "ready")
 
     monkeypatch.setattr(optimizer_service, "run_validated_candidate", fake_solve)
-    supervisor = FakeSupervisor(None)
+    supervisor, validation_executor = optimizer_runtime
     initial_snapshot = _subset_snapshot(session_factory)
     assert initial_snapshot[2] == ("LOT-A1", "LOT-A2", "LOT-B1")
 
@@ -1247,7 +1396,7 @@ async def test_lot_intent_roundtrip_preserves_actual_selected_lots_and_rejected_
             _SUBSET_RUN_ID,
             OptimizerLotReviewIntentInput(source_generation=1, broker_lot_ids=["LOT-A1", "LOT-B1"]),
             supervisor,
-            None,
+            validation_executor,
             correlation_id="narrow-subset",
         )
     narrow_snapshot = _subset_snapshot(session_factory)
@@ -1262,7 +1411,7 @@ async def test_lot_intent_roundtrip_preserves_actual_selected_lots_and_rejected_
             _GROUP_B_ID,
             RecommendationAnnotationInput(rejected=True, rejection_reason="reviewed"),
             supervisor,
-            None,
+            validation_executor,
             correlation_id="reject-group-b",
         )
     rejected_snapshot = _subset_snapshot(session_factory)
@@ -1276,7 +1425,7 @@ async def test_lot_intent_roundtrip_preserves_actual_selected_lots_and_rejected_
             _SUBSET_RUN_ID,
             OptimizerSelectionInput(selected_group_ids=[_GROUP_A_ID]),
             supervisor,
-            None,
+            validation_executor,
             correlation_id="implicit-current-selection",
         )
     implicit_snapshot = _subset_snapshot(session_factory)
@@ -1291,11 +1440,12 @@ async def test_lot_intent_roundtrip_preserves_actual_selected_lots_and_rejected_
             _SUBSET_RUN_ID,
             OptimizerLotReviewIntentInput(source_generation=1, broker_lot_ids=["LOT-A1", "LOT-B1"]),
             supervisor,
-            None,
+            validation_executor,
             correlation_id="rejected-lot-intent",
         )
     assert error.value.code == "rejected_recommendation_group"
-    assert error.value.details["basket_unchanged"] is True
+    details = _error_details(error.value)
+    assert details["basket_unchanged"] is True
     assert len(solve_lot_sets) == solve_count_before_rejected_intent
     assert _subset_snapshot(session_factory) == before_rejected_intent
 
@@ -1306,7 +1456,7 @@ async def test_lot_intent_roundtrip_preserves_actual_selected_lots_and_rejected_
             _GROUP_B_ID,
             RecommendationAnnotationInput(rejected=False),
             supervisor,
-            None,
+            validation_executor,
             correlation_id="explicit-restore-group-b",
         )
     restored_snapshot = _subset_snapshot(session_factory)
@@ -1321,7 +1471,7 @@ async def test_lot_intent_roundtrip_preserves_actual_selected_lots_and_rejected_
             _SUBSET_RUN_ID,
             OptimizerLotReviewIntentInput(source_generation=1, broker_lot_ids=["LOT-A1", "LOT-B1"]),
             supervisor,
-            None,
+            validation_executor,
             correlation_id="explicit-restored-lot-intent",
         )
     final_snapshot = _subset_snapshot(session_factory)
@@ -1344,8 +1494,12 @@ async def test_lot_intent_roundtrip_preserves_actual_selected_lots_and_rejected_
 )
 @pytest.mark.asyncio
 async def test_worker_subset_result_must_exactly_match_positive_whole_lot_intent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, worker_shape: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_shape: str,
+    optimizer_runtime: tuple[ProcessSupervisor, optimizer_service.BoundedValidationExecutor],
 ) -> None:
+    supervisor, validation_executor = optimizer_runtime
     inputs = _subset_inputs()
     engine, session_factory = _create_sqlite_subset_optimizer_run(tmp_path)
     _patch_real_run_dependencies(monkeypatch, inputs=inputs)
@@ -1354,11 +1508,11 @@ async def test_worker_subset_result_must_exactly_match_positive_whole_lot_intent
     solve_lot_sets: list[tuple[str, ...]] = []
 
     async def fake_solve(
-        _inputs: object,
-        _supervisor: object,
+        _inputs: FinancialInputs,
+        _supervisor: ProcessSupervisor,
         *,
         sell_lot_ids: tuple[str, ...] | None = None,
-        validation_executor: object = None,
+        validation_executor: optimizer_service.BoundedValidationExecutor | None = None,
     ) -> optimizer_service.ValidatedOptimizerCandidate:
         del validation_executor
         assert sell_lot_ids is not None
@@ -1424,27 +1578,27 @@ async def test_worker_subset_result_must_exactly_match_positive_whole_lot_intent
             session,
             _SUBSET_RUN_ID,
             OptimizerLotReviewIntentInput(source_generation=1, broker_lot_ids=list(requested_lots)),
-            FakeSupervisor(None),
-            None,
+            supervisor,
+            validation_executor,
             correlation_id=f"invalid-worker-{worker_shape}",
         )
 
+    details = _error_details(error.value)
+    intent_errors = details["intent_errors"]
+    assert isinstance(intent_errors, list)
     assert error.value.code == "optimizer_subset_rejected"
-    assert error.value.details["basket_unchanged"] is True
-    assert error.value.details["expected_sell_lot_ids"] == list(requested_lots)
+    assert details["basket_unchanged"] is True
+    assert details["expected_sell_lot_ids"] == list(requested_lots)
     assert solve_lot_sets == [requested_lots]
     if worker_shape == "fractional_quantity":
-        assert "sell_quantity_not_positive_whole_shares" in error.value.details["intent_errors"]
-        assert "sell_lot_quantity_not_positive_whole_shares" in error.value.details["intent_errors"]
+        assert "sell_quantity_not_positive_whole_shares" in intent_errors
+        assert "sell_lot_quantity_not_positive_whole_shares" in intent_errors
     if worker_shape == "foreign_lot":
-        assert "sell_lot_id_outside_frozen_inputs" in error.value.details["intent_errors"]
+        assert "sell_lot_id_outside_frozen_inputs" in intent_errors
     if worker_shape == "exceeds_available":
-        assert (
-            "sell_lot_quantity_exceeds_frozen_available_shares"
-            in error.value.details["intent_errors"]
-        )
+        assert "sell_lot_quantity_exceeds_frozen_available_shares" in intent_errors
     if worker_shape == "wrong_ticker":
-        assert "sell_lot_ticker_mismatch" in error.value.details["intent_errors"]
+        assert "sell_lot_ticker_mismatch" in intent_errors
     assert _subset_snapshot(session_factory) == before
     engine.dispose()
 
@@ -1459,14 +1613,17 @@ def test_published_financial_metrics_use_owner_validation_and_survive_summary_re
     else:
         engine, session_factory = _create_sqlite_optimizer_run(tmp_path, selected=True)
         run_id = _RUN_ID
-    monkeypatch.setattr(
-        optimizer_service, "_stable_id", lambda _run_id, prefix, value: f"{prefix}:{value}"
-    )
 
-    metadata = SimpleNamespace(
+    def stable_id(_run_id: str, prefix: str, value: str) -> str:
+        return f"{prefix}:{value}"
+
+    monkeypatch.setattr(optimizer_service, "_stable_id", stable_id)
+
+    metadata = OptimizerMetadata(
+        input_generation=1,
+        source_checksum="checksum",
+        status="no_trade",
         solver="fake-solver",
-        implementation_version="fake-worker",
-        solver_versions={},
         solver_statuses=(),
         elapsed_seconds=0.1,
         screening_seconds=0.02,
@@ -1482,8 +1639,11 @@ def test_published_financial_metrics_use_owner_validation_and_survive_summary_re
         baseline_objective_value=Decimal(888888),
         estimated_tax_benefit_usd=Decimal(777777),
         estimated_trading_cost_usd=Decimal(666666),
+        exposure_coverage_complete=True,
+        rounding_attempts=0,
+        warnings=(),
         trade_group_priorities=(
-            SimpleNamespace(
+            TradeGroupPriority(
                 group_id="group-1",
                 rank=1,
                 priority_score=Decimal("4.56"),
@@ -1491,32 +1651,31 @@ def test_published_financial_metrics_use_owner_validation_and_survive_summary_re
                 rationale=("test rationale",),
             ),
         ),
-        exposure_coverage_complete=True,
-        rounding_attempts=0,
-        warnings=(),
     )
-    candidate = Candidate((), status="no_trade", metadata=metadata)  # type: ignore[arg-type]
-    validation = SimpleNamespace(
+    candidate = OptimizerResult("no_trade", (), metadata)
+    validation = CandidateValidation(
         accepted=True,
-        objective_value=Decimal("12.34"),
-        objective_components=(("tax", Decimal("2.34")),),
-        estimated_tax_benefit_usd=None,
-        estimated_trading_cost_usd=Decimal("1.23"),
+        reasons=(),
+        warnings=(),
         evaluation=None,
         tax=None,
         wash_assessments=(),
-        buy_wash_assessments=(),
         exposure_coverage=None,
+        objective_value=Decimal("12.34"),
+        estimated_tax_benefit_usd=None,
+        estimated_trading_cost_usd=Decimal("1.23"),
+        objective_components=(("tax", Decimal("2.34")),),
     )
+    prepared_inputs = _service_inputs((), cash=Decimal("10.00"))
     prepared = optimizer_service.PreparedOptimizerRun(
-        inputs=SimpleNamespace(lots=(), account=SimpleNamespace(cash_usd=Decimal("10.00"))),  # type: ignore[arg-type]
+        inputs=prepared_inputs,
         batch_settings={},
         frozen_input_bundle={"mode": "real_optimizer", "source_checksum": "test"},
         input_fingerprint="test-fingerprint",
         policy_revision_id=_SUBSET_POLICY_ID if subset else _POLICY_ID,
-        source_generation=1,
-        as_of=datetime(2026, 11, 13, tzinfo=UTC),
-        proposed_trade_date=date(2026, 11, 13),
+        source_generation=prepared_inputs.source_generation,
+        as_of=prepared_inputs.account.as_of,
+        proposed_trade_date=prepared_inputs.proposed_trade_date,
     )
     outcome = _validated_outcome(candidate, validation, time.monotonic() + 60, "no_trade")
 
@@ -1542,16 +1701,20 @@ def test_published_financial_metrics_use_owner_validation_and_survive_summary_re
         assert run.metrics["estimated_trading_cost_usd"] == "1.23"
         summary = optimizer_service.real_run_summary(run, session)
         assert summary["estimated_tax_benefit_usd"] is None
-        assert summary["optimizer_metrics"]["objective_value"] == "12.34"
-        assert summary["optimizer_metrics"]["baseline_objective_value"] is None
-        assert summary["optimizer_metrics"]["estimated_tax_benefit_usd"] is None
-        assert summary["optimizer_metrics"]["estimated_trading_cost_usd"] == "1.23"
+        summary_metrics = summary["optimizer_metrics"]
+        assert isinstance(summary_metrics, dict)
+        assert summary_metrics["objective_value"] == "12.34"
+        assert summary_metrics["baseline_objective_value"] is None
+        assert summary_metrics["estimated_tax_benefit_usd"] is None
+        assert summary_metrics["estimated_trading_cost_usd"] == "1.23"
     engine.dispose()
 
 
 @pytest.mark.asyncio
 async def test_create_run_persists_native_fee_adjusted_multilot_basket(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    optimizer_runtime: tuple[ProcessSupervisor, optimizer_service.BoundedValidationExecutor],
 ) -> None:
     inputs = _fee_safety_inputs()
     settings = inputs.policy.settings
@@ -1592,10 +1755,10 @@ async def test_create_run_persists_native_fee_adjusted_multilot_basket(
 
     def prepare(
         _session: Session,
-        _request: object,
+        _request: optimizer_service.OptimizerRunInput,
         *,
         proposed_trade_date: date | None = None,
-        batch_limits: object | None = None,
+        batch_limits: Mapping[str, object] | None = None,
     ) -> optimizer_service.PreparedOptimizerRun:
         del proposed_trade_date, batch_limits
         return prepared
@@ -1611,12 +1774,13 @@ async def test_create_run_persists_native_fee_adjusted_multilot_basket(
     monkeypatch.setattr(optimizer_service, "prepare_optimizer_run", prepare)
     monkeypatch.setattr(optimizer_service, "assert_optimizer_run_current", current)
 
-    supervisor = ProcessSupervisor()
+    supervisor, validation_executor = optimizer_runtime
     native_candidates: list[object] = []
     run_native = supervisor.run
 
     async def capture_native_candidate(
-        request: object, worker: Callable[..., object]
+        request: OptimizerRequest,
+        worker: Callable[[OptimizerRequest, float], object],
     ) -> WorkerResult[object]:
         result = await run_native(request, worker)
         native_candidates.append(result.value)
@@ -1629,13 +1793,14 @@ async def test_create_run_persists_native_fee_adjusted_multilot_basket(
                 session,
                 optimizer_service.OptimizerRunInput(mode="real_optimizer"),
                 supervisor,
-                cast(optimizer_service.BoundedValidationExecutor, None),
+                validation_executor,
                 correlation_id="fee-safety-native-run",
             )
             run_id = run.id
 
         assert len(native_candidates) == 1
-        native_result = cast(OptimizerResult, native_candidates[0])
+        native_result = native_candidates[0]
+        assert isinstance(native_result, OptimizerResult)
         native_legs = native_result.legs
         sells = [leg for leg in native_legs if leg.side == "SELL"]
         buys = [leg for leg in native_legs if leg.side == "BUY"]
@@ -1708,35 +1873,15 @@ async def test_create_run_persists_native_fee_adjusted_multilot_basket(
             assert Decimal(str(impact["realized_st_usd"])) == validation.evaluation.realized_st_usd
             assert Decimal(str(impact["realized_lt_usd"])) == validation.evaluation.realized_lt_usd
     finally:
-        await supervisor.aclose()
         engine.dispose()
 
 
-class RaisingSupervisor:
-    def __init__(self, error: Exception) -> None:
-        self.error = error
-
-    async def run(self, request: object, worker: Callable[..., object]) -> WorkerResult[object]:
-        del request, worker
-        raise self.error
-
-
-class RaisingValidationExecutor:
-    def __init__(self, error: Exception) -> None:
-        self.error = error
-
-    async def run(self, validator: Callable[..., object], *args: object, deadline: float) -> object:
-        del validator, args, deadline
-        raise self.error
-
-
-def _search_incomplete_candidate() -> SimpleNamespace:
-    metadata = SimpleNamespace(
+def _search_incomplete_candidate() -> OptimizerResult:
+    metadata = OptimizerMetadata(
         input_generation=1,
         source_checksum="checksum",
         status="search_incomplete",
         solver="OSQP",
-        implementation_version="test-core",
         solver_versions=(),
         solver_statuses=("OSQP:solver_error",),
         elapsed_seconds=0.1,
@@ -1749,30 +1894,31 @@ def _search_incomplete_candidate() -> SimpleNamespace:
         screened_lot_count=1,
         selected_lot_ids=(),
         candidate_types=(),
+        objective_value=None,
+        baseline_objective_value=None,
+        estimated_tax_benefit_usd=None,
+        estimated_trading_cost_usd=None,
         exposure_coverage_complete=None,
         rounding_attempts=0,
         warnings=("tax_region_search_incomplete_deadline_or_solver",),
+        implementation_version="test-core",
         trade_group_priorities=(),
     )
-    return SimpleNamespace(status="search_incomplete", legs=(), metadata=metadata)
+    return OptimizerResult("search_incomplete", (), metadata)
 
 
 def _test_core_contract(
     candidate: object,
-) -> tuple[type[Request], Callable[..., object], Callable[..., Validation]]:
-    def worker(request: Request, deadline: float) -> object:
-        del request, deadline
-        return candidate
-
-    def validator(*args: object, **kwargs: object) -> Validation:
-        del args, kwargs
-        return Validation(True)
-
-    return Request, worker, validator
+) -> tuple[type[OptimizerRequest], Callable[..., object], Callable[..., object]]:
+    return (
+        OptimizerRequest,
+        _worker_returning(candidate),
+        _validator_returning(Validation(True)),
+    )
 
 
 def _assert_initial_timeout_persisted(
-    session_factory: Callable[[], Session], error: AppError
+    session_factory: sessionmaker[Session], error: AppError
 ) -> OptimizerRun:
     assert error.code == "optimizer_timeout"
     assert error.status_code == 504
@@ -1812,36 +1958,38 @@ def _assert_initial_timeout_persisted(
 
 
 async def _create_test_real_run(
-    session: Session, supervisor: object, validation_executor: object
+    session: Session,
+    supervisor: ProcessSupervisor,
+    validation_executor: optimizer_service.BoundedValidationExecutor,
 ) -> OptimizerRun:
     return await optimizer_service.create_production_run(
         session,
         optimizer_service.OptimizerRunInput(mode="real_optimizer"),
-        supervisor,  # type: ignore[arg-type]
-        validation_executor,  # type: ignore[arg-type]
+        supervisor,
+        validation_executor,
         correlation_id="terminal-status-test",
     )
 
 
 @pytest.mark.asyncio
 async def test_initial_native_worker_timeout_persists_original_terminal_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    optimizer_runtime: tuple[ProcessSupervisor, optimizer_service.BoundedValidationExecutor],
 ) -> None:
     engine, session_factory = _create_sqlite_optimizer_run(tmp_path, selected=True)
     _patch_real_run_dependencies(monkeypatch, inputs=_batch_inputs())
     candidate = Candidate((), status="no_trade")
+    supervisor, validation_executor = optimizer_runtime
     monkeypatch.setattr(
         optimizer_service,
         "_core_contract",
         lambda: _test_core_contract(candidate),
     )
+    _patch_supervisor_error(monkeypatch, supervisor, WorkerTimeoutError("native worker deadline"))
     try:
         with session_factory() as session, pytest.raises(AppError) as error:
-            await _create_test_real_run(
-                session,
-                RaisingSupervisor(WorkerTimeoutError("native worker deadline")),
-                object(),
-            )
+            await _create_test_real_run(session, supervisor, validation_executor)
         _assert_initial_timeout_persisted(session_factory, error.value)
     finally:
         engine.dispose()
@@ -1849,23 +1997,31 @@ async def test_initial_native_worker_timeout_persists_original_terminal_run(
 
 @pytest.mark.asyncio
 async def test_initial_owner_validation_timeout_persists_terminal_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    optimizer_runtime: tuple[ProcessSupervisor, optimizer_service.BoundedValidationExecutor],
 ) -> None:
     engine, session_factory = _create_sqlite_optimizer_run(tmp_path, selected=True)
     _patch_real_run_dependencies(monkeypatch, inputs=_batch_inputs())
     candidate = Candidate((), status="no_trade")
+    supervisor, validation_executor = optimizer_runtime
     monkeypatch.setattr(
         optimizer_service,
         "_core_contract",
         lambda: _test_core_contract(candidate),
     )
+    _patch_supervisor_run(monkeypatch, supervisor, candidate)
+
+    async def fail_validation(
+        validator: Callable[..., object], *args: object, deadline: float
+    ) -> object:
+        del validator, args, deadline
+        raise WorkerTimeoutError("owner validation deadline")
+
+    monkeypatch.setattr(validation_executor, "run", fail_validation)
     try:
         with session_factory() as session, pytest.raises(AppError) as error:
-            await _create_test_real_run(
-                session,
-                FakeSupervisor(candidate),
-                RaisingValidationExecutor(WorkerTimeoutError("owner validation deadline")),
-            )
+            await _create_test_real_run(session, supervisor, validation_executor)
         _assert_initial_timeout_persisted(session_factory, error.value)
     finally:
         engine.dispose()
@@ -1873,21 +2029,31 @@ async def test_initial_owner_validation_timeout_persists_terminal_run(
 
 @pytest.mark.asyncio
 async def test_initial_publication_deadline_persists_timeout_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    optimizer_runtime: tuple[ProcessSupervisor, optimizer_service.BoundedValidationExecutor],
 ) -> None:
     engine, session_factory = _create_sqlite_optimizer_run(tmp_path, selected=True)
     _patch_real_run_dependencies(monkeypatch, inputs=_batch_inputs())
     candidate = Candidate((), status="no_trade")
+    supervisor, validation_executor = optimizer_runtime
     deadline = time.monotonic() - 1
 
     async def fake_solve(
-        *args: object, **kwargs: object
+        _inputs: FinancialInputs,
+        _supervisor: ProcessSupervisor,
+        *,
+        sell_lot_ids: tuple[str, ...] | None = None,
+        validation_executor: optimizer_service.BoundedValidationExecutor | None = None,
     ) -> optimizer_service.ValidatedOptimizerCandidate:
-        del args, kwargs
+        del _inputs, _supervisor, sell_lot_ids, validation_executor
         return _validated_outcome(candidate, Validation(True), deadline, "no_trade")
 
     def delayed_publication(
-        _session: Session, _prepared: object, *, deadline: float | None = None
+        _session: Session,
+        _prepared: optimizer_service.PreparedOptimizerRun,
+        *,
+        deadline: float | None = None,
     ) -> None:
         assert deadline is not None
         assert time.monotonic() >= deadline
@@ -1897,7 +2063,7 @@ async def test_initial_publication_deadline_persists_timeout_run(
     monkeypatch.setattr(optimizer_service, "assert_optimizer_run_current", delayed_publication)
     try:
         with session_factory() as session, pytest.raises(AppError) as error:
-            await _create_test_real_run(session, object(), object())
+            await _create_test_real_run(session, supervisor, validation_executor)
         _assert_initial_timeout_persisted(session_factory, error.value)
     finally:
         engine.dispose()
@@ -1905,26 +2071,26 @@ async def test_initial_publication_deadline_persists_timeout_run(
 
 @pytest.mark.asyncio
 async def test_capacity_rejection_is_not_persisted_as_timeout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    optimizer_runtime: tuple[ProcessSupervisor, optimizer_service.BoundedValidationExecutor],
 ) -> None:
     engine, session_factory = _create_sqlite_optimizer_run(tmp_path, selected=True)
     _patch_real_run_dependencies(monkeypatch, inputs=_batch_inputs())
     candidate = Candidate((), status="no_trade")
+    supervisor, validation_executor = optimizer_runtime
     monkeypatch.setattr(
         optimizer_service,
         "_core_contract",
         lambda: _test_core_contract(candidate),
     )
+    _patch_supervisor_error(monkeypatch, supervisor, WorkerCapacityError("worker capacity full"))
     try:
         with session_factory() as session, pytest.raises(AppError) as error:
-            await _create_test_real_run(
-                session,
-                RaisingSupervisor(WorkerCapacityError("worker capacity full")),
-                object(),
-            )
+            await _create_test_real_run(session, supervisor, validation_executor)
         assert error.value.code == "optimizer_capacity_exceeded"
         assert error.value.status_code == 503
-        assert "run_id" not in cast(dict[str, object], error.value.details)
+        assert "run_id" not in _error_details(error.value)
         with session_factory() as session:
             assert session.scalar(select(func.count()).select_from(OptimizerRun)) == 1
     finally:
@@ -1933,20 +2099,30 @@ async def test_capacity_rejection_is_not_persisted_as_timeout(
 
 @pytest.mark.asyncio
 async def test_stale_initial_publication_never_persists_success(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    optimizer_runtime: tuple[ProcessSupervisor, optimizer_service.BoundedValidationExecutor],
 ) -> None:
     engine, session_factory = _create_sqlite_optimizer_run(tmp_path, selected=True)
     _patch_real_run_dependencies(monkeypatch, inputs=_batch_inputs())
     candidate = Candidate((), status="no_trade")
+    supervisor, validation_executor = optimizer_runtime
 
     async def fake_solve(
-        *args: object, **kwargs: object
+        _inputs: FinancialInputs,
+        _supervisor: ProcessSupervisor,
+        *,
+        sell_lot_ids: tuple[str, ...] | None = None,
+        validation_executor: optimizer_service.BoundedValidationExecutor | None = None,
     ) -> optimizer_service.ValidatedOptimizerCandidate:
-        del args, kwargs
+        del _inputs, _supervisor, sell_lot_ids, validation_executor
         return _validated_outcome(candidate, Validation(True), time.monotonic() + 20, "no_trade")
 
     def stale_publication(
-        _session: Session, _prepared: object, *, deadline: float | None = None
+        _session: Session,
+        _prepared: optimizer_service.PreparedOptimizerRun,
+        *,
+        deadline: float | None = None,
     ) -> None:
         assert deadline is not None
         raise AppError(
@@ -1960,7 +2136,7 @@ async def test_stale_initial_publication_never_persists_success(
     monkeypatch.setattr(optimizer_service, "assert_optimizer_run_current", stale_publication)
     try:
         with session_factory() as session, pytest.raises(AppError, match="inputs changed") as error:
-            await _create_test_real_run(session, object(), object())
+            await _create_test_real_run(session, supervisor, validation_executor)
         assert error.value.code == "stale_optimizer_input"
         with session_factory() as session:
             assert session.scalar(select(func.count()).select_from(OptimizerRun)) == 1
@@ -1970,24 +2146,34 @@ async def test_stale_initial_publication_never_persists_success(
 
 @pytest.mark.asyncio
 async def test_initial_search_incomplete_is_truthful_nonactionable_terminal_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    optimizer_runtime: tuple[ProcessSupervisor, optimizer_service.BoundedValidationExecutor],
 ) -> None:
     engine, session_factory = _create_sqlite_optimizer_run(tmp_path, selected=True)
-    _patch_real_run_dependencies(monkeypatch, inputs=ServiceInputs((ServiceLot("ABC", "LOT-1"),)))
+    inputs = _service_inputs((("ABC", "LOT-1"),))
+    _patch_real_run_dependencies(monkeypatch, inputs=inputs)
+    supervisor, validation_executor = optimizer_runtime
     candidate = _search_incomplete_candidate()
 
     async def incomplete_solve(
-        *args: object, **kwargs: object
+        _inputs: FinancialInputs,
+        _supervisor: ProcessSupervisor,
+        *,
+        sell_lot_ids: tuple[str, ...] | None = None,
+        validation_executor: optimizer_service.BoundedValidationExecutor | None = None,
     ) -> optimizer_service.ValidatedOptimizerCandidate:
-        del args, kwargs
+        del _inputs, _supervisor, sell_lot_ids, validation_executor
         return _validated_outcome(candidate, None, time.monotonic() + 20, "search_incomplete")
 
     monkeypatch.setattr(optimizer_service, "run_validated_candidate", incomplete_solve)
     try:
         with session_factory() as session:
-            run = await _create_test_real_run(session, object(), object())
-            metrics = cast(dict[str, object], run.metrics)
-            search_evidence = cast(dict[str, object], metrics["search_evidence"])
+            run = await _create_test_real_run(session, supervisor, validation_executor)
+            metrics = run.metrics
+            assert isinstance(metrics, dict)
+            search_evidence = metrics["search_evidence"]
+            assert isinstance(search_evidence, dict)
             assert run.status == "FAILED"
             assert metrics["optimizer_status"] == "search_incomplete"
             assert search_evidence["search_state"] == "incomplete"
@@ -1996,10 +2182,9 @@ async def test_initial_search_incomplete_is_truthful_nonactionable_terminal_resu
             assert "search_incomplete_no_feasibility_claim" in run.warnings
             recommendations = optimizer_service.real_run_recommendations(session, run)
             assert recommendations["status"] == "failed"
-            assert (
-                cast(dict[str, object], recommendations["optimizer_metrics"])["optimizer_status"]
-                == "search_incomplete"
-            )
+            recommendation_metrics = recommendations["optimizer_metrics"]
+            assert isinstance(recommendation_metrics, dict)
+            assert recommendation_metrics["optimizer_status"] == "search_incomplete"
             assert recommendations["groups"] == []
             assert recommendations["consolidated_legs"] == []
         with session_factory() as session:
@@ -2026,17 +2211,24 @@ async def test_initial_search_incomplete_is_truthful_nonactionable_terminal_resu
 
 @pytest.mark.asyncio
 async def test_subset_search_incomplete_reports_evidence_and_preserves_saved_basket(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    optimizer_runtime: tuple[ProcessSupervisor, optimizer_service.BoundedValidationExecutor],
 ) -> None:
     engine, session_factory = _create_sqlite_subset_optimizer_run(tmp_path)
     _patch_real_run_dependencies(monkeypatch, inputs=_subset_inputs())
     before = _subset_snapshot(session_factory)
     candidate = _search_incomplete_candidate()
+    supervisor, validation_executor = optimizer_runtime
 
     async def incomplete_solve(
-        *args: object, **kwargs: object
+        _inputs: FinancialInputs,
+        _supervisor: ProcessSupervisor,
+        *,
+        sell_lot_ids: tuple[str, ...] | None = None,
+        validation_executor: optimizer_service.BoundedValidationExecutor | None = None,
     ) -> optimizer_service.ValidatedOptimizerCandidate:
-        del args, kwargs
+        del _inputs, _supervisor, sell_lot_ids, validation_executor
         return _validated_outcome(candidate, None, time.monotonic() + 20, "search_incomplete")
 
     monkeypatch.setattr(optimizer_service, "run_validated_candidate", incomplete_solve)
@@ -2050,16 +2242,17 @@ async def test_subset_search_incomplete_reports_evidence_and_preserves_saved_bas
                     state,
                     ("LOT-A1",),
                     {"sale:AAA": True},
-                    cast(optimizer_service.ProcessSupervisor, object()),
-                    cast(optimizer_service.BoundedValidationExecutor, object()),
+                    supervisor,
+                    validation_executor,
                     correlation_id="subset-incomplete",
                     event_type="test_subset_incomplete",
                     event_details={},
                 )
         assert error.value.code == "optimizer_subset_rejected"
         assert error.value.status_code == 422
-        details = cast(dict[str, object], error.value.details)
-        search_evidence = cast(dict[str, object], details["search_evidence"])
+        details = _error_details(error.value)
+        search_evidence = details["search_evidence"]
+        assert isinstance(search_evidence, dict)
         assert details["optimizer_status"] == "search_incomplete"
         assert search_evidence["feasibility_proven"] is False
         assert details["basket_unchanged"] is True
@@ -2071,17 +2264,25 @@ async def test_subset_search_incomplete_reports_evidence_and_preserves_saved_bas
 @pytest.mark.asyncio
 @pytest.mark.parametrize("timeout_stage", ["worker", "publication"])
 async def test_subset_timeout_preserves_prior_recommendations_and_annotations(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timeout_stage: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    timeout_stage: str,
+    optimizer_runtime: tuple[ProcessSupervisor, optimizer_service.BoundedValidationExecutor],
 ) -> None:
     engine, session_factory = _create_sqlite_subset_optimizer_run(tmp_path)
     _patch_real_run_dependencies(monkeypatch, inputs=_subset_inputs())
     before = _subset_snapshot(session_factory)
     selected_lots = ("LOT-A1",)
+    supervisor, validation_executor = optimizer_runtime
 
     async def timeout_solve(
-        *args: object, **kwargs: object
+        _inputs: FinancialInputs,
+        _supervisor: ProcessSupervisor,
+        *,
+        sell_lot_ids: tuple[str, ...] | None = None,
+        validation_executor: optimizer_service.BoundedValidationExecutor | None = None,
     ) -> optimizer_service.ValidatedOptimizerCandidate:
-        del args, kwargs
+        del _inputs, _supervisor, sell_lot_ids, validation_executor
         if timeout_stage == "worker":
             raise WorkerTimeoutError("subset solve timed out")
         return _validated_outcome(
@@ -2096,7 +2297,10 @@ async def test_subset_timeout_preserves_prior_recommendations_and_annotations(
     if timeout_stage == "publication":
 
         def delayed_publication(
-            _session: Session, _prepared: object, *, deadline: float | None = None
+            _session: Session,
+            _prepared: optimizer_service.PreparedOptimizerRun,
+            *,
+            deadline: float | None = None,
         ) -> None:
             assert deadline is not None
             assert time.monotonic() >= deadline
@@ -2114,15 +2318,15 @@ async def test_subset_timeout_preserves_prior_recommendations_and_annotations(
                     state,
                     selected_lots,
                     {"sale:AAA": True},
-                    cast(optimizer_service.ProcessSupervisor, object()),
-                    cast(optimizer_service.BoundedValidationExecutor, object()),
+                    supervisor,
+                    validation_executor,
                     correlation_id=f"subset-{timeout_stage}-timeout",
                     event_type="test_subset_timeout",
                     event_details={},
                 )
         assert error.value.code == "optimizer_timeout"
         assert error.value.status_code == 504
-        assert cast(dict[str, object], error.value.details)["basket_unchanged"] is True
+        assert _error_details(error.value)["basket_unchanged"] is True
         assert _subset_snapshot(session_factory) == before
     finally:
         engine.dispose()

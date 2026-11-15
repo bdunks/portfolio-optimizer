@@ -70,13 +70,26 @@ export type ErrorEnvelope = {
   "correlation_id": string;
 };
 
+export type EtradeAuthStartResponse = {
+  "authorize_url": string;
+};
+
 export type EtradeAuthStatusResponse = {
-  "status": "disabled";
-  "available": false;
-  "authenticated": false;
+  "status": "disabled" | "unavailable" | "unauthenticated" | "pending" | "authenticated" | "expired";
+  "available": boolean;
+  "authenticated": boolean;
   "account_id_key": null;
   "phase": 3;
   "message": string;
+  "expires_at"?: string | null;
+  "idle_expires_at"?: string | null;
+  "pending_expires_at"?: string | null;
+  "last_activity_at"?: string | null;
+  "renewal_due"?: boolean;
+};
+
+export type EtradeAuthVerifyInput = {
+  "verifier": string;
 };
 
 export type FrozenRunDisplayContextResponse = {
@@ -940,27 +953,29 @@ export interface ApiOperations {
     query: Record<never, never>;
     request: never;
     responses: {
-      "503": ErrorEnvelope;
+      "200": EtradeAuthStartResponse;
       "403": ErrorEnvelope;
       "404": ErrorEnvelope;
       "409": ErrorEnvelope;
       "422": ErrorEnvelope;
       "500": ErrorEnvelope;
       "502": ErrorEnvelope;
+      "503": ErrorEnvelope;
     };
   };
   "POST /api/v1/auth/etrade/verify": {
     path: Record<never, never>;
     query: Record<never, never>;
-    request: never;
+    request: EtradeAuthVerifyInput;
     responses: {
-      "503": ErrorEnvelope;
+      "200": EtradeAuthStatusResponse;
       "403": ErrorEnvelope;
       "404": ErrorEnvelope;
       "409": ErrorEnvelope;
       "422": ErrorEnvelope;
       "500": ErrorEnvelope;
       "502": ErrorEnvelope;
+      "503": ErrorEnvelope;
     };
   };
   "POST /api/v1/orders/{leg_id}/preview": {

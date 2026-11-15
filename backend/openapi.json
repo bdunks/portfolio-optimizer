@@ -362,6 +362,20 @@
         "title": "ErrorEnvelope",
         "type": "object"
       },
+      "EtradeAuthStartResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "authorize_url": {
+            "title": "Authorize Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorize_url"
+        ],
+        "title": "EtradeAuthStartResponse",
+        "type": "object"
+      },
       "EtradeAuthStatusResponse": {
         "additionalProperties": false,
         "properties": {
@@ -370,26 +384,84 @@
             "type": "null"
           },
           "authenticated": {
-            "const": false,
             "title": "Authenticated",
             "type": "boolean"
           },
           "available": {
-            "const": false,
             "title": "Available",
             "type": "boolean"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "idle_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idle Expires At"
+          },
+          "last_activity_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Activity At"
           },
           "message": {
             "title": "Message",
             "type": "string"
+          },
+          "pending_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Expires At"
           },
           "phase": {
             "const": 3,
             "title": "Phase",
             "type": "integer"
           },
+          "renewal_due": {
+            "default": false,
+            "title": "Renewal Due",
+            "type": "boolean"
+          },
           "status": {
-            "const": "disabled",
+            "enum": [
+              "disabled",
+              "unavailable",
+              "unauthenticated",
+              "pending",
+              "authenticated",
+              "expired"
+            ],
             "title": "Status",
             "type": "string"
           }
@@ -403,6 +475,22 @@
           "message"
         ],
         "title": "EtradeAuthStatusResponse",
+        "type": "object"
+      },
+      "EtradeAuthVerifyInput": {
+        "additionalProperties": false,
+        "properties": {
+          "verifier": {
+            "maxLength": 6,
+            "minLength": 5,
+            "title": "Verifier",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verifier"
+        ],
+        "title": "EtradeAuthVerifyInput",
         "type": "object"
       },
       "FrozenRunDisplayContextResponse": {
@@ -4242,6 +4330,16 @@
       "post": {
         "operationId": "etrade_auth_start_api_v1_auth_etrade_start_post",
         "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EtradeAuthStartResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
           "403": {
             "content": {
               "application/json": {
@@ -4407,7 +4505,27 @@
     "/api/v1/auth/etrade/verify": {
       "post": {
         "operationId": "etrade_auth_verify_api_v1_auth_etrade_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EtradeAuthVerifyInput"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EtradeAuthStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
           "403": {
             "content": {
               "application/json": {

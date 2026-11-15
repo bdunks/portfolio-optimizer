@@ -269,10 +269,13 @@ def test_default_and_unconfigured_auth_never_fall_back_to_network(
     with TestClient(default_app, base_url="http://localhost") as client:
         assert client.get("/api/v1/auth/etrade/status").json()["status"] == "disabled"
         assert client.post("/api/v1/auth/etrade/start").status_code == 503
-        assert client.post(
-            "/api/v1/auth/etrade/verify",
-            json={"verifier": "12345"},
-        ).status_code == 503
+        assert (
+            client.post(
+                "/api/v1/auth/etrade/verify",
+                json={"verifier": "12345"},
+            ).status_code
+            == 503
+        )
 
     transport, calls = _queued_transport([])
     unconfigured = EtradeOAuthService(
@@ -296,9 +299,7 @@ def test_default_and_unconfigured_auth_never_fall_back_to_network(
 
 def test_invalid_verifier_shapes_do_not_consume_pending_state(tmp_path: Path) -> None:
     for verifier_body in (None, {"verifier": "1234"}, {"verifier": "1234567"}):
-        transport, calls = _queued_transport(
-            [_token_response("request-token", "request-secret")]
-        )
+        transport, calls = _queued_transport([_token_response("request-token", "request-secret")])
         service = EtradeOAuthService(
             "consumer-key",
             "consumer-secret",
@@ -438,10 +439,13 @@ def test_replaced_and_expired_pending_states_cannot_be_reused(
         stale = client.post("/api/v1/auth/etrade/verify", json={"verifier": "123456"})
         assert stale.status_code == 502
         assert _oauth_parameters(calls[2])["oauth_token"] == "request-two"
-        assert client.post(
-            "/api/v1/auth/etrade/verify",
-            json={"verifier": "123456"},
-        ).status_code == 409
+        assert (
+            client.post(
+                "/api/v1/auth/etrade/verify",
+                json={"verifier": "123456"},
+            ).status_code
+            == 409
+        )
         assert len(calls) == 3
 
         assert client.post("/api/v1/auth/etrade/start").status_code == 200

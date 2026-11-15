@@ -52,7 +52,9 @@ class EtradeOAuthService:
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._consumer_key = consumer_key if consumer_key and consumer_key.strip() else None
-        self._consumer_secret = consumer_secret if consumer_secret and consumer_secret.strip() else None
+        self._consumer_secret = (
+            consumer_secret if consumer_secret and consumer_secret.strip() else None
+        )
         self._client = httpx.Client(
             transport=transport,
             follow_redirects=False,
@@ -88,7 +90,9 @@ class EtradeOAuthService:
             token, secret = self._parse_token_pair(response.text, "request-token")
             now = self._now()
             self._pending = _PendingToken(token, secret, now + PENDING_TOKEN_TTL)
-            authorize_url = f"{AUTHORIZE_URL}?{urlencode({'key': self._consumer_key, 'token': token})}"
+            authorize_url = (
+                f"{AUTHORIZE_URL}?{urlencode({'key': self._consumer_key, 'token': token})}"
+            )
             return {"authorize_url": authorize_url}
 
     def verify(self, verifier: str) -> dict[str, object]:
@@ -220,7 +224,9 @@ class EtradeOAuthService:
             ) from None
 
         if response.status_code != 200:
-            logger.warning("E*TRADE OAuth %s request failed (HTTP %d)", operation, response.status_code)
+            logger.warning(
+                "E*TRADE OAuth %s request failed (HTTP %d)", operation, response.status_code
+            )
             raise AppError(
                 "etrade_oauth_broker_error",
                 f"E*TRADE OAuth {operation} failed (HTTP {response.status_code}).",

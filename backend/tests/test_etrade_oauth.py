@@ -7,12 +7,13 @@ import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from urllib.parse import parse_qsl, parse_qs, quote, unquote, urlencode, urlsplit
+from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
-import httpx
 import pytest
+import requests
 from fastapi.testclient import TestClient
+from requests.adapters import BaseAdapter
 
 from app.broker.etrade_oauth import EtradeOAuthService
 from app.broker.fake import FakeBroker
@@ -28,7 +29,15 @@ class FixedClock:
         return self.now
 
 
-def _token_response(token: str, secret: str) -> httpx.Response:
+def _response(status_code: int = 200, text: str = "") -> requests.Response:
+    response = requests.Response()
+    response.status_code = status_code
+    response._content = text.encode()
+    response.encoding = "utf-8"
+    return response
+
+
+def _token_response(token: str, secret: str) -> requests.Response:
     body = urlencode(
         {
             "oauth_token": token,
@@ -36,29 +45,40 @@ def _token_response(token: str, secret: str) -> httpx.Response:
             "oauth_callback_confirmed": "true",
         }
     )
-    return httpx.Response(200, text=body)
+    return _response(text=body)
+
+
+class StubAdapter(BaseAdapter):
+    def __init__(self, responses: Sequence[requests.Response | Exception]) -> None:
+        self.remaining = list(responses)
+        self.calls: list[requests.PreparedRequest] = []
+
+    def send(self, request: requests.PreparedRequest, **kwargs: object) -> requests.Response:
+        self.calls.append(request)
+        if not self.remaining:
+            raise AssertionError(f"Unexpected fake HTTP request: {request.method} {request.url}")
+        result = self.remaining.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        result.request = request
+        result.url = request.url
+        return result
+
+    def close(self) -> None:
+        pass
 
 
 def _queued_transport(
-    responses: Sequence[httpx.Response | Exception],
-) -> tuple[httpx.MockTransport, list[httpx.Request]]:
-    remaining = list(responses)
-    calls: list[httpx.Request] = []
-
-    def handle(request: httpx.Request) -> httpx.Response:
-        calls.append(request)
-        if not remaining:
-            raise AssertionError(f"Unexpected fake HTTP request: {request.method} {request.url}")
-        result = remaining.pop(0)
-        if isinstance(result, Exception):
-            raise result
-        return result
-
-    return httpx.MockTransport(handle), calls
+    responses: Sequence[requests.Response | Exception],
+) -> tuple[StubAdapter, list[requests.PreparedRequest]]:
+    adapter = StubAdapter(responses)
+    return adapter, adapter.calls
 
 
-def _oauth_parameters(request: httpx.Request) -> dict[str, str]:
+def _oauth_parameters(request: requests.PreparedRequest) -> dict[str, str]:
     header = request.headers["authorization"]
+    if isinstance(header, bytes):
+        header = header.decode()
     assert header.startswith("OAuth ")
     parameters: dict[str, str] = {}
     for item in header.removeprefix("OAuth ").split(","):
@@ -68,7 +88,7 @@ def _oauth_parameters(request: httpx.Request) -> dict[str, str]:
 
 
 def _expected_signature(
-    request: httpx.Request,
+    request: requests.PreparedRequest,
     *,
     consumer_secret: str,
     token_secret: str = "",
@@ -97,8 +117,8 @@ def _expected_signature(
 
 def _service(
     clock: FixedClock,
-    responses: Sequence[httpx.Response | Exception],
-) -> tuple[EtradeOAuthService, httpx.MockTransport, list[httpx.Request]]:
+    responses: Sequence[requests.Response | Exception],
+) -> tuple[EtradeOAuthService, StubAdapter, list[requests.PreparedRequest]]:
     transport, calls = _queued_transport(responses)
     service = EtradeOAuthService(
         "consumer-key-test",
@@ -111,8 +131,8 @@ def _service(
 
 def _active_service(
     clock: FixedClock,
-    responses: Sequence[httpx.Response | Exception],
-) -> tuple[EtradeOAuthService, httpx.MockTransport, list[httpx.Request]]:
+    responses: Sequence[requests.Response | Exception],
+) -> tuple[EtradeOAuthService, StubAdapter, list[requests.PreparedRequest]]:
     service, transport, calls = _service(clock, responses)
     service.start()
     service.verify("123456")
@@ -129,7 +149,7 @@ def test_auth_api_flow_signing_status_demo_and_memory_only(
         [
             _token_response("request-public-token", "request-private-secret"),
             _token_response("access-private-token", "access-private-secret"),
-            httpx.Response(200, text="{}"),
+            _response(200, text="{}"),
         ]
     )
     service = EtradeOAuthService(
@@ -170,7 +190,7 @@ def test_auth_api_flow_signing_status_demo_and_memory_only(
         pending = client.get("/api/v1/auth/etrade/status").json()
         assert pending["status"] == "pending"
         assert pending["authenticated"] is False
-        assert pending["pending_expires_at"] == "2026-11-05T16:05:00+00:00"
+        assert pending["pending_expires_at"] == "2026-11-05T16:05:00Z"
 
         verified = client.post(
             "/api/v1/auth/etrade/verify",
@@ -196,12 +216,15 @@ def test_auth_api_flow_signing_status_demo_and_memory_only(
         assert demo["account"]["display_name"] == "DEMO — Hypothetical Account"
         assert broker.fetch_count == fetch_count
 
-        query_client = httpx.Client(transport=transport)
-        read = query_client.get(
-            "https://api.etrade.com/v1/future-read?tag=one&tag=two&count=200",
-            auth=service.auth_for_read(),
-        )
-        query_client.close()
+        read_session = service.auth_for_read()
+        try:
+            read = read_session.get(
+                "https://api.etrade.com/v1/future-read?tag=one&tag=two&count=200",
+                timeout=10,
+                allow_redirects=False,
+            )
+        finally:
+            read_session.close()
         assert read.status_code == 200
         read_request = calls[-1]
         assert _oauth_parameters(read_request)["oauth_token"] == "access-private-token"
@@ -341,7 +364,7 @@ def test_start_rejects_invalid_or_failed_broker_responses_without_leaking(
     status_code: int,
 ) -> None:
     caplog.set_level(logging.INFO, logger="app.broker.etrade_oauth")
-    transport, _ = _queued_transport([httpx.Response(status_code, text=body)])
+    transport, _ = _queued_transport([_response(status_code, text=body)])
     service = EtradeOAuthService(
         "consumer-key",
         "consumer-secret-marker",
@@ -384,7 +407,7 @@ def test_access_exchange_errors_are_sanitized_and_pending_is_one_use(
     transport, calls = _queued_transport(
         [
             _token_response("request-token", "request-secret-marker"),
-            httpx.Response(access_status, text=access_body),
+            _response(access_status, text=access_body),
         ]
     )
     service = EtradeOAuthService(
@@ -421,7 +444,7 @@ def test_replaced_and_expired_pending_states_cannot_be_reused(
     responses = [
         _token_response("request-one", "secret-one"),
         _token_response("request-two", "secret-two"),
-        httpx.Response(401, text="old verifier rejected"),
+        _response(401, text="old verifier rejected"),
         _token_response("request-three", "secret-three"),
     ]
     service, _, calls = _service(clock, responses)
@@ -517,7 +540,7 @@ def test_renewal_failure_expires_tokens_and_hides_broker_body(
         [
             _token_response("request-token", "request-secret"),
             _token_response("access-token", "access-secret"),
-            httpx.Response(500, text="oauth_token_secret=upstream-secret-marker"),
+            _response(500, text="oauth_token_secret=upstream-secret-marker"),
         ],
     )
     clock.now += timedelta(minutes=90, seconds=1)

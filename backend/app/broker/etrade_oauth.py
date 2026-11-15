@@ -8,8 +8,9 @@ from datetime import UTC, datetime, time, timedelta
 from urllib.parse import parse_qs, urlencode
 from zoneinfo import ZoneInfo
 
-import httpx
-from authlib.integrations.httpx_client import OAuth1Auth
+import requests
+from requests.adapters import BaseAdapter
+from requests_oauthlib import OAuth1Session
 
 from app.services.errors import AppError
 
@@ -48,18 +49,14 @@ class EtradeOAuthService:
         consumer_key: str | None,
         consumer_secret: str | None,
         *,
-        transport: httpx.BaseTransport,
+        transport: BaseAdapter,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._consumer_key = consumer_key if consumer_key and consumer_key.strip() else None
         self._consumer_secret = (
             consumer_secret if consumer_secret and consumer_secret.strip() else None
         )
-        self._client = httpx.Client(
-            transport=transport,
-            follow_redirects=False,
-            timeout=10.0,
-        )
+        self._transport = transport
         self._clock = clock or (lambda: datetime.now(UTC))
         self._lock = threading.RLock()
         self._pending: _PendingToken | None = None
@@ -75,7 +72,7 @@ class EtradeOAuthService:
             self._pending = None
             self._access = None
             self._expired_access = None
-            self._client.close()
+            self._transport.close()
 
     def start(self) -> dict[str, str]:
         with self._lock:
@@ -146,7 +143,7 @@ class EtradeOAuthService:
         with self._lock:
             return self._status_locked(self._now())
 
-    def auth_for_read(self) -> OAuth1Auth:
+    def auth_for_read(self) -> OAuth1Session:
         """Ensure usable credentials and return an OAuth signer for a future broker read."""
         with self._lock:
             self._require_available()
@@ -205,7 +202,7 @@ class EtradeOAuthService:
         token_secret: str | None = None,
         redirect_uri: str | None = None,
         verifier: str | None = None,
-    ) -> httpx.Response:
+    ) -> requests.Response:
         auth = self._auth(
             token=token,
             token_secret=token_secret,
@@ -213,8 +210,8 @@ class EtradeOAuthService:
             verifier=verifier,
         )
         try:
-            response = self._client.get(url, auth=auth)
-        except httpx.HTTPError:
+            response = auth.get(url, timeout=10, allow_redirects=False)
+        except requests.RequestException:
             logger.warning("E*TRADE OAuth %s request failed (transport error)", operation)
             raise AppError(
                 "etrade_oauth_transport_error",
@@ -222,7 +219,8 @@ class EtradeOAuthService:
                 status_code=502,
                 details={"operation": operation},
             ) from None
-
+        finally:
+            auth.close()
         if response.status_code != 200:
             logger.warning(
                 "E*TRADE OAuth %s request failed (HTTP %d)", operation, response.status_code
@@ -243,18 +241,21 @@ class EtradeOAuthService:
         token_secret: str | None = None,
         redirect_uri: str | None = None,
         verifier: str | None = None,
-    ) -> OAuth1Auth:
+    ) -> OAuth1Session:
         self._require_available()
-        return OAuth1Auth(
-            client_id=self._consumer_key,
+        session = OAuth1Session(
+            client_key=self._consumer_key,
             client_secret=self._consumer_secret,
-            token=token,
-            token_secret=token_secret,
-            redirect_uri=redirect_uri,
+            resource_owner_key=token,
+            resource_owner_secret=token_secret,
+            callback_uri=redirect_uri,
             verifier=verifier,
             signature_method="HMAC-SHA1",
-            signature_type="HEADER",
+            signature_type="AUTH_HEADER",
         )
+        session.mount("https://", self._transport)
+        session.mount("http://", self._transport)
+        return session
 
     def _parse_token_pair(self, body: str, operation: str) -> tuple[str, str]:
         try:

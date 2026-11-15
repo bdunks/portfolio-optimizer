@@ -16,11 +16,10 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
-
 import cvxpy
 
 from app.domain.financial_inputs import FinancialInputs
-from app.optimizer.core import OptimizerRequest, optimize_worker
+from app.optimizer.core import ConsolidatedLeg, OptimizerRequest, optimize_worker
 from app.optimizer.runtime import ProcessSupervisor
 from app.optimizer.validation import validate_candidate
 from tests.optimizer_benchmark_fixture import build_optimizer_benchmark_inputs
@@ -70,15 +69,14 @@ def _cpu_model() -> str | None:
     return None
 
 
-def _measured_worker(request: OptimizerRequest, deadline: float) -> tuple[Any, int | None]:
-    """Return optimizer payload and child-process peak RSS in bytes where supported."""
+def _measured_worker(request: OptimizerRequest, deadline: float) -> tuple[OptimizerResult, int | None]:
     result = optimize_worker(request, deadline)
     try:
         import resource
 
         peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         # Linux reports KiB; macOS reports bytes.
-        peak_bytes = int(peak if sys.platform == "darwin" else peak * 1024)
+        peak_bytes = peak if sys.platform == "darwin" else peak * 1024
     except ImportError, AttributeError, OSError:
         peak_bytes = None
     return result, peak_bytes
@@ -102,7 +100,9 @@ def _fixture_dimensions(inputs: FinancialInputs) -> dict[str, Any]:
     }
 
 
-def _path_coverage(scenario: str, accepted: bool, legs: tuple[Any, ...]) -> dict[str, Any]:
+def _path_coverage(
+    scenario: str, accepted: bool, legs: tuple[ConsolidatedLeg, ...]
+) -> dict[str, bool | str | None]:
     sells = [leg for leg in legs if leg.side == "SELL"]
     buys = [leg for leg in legs if leg.side == "BUY"]
     dependent_whole_share_buy = any(
@@ -165,6 +165,7 @@ async def run_trial(
         )
         validation_seconds = time.perf_counter() - validation_started
         metadata = result.metadata
+        repair_validate_rank_seconds = metadata.repair_validate_rank_seconds
         warning_counts: Counter[str] = Counter()
         warning_samples: defaultdict[str, list[str]] = defaultdict(list)
         for warning in (*metadata.warnings, *validation.warnings):
@@ -194,12 +195,10 @@ async def run_trial(
                 "buy_order_count": sum(leg.side == "BUY" for leg in result.legs),
                 "screening_seconds": metadata.screening_seconds,
                 "continuous_solve_including_model_construction_seconds": metadata.solve_seconds,
-                "repair_validate_rank_seconds": getattr(
-                    metadata, "repair_validate_rank_seconds", None
-                ),
+                "repair_validate_rank_seconds": repair_validate_rank_seconds,
                 "repair_all_validation_rank_seconds": (
-                    getattr(metadata, "repair_validate_rank_seconds", None) + validation_seconds
-                    if getattr(metadata, "repair_validate_rank_seconds", None) is not None
+                    repair_validate_rank_seconds + validation_seconds
+                    if repair_validate_rank_seconds is not None
                     else None
                 ),
                 "worker_elapsed_seconds": metadata.elapsed_seconds,

@@ -78,12 +78,13 @@ def test_optimizer_benchmark_fixture_is_deterministic_complete_and_full_sized() 
     assert first.policy.settings.get("max_sell_lots_per_batch") == 20
     assert first.policy.settings.get("max_total_orders_per_batch") == 12
     assert any(lot.shares == Decimal("0.01") for lot in first.lots)
-    assert any(
-        lot.adjusted_unit_basis_usd > first.quote_for(lot.ticker).last_usd for lot in first.lots
-    )
-    assert any(
-        lot.adjusted_unit_basis_usd < first.quote_for(lot.ticker).last_usd for lot in first.lots
-    )
+    basis_comparisons: list[bool] = []
+    for lot in first.lots:
+        quote = first.quote_for(lot.ticker)
+        assert quote is not None and quote.last_usd is not None
+        basis_comparisons.append(lot.adjusted_unit_basis_usd > quote.last_usd)
+    assert any(basis_comparisons)
+    assert any(not comparison for comparison in basis_comparisons)
     assert evaluate_portfolio(first).current.portfolio_total_usd > 1_000_000
 
 
@@ -127,7 +128,9 @@ def test_recent_loss_scenario_links_recent_acquisition_to_lot_and_old_loss() -> 
     assert recent_buy.is_acquisition is True
     assert recent_buy.broker_lot_id == recent_lot.broker_lot_id
     assert old_loss_lot.acquired_date < recent_start
-    assert old_loss_lot.adjusted_unit_basis_usd > inputs.quote_for("EQ000").last_usd
+    quote = inputs.quote_for("EQ000")
+    assert quote is not None and quote.last_usd is not None
+    assert old_loss_lot.adjusted_unit_basis_usd > quote.last_usd
 
 
 @pytest.mark.parametrize("scenario", ["replacement_buy", "recent_loss"])

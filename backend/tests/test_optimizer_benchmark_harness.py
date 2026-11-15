@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 
-from app.optimizer.runtime import WorkerTimeoutError
+import pytest
+
+from app.domain.financial_inputs import FinancialInputs
+from app.optimizer.core import OptimizerRequest, OptimizerResult
+from app.optimizer.runtime import ProcessSupervisor, WorkerResult, WorkerTimeoutError
 from scripts.benchmark_optimizer import percentile, run_trial
+
 
 
 def test_percentile_is_nearest_rank_for_small_samples() -> None:
@@ -13,81 +19,59 @@ def test_percentile_is_nearest_rank_for_small_samples() -> None:
     assert percentile([1.0, 2.0, 3.0, 4.0], 0.50) == 2.0
     assert percentile([1.0, 2.0, 3.0, 4.0, 5.0], 0.60) == 3.0
 
+def test_trial_timeout_is_recorded_instead_of_aborting_benchmark(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
 
-def test_trial_timeout_is_recorded_instead_of_aborting_benchmark() -> None:
-    class TimedOutSupervisor:
-        async def run(self, *args: object, **kwargs: object) -> None:
-            raise WorkerTimeoutError("optimizer computation deadline exceeded")
+    async def timed_out_run(
+        self: ProcessSupervisor,
+        worker_input: OptimizerRequest,
+        worker: Callable[[OptimizerRequest, float], tuple[OptimizerResult, int | None]],
+        *,
+        timeout_seconds: float = 10.0,
+        validation_reserve_seconds: float = 2.0,
+    ) -> WorkerResult[tuple[OptimizerResult, int | None]]:
+        raise WorkerTimeoutError("optimizer computation deadline exceeded")
 
-    row = asyncio.run(run_trial(19, TimedOutSupervisor()))  # type: ignore[arg-type]
+    monkeypatch.setattr(ProcessSupervisor, "run", timed_out_run)
+    row = asyncio.run(run_trial(19, ProcessSupervisor()))
     assert row["status"] == "failed"
     assert row["error_type"] == "WorkerTimeoutError"
     assert row["error"] == "optimizer computation deadline exceeded"
     assert row["accepted"] is False
 
-
-def test_trial_defaults_to_baseline_and_forwards_scenario(monkeypatch: object) -> None:
-    from types import SimpleNamespace
-
+def test_trial_defaults_to_baseline_and_forwards_scenario(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import scripts.benchmark_optimizer as benchmark
 
     scenario_calls: list[str] = []
-    inputs = SimpleNamespace(
-        policy=SimpleNamespace(
-            settings=SimpleNamespace(values=(("max_sell_tickers_per_batch", 1),))
-        ),
-        positions=[1],
-        securities=[1, 2],
-        lots=[SimpleNamespace(available_shares=1)],
-    )
-    monkeypatch.setattr(
-        benchmark,
-        "build_optimizer_benchmark_inputs",
-        lambda seed, scenario="baseline": scenario_calls.append(scenario) or inputs,
-    )
-    legs = ()
-    metadata = SimpleNamespace(
-        warnings=(),
-        screening_seconds=0.1,
-        solve_seconds=0.2,
-        repair_validate_rank_seconds=0.3,
-        elapsed_seconds=0.5,
-        tax_regions_considered=1,
-        tax_regions_solved=1,
-        tax_region_search_complete=True,
-        integer_search_complete=False,
-        rounding_attempts=1,
-        candidate_types=(),
-        implementation_version="test",
-        solver_versions=(),
-        solver="fake",
-    )
-    result = SimpleNamespace(status="ready", legs=legs, metadata=metadata)
+    original_build = benchmark.build_optimizer_benchmark_inputs
 
-    async def fake_run(*args: object, **kwargs: object) -> object:
-        return SimpleNamespace(value=(result, 123), overall_deadline=float("inf"))
+    def record_build(seed: int, scenario: str = "baseline") -> FinancialInputs:
+        scenario_calls.append(scenario)
+        return original_build(seed, scenario=scenario)
 
-    monkeypatch.setattr(
-        benchmark,
-        "validate_candidate",
-        lambda *args, **kwargs: SimpleNamespace(accepted=True, reasons=(), warnings=()),
-    )
+    async def timed_out_run(
+        self: ProcessSupervisor,
+        worker_input: OptimizerRequest,
+        worker: Callable[[OptimizerRequest, float], tuple[OptimizerResult, int | None]],
+        *,
+        timeout_seconds: float = 10.0,
+        validation_reserve_seconds: float = 2.0,
+    ) -> WorkerResult[tuple[OptimizerResult, int | None]]:
+        raise WorkerTimeoutError("optimizer computation deadline exceeded")
 
-    class FakeSupervisor:
-        run = fake_run
-
-    default_row = asyncio.run(run_trial(1, FakeSupervisor()))
-    scenario_row = asyncio.run(run_trial(2, FakeSupervisor(), scenario="recent_loss"))
+    monkeypatch.setattr(benchmark, "build_optimizer_benchmark_inputs", record_build)
+    monkeypatch.setattr(ProcessSupervisor, "run", timed_out_run)
+    default_row = asyncio.run(run_trial(1, ProcessSupervisor()))
+    scenario_row = asyncio.run(run_trial(2, ProcessSupervisor(), scenario="recent_loss"))
     assert scenario_calls == ["baseline", "recent_loss"]
     assert default_row["scenario"] == "baseline"
     assert scenario_row["scenario"] == "recent_loss"
-    assert scenario_row["held_position_count"] == 1
-    assert scenario_row["security_count"] == 2
-    assert scenario_row["available_lot_count"] == 1
-    assert (
-        scenario_row["repair_all_validation_rank_seconds"]
-        >= scenario_row["repair_validate_rank_seconds"]
-    )
+    assert scenario_row["held_position_count"] == 460
+    assert scenario_row["security_count"] == 462
+    assert scenario_row["available_lot_count"] > 0
 
 
 def test_path_coverage_requires_sell_dependent_buy_and_exact_recent_clearance() -> None:

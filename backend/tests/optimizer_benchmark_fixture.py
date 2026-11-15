@@ -69,7 +69,7 @@ def _apply_benchmark_scenario(inputs: FinancialInputs, scenario: str) -> Financi
             lot = replace(lot, available_shares=Decimal(0))
         lots.append(lot)
 
-    settings = dict(inputs.policy.settings.values)
+    settings: dict[str, object] = dict(inputs.policy.settings.values)
     settings.update(
         {
             "max_sell_tickers_per_batch": 1,

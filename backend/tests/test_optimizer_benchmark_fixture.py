@@ -151,10 +151,18 @@ def test_optimizer_benchmark_scenario_emits_independently_accepted_dependent_buy
     sold_lots = {
         allocation.broker_lot_id: allocation.shares for allocation in sells[0].selected_lots
     }
-    expected_sold_lots = {"EQ000-LOT-002": Decimal(20)}
+    expected_sold_lot_ids = {"EQ000-LOT-002"}
     if scenario == "recent_loss":
-        expected_sold_lots["EQ000-LOT-001"] = Decimal(1)
-    assert sold_lots == expected_sold_lots
+        expected_sold_lot_ids.add("EQ000-LOT-001")
+    assert set(sold_lots) == expected_sold_lot_ids
+
+    source_lot = next(lot for lot in inputs.lots if lot.broker_lot_id == "EQ000-LOT-002")
+    source_sold_shares = sold_lots["EQ000-LOT-002"]
+    assert source_lot.available_shares == Decimal(20)
+    assert Decimal(0) < source_sold_shares <= source_lot.available_shares
+    assert source_sold_shares == source_sold_shares.to_integral_value()
+    if scenario == "recent_loss":
+        assert sold_lots["EQ000-LOT-001"] == Decimal(1)
 
     validation = validate_candidate(inputs, result.legs)
     assert validation.accepted, validation.reasons

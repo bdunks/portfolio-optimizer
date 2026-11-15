@@ -19,6 +19,17 @@ The application also applies pending Alembic migrations at startup. Migrations a
 
 The app starts without credentials. `POST /api/v1/portfolio/sync` explicitly fetches and atomically publishes the offline demo snapshot. Policy and portfolio data are not seeded automatically. To opt into the packaged hypothetical seed policy and initial fake portfolio, set `PORTFOLIO_DEMO_SEED=1`; the seed policy lives in `app/seeds/demo_policy.json` and is labeled `DEMO`.
 
+
+## E*TRADE credential file and loading
+
+`backend/.env.example` contains placeholder values only. For local credential storage, copy it to `backend/.env`, replace the placeholders, and restrict access with `chmod 600 backend/.env`. Never commit it or expose its contents. From `backend/`, load it explicitly with Uvicorn's supported env-file option:
+
+```bash
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --env-file .env
+```
+
+The application does not read `.env` itself. Loading credentials does not enable OAuth or create a live HTTP transport: default `create_app()` intentionally has no OAuth transport, remains disabled even when these variables are present, and makes no broker requests. The OAuth service is separately injected with an HTTP transport; this task's API lifecycle tests use only deterministic fake HTTP transport. No credentials or tokens are stored in SQLite or returned to the browser.
+
 The policy draft endpoint accepts `settings`, `sleeves`, `allowed_securities`, `overrides`, and optional `reassignments` (`{old_sleeve_key: enabled_target_sleeve_key}`). Targets are exact decimal strings; top-level targets and each enabled nested allocation must total exactly `100`. Drafts are saved even when target sums are invalid, but activation rejects invalid sums and unassigned holdings. Posting a new draft creates a new immutable revision; an activated revision cannot be edited or reactivated.
 
 Phase 1 has no browser login/session authentication. Writes accept local CLI requests without an `Origin` header. Browser writes require a loopback `Host` and a supplied `Origin` matching either an explicitly configured CORS origin or the request's actual same origin (normalized scheme/host/port); an arbitrary loopback origin is not sufficient. Remote hosts, remote/malformed/null origins, and unconfigured cross-origin origins are rejected. Cross-origin CORS is limited to the explicit Vite development origins `http://localhost:9000`, `http://127.0.0.1:9000`, `http://localhost:5173`, and `http://127.0.0.1:5173`; credentials are disabled.
@@ -62,7 +73,7 @@ For a deterministic fixture that splits VB into two separately attributed sell l
 cd backend && uv run --offline pytest -q tests/test_demo_api.py::test_demo_run_persistence_selection_arithmetic_and_restart
 ```
 
-The deterministic `recommendations_only` run retains hypothetical demo values, lot IDs, and results. `mode: "real_optimizer"` invokes the configured production solver against frozen current inputs through a bounded worker and independent validator; its recommendations remain advisory and non-actionable. OAuth/account integration, user-approved broker orders, and order preview/placement are not implemented, so OAuth start/verify and both order preview/submit routes return the documented `503` error envelope. Never treat any output as an approved trade.
+The deterministic `recommendations_only` run retains hypothetical demo values, lot IDs, and results. `mode: "real_optimizer"` invokes the configured production solver against frozen current inputs through a bounded worker and independent validator; its recommendations remain advisory and non-actionable. The OAuth service implements the `oob` request/verifier/access-token lifecycle, renewal, and expiry in backend memory, with no account binding or portfolio reads in this task. It is available only through explicit service/transport injection for offline tests; the default app has no OAuth transport and remains disabled even if credentials are loaded. Order preview and submission still return `503`. Never treat any output as an approved trade.
 
 ## Generated API contract
 

@@ -822,14 +822,26 @@ class WashSalesResponse(StrictModel):
     warnings: list[str]
 
 
+class EtradeAuthStartResponse(StrictModel):
+    authorize_url: str
+
+
+class EtradeAuthVerifyInput(StrictModel):
+    verifier: str = Field(min_length=5, max_length=6)
+
+
 class EtradeAuthStatusResponse(StrictModel):
-    status: Literal["disabled"]
-    available: Literal[False]
-    authenticated: Literal[False]
+    status: Literal["disabled", "unavailable", "unauthenticated", "pending", "authenticated", "expired"]
+    available: bool
+    authenticated: bool
     account_id_key: None
     phase: Literal[3]
     message: str
-
+    expires_at: datetime | None = None
+    idle_expires_at: datetime | None = None
+    pending_expires_at: datetime | None = None
+    last_activity_at: datetime | None = None
+    renewal_due: bool = False
 
 class OptimizerExportMetadataResponse(StrictModel):
     run_id: str

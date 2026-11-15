@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
+from app.broker.etrade_oauth import EtradeOAuthService
 from app.broker.fake import FakeBroker
 from app.broker.protocol import ReadOnlyBroker
 from app.db.migrate import upgrade_database
@@ -50,7 +51,9 @@ from app.optimizer.runtime import ProcessSupervisor
 from app.schemas import (
     ActivityPageResponse,
     ErrorEnvelope,
+    EtradeAuthStartResponse,
     EtradeAuthStatusResponse,
+    EtradeAuthVerifyInput,
     HealthResponse,
     LotPageResponse,
     OptimizerExportJSONResponse,
@@ -224,8 +227,9 @@ def create_app(
     seed_demo_data: bool = False,
     publication_hook: Callable[[], None] | None = None,
     allowed_origins: list[str] | None = None,
+    etrade_oauth: EtradeOAuthService | None = None,
 ) -> FastAPI:
-    """Create an isolated local app; inject a file/engine and deterministic read-only broker in tests."""
+    """Create an isolated app with optional test OAuth service and explicit transport injection."""
     db_url = database_url or os.getenv("PORTFOLIO_DATABASE_URL", "sqlite:///data/portfolio.sqlite3")
     cors_origins = DEFAULT_ORIGINS if allowed_origins is None else allowed_origins
     owned_engine = engine is None
@@ -247,6 +251,8 @@ def create_app(
         finally:
             await validation_executor.aclose()
             await optimizer_supervisor.aclose()
+            if etrade_oauth is not None:
+                etrade_oauth.close()
             if owned_engine:
                 db_engine.dispose()
 
@@ -256,6 +262,7 @@ def create_app(
     application.state.broker = broker_source
     application.state.broker_mode = getattr(broker_source, "mode", "unavailable")
     application.state.optimizer_supervisor = optimizer_supervisor
+    application.state.etrade_oauth = etrade_oauth
     application.state.optimizer_validation_executor = validation_executor
 
     @application.middleware("http")
@@ -838,34 +845,52 @@ def create_app(
     def wash_sales_endpoint(session: Session = session_dependency) -> dict[str, Any]:
         return wash_sales(session)
 
-    @application.get("/api/v1/auth/etrade/status", response_model=EtradeAuthStatusResponse, responses=API_ERROR_RESPONSES)
+    @application.get(
+        "/api/v1/auth/etrade/status",
+        response_model=EtradeAuthStatusResponse,
+        responses=API_ERROR_RESPONSES,
+    )
     def etrade_auth_status() -> dict[str, Any]:
+        if etrade_oauth is not None:
+            return etrade_oauth.status()
         return {
             "status": "disabled",
             "available": False,
             "authenticated": False,
             "account_id_key": None,
             "phase": 3,
-            "message": "E*TRADE OAuth is not implemented; no broker connection was attempted.",
+            "message": "E*TRADE OAuth is disabled; no broker connection was attempted.",
         }
 
-    @application.post("/api/v1/auth/etrade/start", status_code=503, response_model=ErrorEnvelope, responses=API_ERROR_RESPONSES)
-    def etrade_auth_start() -> None:
-        raise AppError(
-            "etrade_auth_unavailable",
-            "E*TRADE OAuth is disabled in this phase",
-            status_code=503,
-            details={"available": False, "phase": 3},
-        )
+    @application.post(
+        "/api/v1/auth/etrade/start",
+        response_model=EtradeAuthStartResponse,
+        responses=API_ERROR_RESPONSES,
+    )
+    def etrade_auth_start() -> dict[str, str]:
+        if etrade_oauth is None:
+            raise AppError(
+                "etrade_auth_unavailable",
+                "E*TRADE OAuth is disabled; no broker connection was attempted.",
+                status_code=503,
+                details={"available": False, "phase": 3},
+            )
+        return etrade_oauth.start()
 
-    @application.post("/api/v1/auth/etrade/verify", status_code=503, response_model=ErrorEnvelope, responses=API_ERROR_RESPONSES)
-    def etrade_auth_verify() -> None:
-        raise AppError(
-            "etrade_auth_unavailable",
-            "E*TRADE OAuth is disabled in this phase",
-            status_code=503,
-            details={"available": False, "phase": 3},
-        )
+    @application.post(
+        "/api/v1/auth/etrade/verify",
+        response_model=EtradeAuthStatusResponse,
+        responses=API_ERROR_RESPONSES,
+    )
+    def etrade_auth_verify(body: EtradeAuthVerifyInput) -> dict[str, object]:
+        if etrade_oauth is None:
+            raise AppError(
+                "etrade_auth_unavailable",
+                "E*TRADE OAuth is disabled; no broker connection was attempted.",
+                status_code=503,
+                details={"available": False, "phase": 3},
+            )
+        return etrade_oauth.verify(body.verifier)
 
     @application.post("/api/v1/orders/{leg_id}/preview", status_code=503, response_model=ErrorEnvelope, responses=API_ERROR_RESPONSES)
     def disabled_order_preview(leg_id: str) -> None:

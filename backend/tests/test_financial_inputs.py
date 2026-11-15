@@ -7,7 +7,6 @@ from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
-from tests.query_test_support import count_selects
 from sqlalchemy import select
 
 from app.broker.fake import FakeBroker
@@ -41,6 +40,7 @@ from app.domain.trade_dates import (
 from app.main import create_app
 from app.schemas import BrokerSnapshot
 from app.services.financial_input_loader import load_financial_inputs
+from tests.query_test_support import count_selects
 
 
 def _allocation_policy() -> AllocationPolicy:

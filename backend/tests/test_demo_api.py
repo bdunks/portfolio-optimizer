@@ -16,7 +16,6 @@ from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from tests.query_test_support import count_selects
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
 
@@ -37,6 +36,7 @@ from app.main import create_app
 from app.schemas import BrokerSnapshot
 from app.services import demo_optimizer
 from app.services.demo_optimizer import _fingerprint
+from tests.query_test_support import count_selects
 
 
 @pytest.fixture

@@ -5,12 +5,6 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from tests.optimizer_quality_reference import (
-    BuyTickerBound,
-    CandidateUniverse,
-    SellLotBound,
-    enumerate_small_case,
-)
 
 from app.domain.allocation import (
     AllocationPolicy,
@@ -31,6 +25,12 @@ from app.domain.financial_inputs import (
     PositionInput,
     QuoteInput,
     SecurityInput,
+)
+from tests.optimizer_quality_reference import (
+    BuyTickerBound,
+    CandidateUniverse,
+    SellLotBound,
+    enumerate_small_case,
 )
 
 TRADE_DATE = date(2026, 11, 13)

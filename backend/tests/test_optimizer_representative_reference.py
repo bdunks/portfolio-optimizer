@@ -3,12 +3,11 @@ from __future__ import annotations
 from dataclasses import replace
 from decimal import Decimal
 
-from tests.optimizer_quality_cases import build_small_quality_case
-from tests.optimizer_representative_reference import search_representative_best_known
-
 from app.domain.financial_inputs import FinancialInputs, PolicySettings
 from app.domain.portfolio_accounting import ConsolidatedLeg, LotAllocation
 from app.optimizer.validation import validate_candidate
+from tests.optimizer_quality_cases import build_small_quality_case
+from tests.optimizer_representative_reference import search_representative_best_known
 
 
 def _multi_lot_incumbent(inputs: FinancialInputs) -> tuple[ConsolidatedLeg, ...]:

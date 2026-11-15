@@ -6,9 +6,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import inspect, select
-from tests.test_foundation import _draft_payload
 
 from app.db.models import PolicySectorBand
+from tests.test_foundation import _draft_payload
 
 pytest_plugins = ("test_foundation",)
 

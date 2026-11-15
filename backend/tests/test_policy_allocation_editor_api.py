@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from test_foundation import _draft_payload
+from tests.test_foundation import _draft_payload
 
 from app.domain.decimal_math import exact_sum
 

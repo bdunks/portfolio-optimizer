@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from optimizer_quality_reference import (
+from tests.optimizer_quality_reference import (
     BuyTickerBound,
     CandidateUniverse,
     SellLotBound,

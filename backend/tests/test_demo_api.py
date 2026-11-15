@@ -16,7 +16,7 @@ from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from query_test_support import count_selects
+from tests.query_test_support import count_selects
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
 

@@ -7,7 +7,7 @@ from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
-from query_test_support import count_selects
+from tests.query_test_support import count_selects
 from sqlalchemy import select
 
 from app.broker.fake import FakeBroker

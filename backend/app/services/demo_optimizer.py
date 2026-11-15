@@ -68,15 +68,20 @@ DEMO_RISK_WARNING = "risk_tracking_validation_not_run_demo"
 
 
 def _fingerprint(value: object) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str).encode()
+    encoded = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str
+    ).encode()
     return hashlib.sha256(encoded).hexdigest()
-
 
 
 def _active_policy(session: Session) -> PolicyRevision:
     policy = session.scalar(select(PolicyRevision).where(PolicyRevision.status == "ACTIVE"))
     if policy is None:
-        raise AppError("active_policy_required", "An active policy is required to create demo recommendations", status_code=409)
+        raise AppError(
+            "active_policy_required",
+            "An active policy is required to create demo recommendations",
+            status_code=409,
+        )
     errors = validate_policy_revision(session, policy)
     if errors:
         raise AppError(
@@ -96,7 +101,11 @@ def _frozen_input(
     proposed_trade_date: date,
 ) -> FinancialInputs:
     if not sync_state.complete or sync_state.current_generation < 1:
-        raise AppError("current_state_unavailable", "A complete current portfolio sync is required", status_code=409)
+        raise AppError(
+            "current_state_unavailable",
+            "A complete current portfolio sync is required",
+            status_code=409,
+        )
     required = ("positions", "lots", "transactions", "balances", "quotes")
     missing = [key for key in required if not sync_state.coverage.get(key, False)]
     if missing:
@@ -112,7 +121,11 @@ def _frozen_input(
         or account.cash_usd < 0
         or account.settled_buying_power_usd < 0
     ):
-        raise AppError("invalid_current_balance", "Current account balances must be finite and nonnegative", status_code=422)
+        raise AppError(
+            "invalid_current_balance",
+            "Current account balances must be finite and nonnegative",
+            status_code=422,
+        )
 
     inputs = load_financial_inputs(session, account, sync_state, policy, proposed_trade_date)
     quotes_by_ticker = {quote.ticker: quote for quote in inputs.quotes}
@@ -121,10 +134,22 @@ def _frozen_input(
     for position in inputs.positions:
         quote = quotes_by_ticker.get(position.ticker)
         if position.sync_generation != sync_state.current_generation:
-            raise AppError("current_state_inconsistent", "Current position data is inconsistent", status_code=409)
+            raise AppError(
+                "current_state_inconsistent",
+                "Current position data is inconsistent",
+                status_code=409,
+            )
         if position.shares <= 0 or position.market_value_usd < 0:
-            raise AppError("invalid_position", "Current positions require positive shares and nonnegative value", status_code=422)
-        if quote is None or quote.sync_generation != sync_state.current_generation or quote.last_usd is None:
+            raise AppError(
+                "invalid_position",
+                "Current positions require positive shares and nonnegative value",
+                status_code=422,
+            )
+        if (
+            quote is None
+            or quote.sync_generation != sync_state.current_generation
+            or quote.last_usd is None
+        ):
             raise AppError(
                 "quote_unavailable",
                 "Every held position requires a quote from the current complete sync",
@@ -140,7 +165,11 @@ def _frozen_input(
             )
     for lot in inputs.lots:
         if lot.sync_generation != sync_state.current_generation:
-            raise AppError("current_state_inconsistent", "Current tax-lot data is inconsistent", status_code=409)
+            raise AppError(
+                "current_state_inconsistent",
+                "Current tax-lot data is inconsistent",
+                status_code=409,
+            )
         if lot.shares <= 0 or lot.available_shares < 0 or lot.available_shares > lot.shares:
             raise AppError(
                 "invalid_lot_quantity",
@@ -149,7 +178,9 @@ def _frozen_input(
                 details={"broker_lot_id": lot.broker_lot_id},
             )
         if lot.adjusted_unit_basis_usd < 0:
-            raise AppError("invalid_lot_basis", "Adjusted lot basis cannot be negative", status_code=422)
+            raise AppError(
+                "invalid_lot_basis", "Adjusted lot basis cannot be negative", status_code=422
+            )
         lots_by_ticker.setdefault(lot.ticker, []).append(lot)
     if set(lots_by_ticker) != set(positions_by_ticker) or any(
         exact_sum(lot.shares for lot in lots_by_ticker[ticker]) != position.shares
@@ -167,11 +198,9 @@ def _frozen_input(
     return replace(inputs, source_checksum=source_checksum)
 
 
-
-
-
-
-def _add_demo_group(session: Session, run: OptimizerRun, rank: int, data: dict[str, object]) -> RecommendationGroup:
+def _add_demo_group(
+    session: Session, run: OptimizerRun, rank: int, data: dict[str, object]
+) -> RecommendationGroup:
     ticker = str(data["ticker"])
     source_price = _decimal(data["source_price"])
     source_quote = data["source_quote"]
@@ -243,7 +272,9 @@ def _add_demo_group(session: Session, run: OptimizerRun, rank: int, data: dict[s
                 "depends_on_leg_id": sell_leg_id,
                 "quote_as_of": replacement["quote"]["as_of"],
                 "quote_source": replacement["quote"]["source"],
-                "min_buy_order_notional_usd": str(replacement.get("min_buy_order_notional_usd", "0")),
+                "min_buy_order_notional_usd": str(
+                    replacement.get("min_buy_order_notional_usd", "0")
+                ),
             },
         )
     )
@@ -272,12 +303,16 @@ def _add_demo_group(session: Session, run: OptimizerRun, rank: int, data: dict[s
 
 def _consolidate_replacement_legs(session: Session, run: OptimizerRun) -> None:
     groups = session.scalars(
-        select(RecommendationGroup).where(RecommendationGroup.run_id == run.id).order_by(RecommendationGroup.rank)
+        select(RecommendationGroup)
+        .where(RecommendationGroup.run_id == run.id)
+        .order_by(RecommendationGroup.rank)
     ).all()
     buys_by_security: dict[int, list[RecommendationLeg]] = {}
     for group in groups:
         legs = session.scalars(
-            select(RecommendationLeg).where(RecommendationLeg.group_id == group.id).order_by(RecommendationLeg.sequence)
+            select(RecommendationLeg)
+            .where(RecommendationLeg.group_id == group.id)
+            .order_by(RecommendationLeg.sequence)
         ).all()
         for leg in legs:
             if session.get(RecommendationGroupLeg, (group.id, leg.id)) is None:
@@ -289,9 +324,9 @@ def _consolidate_replacement_legs(session: Session, run: OptimizerRun) -> None:
         canonical = buy_legs[0]
         linked_groups = list(dict.fromkeys(leg.group_id for leg in buy_legs))
         funding_sells = session.scalars(
-            select(RecommendationLeg).where(
-                RecommendationLeg.group_id.in_(linked_groups), RecommendationLeg.side == "SELL"
-            ).order_by(RecommendationLeg.sequence, RecommendationLeg.id)
+            select(RecommendationLeg)
+            .where(RecommendationLeg.group_id.in_(linked_groups), RecommendationLeg.side == "SELL")
+            .order_by(RecommendationLeg.sequence, RecommendationLeg.id)
         ).all()
         details = dict(canonical.details)
         details.pop("depends_on_leg_id", None)
@@ -302,14 +337,20 @@ def _consolidate_replacement_legs(session: Session, run: OptimizerRun) -> None:
             if session.get(RecommendationGroupLeg, (group_id, canonical.id)) is None:
                 session.add(RecommendationGroupLeg(group_id=group_id, leg_id=canonical.id))
         for duplicate in buy_legs[1:]:
-            session.query(RecommendationGroupLeg).filter_by(leg_id=duplicate.id).delete(synchronize_session=False)
+            session.query(RecommendationGroupLeg).filter_by(leg_id=duplicate.id).delete(
+                synchronize_session=False
+            )
             session.delete(duplicate)
 
 
 def _security_id(session: Session, ticker: str) -> int:
     security = session.scalar(select(Security).where(Security.ticker == ticker))
     if security is None:
-        raise AppError("candidate_security_unavailable", "Configured ETF candidate is not in the current catalog", status_code=422)
+        raise AppError(
+            "candidate_security_unavailable",
+            "Configured ETF candidate is not in the current catalog",
+            status_code=422,
+        )
     return security.id
 
 
@@ -337,7 +378,9 @@ def create_demo_run(
     account = session.get(Account, 1)
     sync_state = session.get(SyncState, 1)
     if account is None or sync_state is None or account.source.upper() not in {"DEMO", "FAKE"}:
-        raise AppError("demo_account_required", "A seeded FakeBroker demo account is required", status_code=409)
+        raise AppError(
+            "demo_account_required", "A seeded FakeBroker demo account is required", status_code=409
+        )
     policy = _active_policy(session)
     proposed_trade_date = resolve_proposed_trade_date(request.proposed_trade_date, demo=True)
     inputs = _frozen_input(session, account, sync_state, policy, proposed_trade_date)
@@ -389,13 +432,12 @@ def create_demo_run(
     _consolidate_replacement_legs(session, run)
     session.flush()
     groups = session.scalars(
-        select(RecommendationGroup).where(RecommendationGroup.run_id == run.id).order_by(RecommendationGroup.rank)
+        select(RecommendationGroup)
+        .where(RecommendationGroup.run_id == run.id)
+        .order_by(RecommendationGroup.rank)
     ).all()
     selected_lots = {
-        group.id: [
-            row.broker_lot_id
-            for row in _group_lot_rows(session, group.id)
-        ]
+        group.id: [row.broker_lot_id for row in _group_lot_rows(session, group.id)]
         for group in groups
     }
     _recalculate_selection(session, run, {group.id for group in groups}, selected_lots)
@@ -403,7 +445,12 @@ def create_demo_run(
         session,
         correlation_id,
         "optimizer_run",
-        {"run_id": run.id, "policy_revision_id": policy.id, "source_generation": run.source_generation, "demo": True},
+        {
+            "run_id": run.id,
+            "policy_revision_id": policy.id,
+            "source_generation": run.source_generation,
+            "demo": True,
+        },
     )
     return run
 
@@ -423,6 +470,7 @@ def _group_lot_rows(session: Session, group_id: str) -> list[RecommendationSelec
         .order_by(RecommendationSelectedLot.broker_lot_id)
     ).all()
 
+
 def _group_legs(session: Session, group_id: str) -> list[RecommendationLeg]:
     return session.scalars(
         select(RecommendationLeg)
@@ -430,7 +478,6 @@ def _group_legs(session: Session, group_id: str) -> list[RecommendationLeg]:
         .where(RecommendationGroupLeg.group_id == group_id)
         .order_by(RecommendationLeg.sequence, RecommendationLeg.id)
     ).all()
-
 
 
 def _check_run_current(session: Session, run: OptimizerRun) -> None:
@@ -441,31 +488,49 @@ def _check_run_current(session: Session, run: OptimizerRun) -> None:
             "stale_run_source",
             "The saved run is stale after a portfolio sync; create a new demo run before changing its selection",
             status_code=409,
-            details={"run_source_generation": run.source_generation, "current_generation": state.current_generation if state else None},
+            details={
+                "run_source_generation": run.source_generation,
+                "current_generation": state.current_generation if state else None,
+            },
         )
     if active is None or active.id != run.policy_revision_id:
         raise AppError(
             "stale_run_policy",
             "The saved run uses a superseded policy; create a new demo run before changing its selection",
             status_code=409,
-            details={"run_policy_revision_id": run.policy_revision_id, "active_policy_revision_id": active.id if active else None},
+            details={
+                "run_policy_revision_id": run.policy_revision_id,
+                "active_policy_revision_id": active.id if active else None,
+            },
         )
     bundle = run.frozen_input_bundle
-    fingerprint_payload = {key: value for key, value in bundle.items() if key != "input_fingerprint"}
+    fingerprint_payload = {
+        key: value for key, value in bundle.items() if key != "input_fingerprint"
+    }
     if (
         not run.input_fingerprint
         or bundle.get("input_fingerprint") != run.input_fingerprint
         or _fingerprint(fingerprint_payload) != run.input_fingerprint
     ):
-        raise AppError("run_provenance_invalid", "Saved demo run provenance is incomplete or changed", status_code=409)
+        raise AppError(
+            "run_provenance_invalid",
+            "Saved demo run provenance is incomplete or changed",
+            status_code=409,
+        )
     if run.proposed_trade_date is None:
-        raise AppError("run_trade_date_missing", "Saved run trade-date provenance is missing", status_code=409)
+        raise AppError(
+            "run_trade_date_missing", "Saved run trade-date provenance is missing", status_code=409
+        )
     try:
         frozen_inputs = financial_inputs_from_provenance(
             bundle, proposed_trade_date=run.proposed_trade_date
         )
     except (KeyError, TypeError, ValueError) as exc:
-        raise AppError("run_provenance_invalid", "Saved run financial inputs cannot be reconstructed", status_code=409) from exc
+        raise AppError(
+            "run_provenance_invalid",
+            "Saved run financial inputs cannot be reconstructed",
+            status_code=409,
+        ) from exc
 
     account = session.get(Account, 1)
     frozen_account = frozen_inputs.account
@@ -477,7 +542,11 @@ def _check_run_current(session: Session, run: OptimizerRun) -> None:
         or account.as_of != frozen_account.as_of
         or _fingerprint(account.broker_account_id_key) != frozen_account.account_key_fingerprint
     ):
-        raise AppError("stale_run_account", "Current account values changed; create a new demo run", status_code=409)
+        raise AppError(
+            "stale_run_account",
+            "Current account values changed; create a new demo run",
+            status_code=409,
+        )
 
     securities = {row.id: row for row in session.scalars(select(Security)).all()}
     frozen_positions = {row.ticker: row for row in frozen_inputs.positions}
@@ -490,12 +559,18 @@ def _check_run_current(session: Session, run: OptimizerRun) -> None:
         if row.security_id in securities
     }
     if set(live_positions) != set(frozen_positions):
-        raise AppError("stale_run_positions", "Current positions changed; create a new demo run", status_code=409)
+        raise AppError(
+            "stale_run_positions",
+            "Current positions changed; create a new demo run",
+            status_code=409,
+        )
     frozen_quotes = {row.ticker: row for row in frozen_inputs.quotes}
 
     def quote_matches(ticker: str, security_id: int) -> bool:
         frozen_quote = frozen_quotes.get(ticker)
-        live_quote = session.scalar(select(CurrentQuote).where(CurrentQuote.security_id == security_id))
+        live_quote = session.scalar(
+            select(CurrentQuote).where(CurrentQuote.security_id == security_id)
+        )
         return bool(
             frozen_quote is not None
             and live_quote is not None
@@ -528,8 +603,12 @@ def _check_run_current(session: Session, run: OptimizerRun) -> None:
                 details={"ticker": ticker},
             )
 
-    for group in session.scalars(select(RecommendationGroup).where(RecommendationGroup.run_id == run.id)).all():
-        for leg in session.scalars(select(RecommendationLeg).where(RecommendationLeg.group_id == group.id)).all():
+    for group in session.scalars(
+        select(RecommendationGroup).where(RecommendationGroup.run_id == run.id)
+    ).all():
+        for leg in session.scalars(
+            select(RecommendationLeg).where(RecommendationLeg.group_id == group.id)
+        ).all():
             security = session.get(Security, leg.security_id)
             if security is None or not quote_matches(security.ticker, security.id):
                 raise AppError(
@@ -540,7 +619,9 @@ def _check_run_current(session: Session, run: OptimizerRun) -> None:
                 )
 
     frozen_lots = {row.broker_lot_id: row for row in frozen_inputs.lots}
-    for group in session.scalars(select(RecommendationGroup).where(RecommendationGroup.run_id == run.id)).all():
+    for group in session.scalars(
+        select(RecommendationGroup).where(RecommendationGroup.run_id == run.id)
+    ).all():
         for row in _group_lot_rows(session, group.id):
             live = session.scalar(
                 select(CurrentTaxLot).where(
@@ -574,6 +655,7 @@ def _check_run_current(session: Session, run: OptimizerRun) -> None:
                     details={"broker_lot_id": row.broker_lot_id},
                 )
 
+
 def _recalculate_selection(
     session: Session,
     run: OptimizerRun,
@@ -582,13 +664,25 @@ def _recalculate_selection(
 ) -> None:
     bundle = run.frozen_input_bundle
     if run.proposed_trade_date is None:
-        raise AppError("run_trade_date_missing", "Saved run has no proposed trade-date provenance", status_code=409)
+        raise AppError(
+            "run_trade_date_missing",
+            "Saved run has no proposed trade-date provenance",
+            status_code=409,
+        )
     try:
-        inputs = financial_inputs_from_provenance(bundle, proposed_trade_date=run.proposed_trade_date)
+        inputs = financial_inputs_from_provenance(
+            bundle, proposed_trade_date=run.proposed_trade_date
+        )
     except (KeyError, TypeError, ValueError) as exc:
-        raise AppError("run_provenance_invalid", "Saved run financial inputs cannot be reconstructed", status_code=409) from exc
+        raise AppError(
+            "run_provenance_invalid",
+            "Saved run financial inputs cannot be reconstructed",
+            status_code=409,
+        ) from exc
     groups = session.scalars(
-        select(RecommendationGroup).where(RecommendationGroup.run_id == run.id).order_by(RecommendationGroup.rank)
+        select(RecommendationGroup)
+        .where(RecommendationGroup.run_id == run.id)
+        .order_by(RecommendationGroup.rank)
     ).all()
     known_group_ids = {group.id for group in groups}
     if selected_group_ids - known_group_ids:
@@ -603,7 +697,9 @@ def _recalculate_selection(
             "invalid_lot_selection",
             "Sell-lot selections may only be supplied for selected groups",
             status_code=422,
-            details={"unselected_group_ids": sorted(set(selected_lots_by_group) - selected_group_ids)},
+            details={
+                "unselected_group_ids": sorted(set(selected_lots_by_group) - selected_group_ids)
+            },
         )
 
     actions: list[dict[str, object]] = []
@@ -615,11 +711,17 @@ def _recalculate_selection(
         sell_leg = next((leg for leg in legs if leg.side == "SELL"), None)
         buy_leg = next((leg for leg in legs if leg.side == "BUY"), None)
         if sell_leg is None or buy_leg is None:
-            raise AppError("invalid_demo_group", "A demo trade group is missing a dependent trade leg", status_code=409)
+            raise AppError(
+                "invalid_demo_group",
+                "A demo trade group is missing a dependent trade leg",
+                status_code=409,
+            )
         lot_rows = _group_lot_rows(session, group.id)
         member_ids = {row.broker_lot_id for row in lot_rows}
         requested_ids = (
-            set(selected_lots_by_group.get(group.id, member_ids)) if group.id in selected_group_ids else set()
+            set(selected_lots_by_group.get(group.id, member_ids))
+            if group.id in selected_group_ids
+            else set()
         )
         if group.id in selected_group_ids and not requested_ids:
             raise AppError(
@@ -633,15 +735,24 @@ def _recalculate_selection(
                 "invalid_lot_selection",
                 "Selection contains a sell lot that was not attributed to this group",
                 status_code=422,
-                details={"group_id": group.id, "unknown_broker_lot_ids": sorted(requested_ids - member_ids)},
+                details={
+                    "group_id": group.id,
+                    "unknown_broker_lot_ids": sorted(requested_ids - member_ids),
+                },
             )
         if group.rejected and group.id in selected_group_ids:
-            raise AppError("rejected_group_selection", "A rejected group cannot be selected", status_code=422)
+            raise AppError(
+                "rejected_group_selection", "A rejected group cannot be selected", status_code=422
+            )
 
         source_security = session.get(Security, sell_leg.security_id)
         target_security = session.get(Security, buy_leg.security_id)
         if source_security is None or target_security is None:
-            raise AppError("stale_run_security", "A saved recommendation security is unavailable", status_code=409)
+            raise AppError(
+                "stale_run_security",
+                "A saved recommendation security is unavailable",
+                status_code=409,
+            )
         source_price = sell_leg.estimated_unit_price_usd
         selected_rows = [row for row in lot_rows if row.broker_lot_id in requested_ids]
         proceeds = Decimal(0)
@@ -730,7 +841,9 @@ def _recalculate_selection(
         buy_leg.shares = buy_shares
         details = dict(buy_leg.details)
         details.pop("depends_on_leg_id", None)
-        details["depends_on_leg_ids"] = list(dict.fromkeys(str(item) for item in pool["sell_leg_ids"]))
+        details["depends_on_leg_ids"] = list(
+            dict.fromkeys(str(item) for item in pool["sell_leg_ids"])
+        )
         buy_leg.details = details
 
         first_group = group_ids[0]
@@ -762,7 +875,9 @@ def _recalculate_selection(
                 ticker=str(action["source_ticker"]),
                 shares=_decimal(action["shares_sold"]),
                 estimated_unit_price_usd=sell_leg.estimated_unit_price_usd,
-                selected_lots=tuple(LotAllocation(row.broker_lot_id, row.shares) for row in selected_rows),
+                selected_lots=tuple(
+                    LotAllocation(row.broker_lot_id, row.shares) for row in selected_rows
+                ),
                 sequence=sell_leg.sequence,
                 group_ids=(str(action["group"].id),),
             )
@@ -773,7 +888,9 @@ def _recalculate_selection(
             continue
         buy_security = session.get(Security, buy_leg.security_id)
         if buy_security is None:
-            raise AppError("stale_run_security", "A saved replacement security is unavailable", status_code=409)
+            raise AppError(
+                "stale_run_security", "A saved replacement security is unavailable", status_code=409
+            )
         consolidated_legs.append(
             ConsolidatedLeg(
                 leg_id=buy_leg.id,
@@ -805,8 +922,12 @@ def _recalculate_selection(
         sell_leg = action["sell_leg"]
         selected_rows = action["selected_rows"]
         effects_for_group = [lot_effects[row.broker_lot_id] for row in selected_rows]
-        realized_st = exact_sum(effect.realized_pl_usd for effect in effects_for_group if effect.term == "ST")
-        realized_lt = exact_sum(effect.realized_pl_usd for effect in effects_for_group if effect.term == "LT")
+        realized_st = exact_sum(
+            effect.realized_pl_usd for effect in effects_for_group if effect.term == "ST"
+        )
+        realized_lt = exact_sum(
+            effect.realized_pl_usd for effect in effects_for_group if effect.term == "LT"
+        )
         action["realized_st"] = realized_st
         action["realized_lt"] = realized_lt
         sell_leg.net_st_realized_usd = realized_st
@@ -821,19 +942,30 @@ def _recalculate_selection(
     cash_after = evaluation.proposed.cash_usd
     actual_orders = len(consolidated_legs)
     turnover_limit = exact_percent_product(evaluation.current.portfolio_total_usd, max_turnover)
-    if len(selected_tickers) > max_tickers or selected_lot_count > max_lots or actual_orders > max_orders:
+    if (
+        len(selected_tickers) > max_tickers
+        or selected_lot_count > max_lots
+        or actual_orders > max_orders
+    ):
         raise AppError(
             "selected_basket_infeasible",
             "Selected basket exceeds an active small-batch order limit",
             status_code=422,
-            details={"sell_tickers": len(selected_tickers), "sell_lots": selected_lot_count, "orders": actual_orders},
+            details={
+                "sell_tickers": len(selected_tickers),
+                "sell_lots": selected_lot_count,
+                "orders": actual_orders,
+            },
         )
     if evaluation.sell_proceeds_usd > turnover_limit:
         raise AppError(
             "selected_basket_infeasible",
             "Selected basket exceeds the configured demo turnover limit",
             status_code=422,
-            details={"sell_proceeds_usd": str(evaluation.sell_proceeds_usd), "turnover_limit_usd": str(turnover_limit)},
+            details={
+                "sell_proceeds_usd": str(evaluation.sell_proceeds_usd),
+                "turnover_limit_usd": str(turnover_limit),
+            },
         )
 
     effects = present_portfolio_evaluation(
@@ -845,7 +977,9 @@ def _recalculate_selection(
         group.impact = {
             "demo": True,
             "wash_status": "not_validated_demo",
-            "selected_sell_lots_count": sum(row.selected for row in _group_lot_rows(session, group.id)),
+            "selected_sell_lots_count": sum(
+                row.selected for row in _group_lot_rows(session, group.id)
+            ),
             "sell_proceeds_usd": str(action["proceeds"]),
             "realized_st_usd": str(action["realized_st"]),
             "realized_lt_usd": str(action["realized_lt"]),
@@ -870,15 +1004,18 @@ def _recalculate_selection(
         "estimated_tax_benefit_usd": None,
         "estimated_tax_benefit_status": tax_status,
         "lots_sold_count": selected_lot_count,
-        "positions_exited_count": sum(effect.position_exited for effect in evaluation.position_effects),
+        "positions_exited_count": sum(
+            effect.position_exited for effect in evaluation.position_effects
+        ),
         "orders_count": actual_orders,
         "cash_before_usd": str(cash),
         "cash_after_usd": str(cash_after),
         "portfolio_effects": effects,
-        "no_trade_reason": "No demo candidates met the configured batch and funding limits" if not actions or not selected_group_ids else None,
+        "no_trade_reason": "No demo candidates met the configured batch and funding limits"
+        if not actions or not selected_group_ids
+        else None,
         "constraints_satisfied": None,
     }
-
 
 
 def apply_selection(
@@ -901,7 +1038,6 @@ def apply_selection(
         {"run_id": run.id, "selected_group_ids": sorted(selected)},
     )
     return run
-
 
 
 def _lot_intent_error(exc: AppError) -> AppError:
@@ -975,10 +1111,14 @@ def apply_lot_review_intent(
             continue
         group_ids = candidate_groups_by_lot.get(broker_lot_id, set())
         if not group_ids:
-            rejected_lots.append({"broker_lot_id": broker_lot_id, "reason": "outside_saved_demo_candidates"})
+            rejected_lots.append(
+                {"broker_lot_id": broker_lot_id, "reason": "outside_saved_demo_candidates"}
+            )
             continue
         if len(group_ids) != 1:
-            rejected_lots.append({"broker_lot_id": broker_lot_id, "reason": "ambiguous_saved_demo_candidate"})
+            rejected_lots.append(
+                {"broker_lot_id": broker_lot_id, "reason": "ambiguous_saved_demo_candidate"}
+            )
             continue
         group_id = next(iter(group_ids))
         selected_lots_by_group.setdefault(group_id, []).append(broker_lot_id)
@@ -1008,6 +1148,7 @@ def apply_lot_review_intent(
     )
     return run
 
+
 def annotate_group(
     session: Session,
     run_id: str,
@@ -1029,9 +1170,13 @@ def annotate_group(
         )
     )
     if group is None:
-        raise AppError("recommendation_group_not_found", "Recommendation group was not found", status_code=404)
+        raise AppError(
+            "recommendation_group_not_found", "Recommendation group was not found", status_code=404
+        )
     if not isinstance(payload, RecommendationAnnotationInput):
-        raise AppError("invalid_annotation", "Recommendation annotation is invalid", status_code=422)
+        raise AppError(
+            "invalid_annotation", "Recommendation annotation is invalid", status_code=422
+        )
     fields_set = payload.model_fields_set
     if "note" in fields_set:
         group.note = payload.note
@@ -1067,7 +1212,9 @@ def annotate_group(
     return run
 
 
-def _add_activity(session: Session, correlation_id: str, event_type: str, details: dict[str, object]) -> None:
+def _add_activity(
+    session: Session, correlation_id: str, event_type: str, details: dict[str, object]
+) -> None:
     session.add(
         ActivityEvent(
             id=str(uuid4()),
@@ -1111,6 +1258,7 @@ def _presentation_group_impact(value: object) -> object:
     presented = dict(value)
     presented["portfolio_effects"] = presented_effects
     return presented
+
 
 _RUN_DISPLAY_POLICY_SETTINGS = (
     "short_term_tax_rate",
@@ -1199,11 +1347,20 @@ def _frozen_run_display_context(run: OptimizerRun) -> dict[str, object] | None:
         or isinstance(revision_number, bool)
     ):
         return None
-    if any(not isinstance(row, dict) or not set(_RUN_DISPLAY_SLEEVE_FIELDS) <= row.keys() for row in sleeves):
+    if any(
+        not isinstance(row, dict) or not set(_RUN_DISPLAY_SLEEVE_FIELDS) <= row.keys()
+        for row in sleeves
+    ):
         return None
-    if any(not isinstance(row, dict) or not set(_RUN_DISPLAY_ALLOWED_FIELDS) <= row.keys() for row in allowed_securities):
+    if any(
+        not isinstance(row, dict) or not set(_RUN_DISPLAY_ALLOWED_FIELDS) <= row.keys()
+        for row in allowed_securities
+    ):
         return None
-    if any(not isinstance(row, dict) or not set(_RUN_DISPLAY_OVERRIDE_FIELDS) <= row.keys() for row in overrides):
+    if any(
+        not isinstance(row, dict) or not set(_RUN_DISPLAY_OVERRIDE_FIELDS) <= row.keys()
+        for row in overrides
+    ):
         return None
     raw_created_at = policy.get("created_at")
     raw_activated_at = policy.get("activated_at")
@@ -1214,7 +1371,7 @@ def _frozen_run_display_context(run: OptimizerRun) -> dict[str, object] | None:
     try:
         created_at = _run_context_datetime(raw_created_at)
         activated_at = _run_context_datetime(raw_activated_at)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     context = {
         "available": True,
@@ -1225,7 +1382,9 @@ def _frozen_run_display_context(run: OptimizerRun) -> dict[str, object] | None:
         "activated_at": activated_at,
         "sleeves": [{key: row[key] for key in _RUN_DISPLAY_SLEEVE_FIELDS} for row in sleeves],
         "settings": settings,
-        "allowed_securities": [{key: row[key] for key in _RUN_DISPLAY_ALLOWED_FIELDS} for row in allowed_securities],
+        "allowed_securities": [
+            {key: row[key] for key in _RUN_DISPLAY_ALLOWED_FIELDS} for row in allowed_securities
+        ],
         "overrides": [{key: row[key] for key in _RUN_DISPLAY_OVERRIDE_FIELDS} for row in overrides],
         "unavailable_reason": None,
     }
@@ -1236,7 +1395,9 @@ def _frozen_run_display_context(run: OptimizerRun) -> dict[str, object] | None:
     return context
 
 
-def _policy_revision_run_display_context(session: Session, run: OptimizerRun) -> dict[str, object] | None:
+def _policy_revision_run_display_context(
+    session: Session, run: OptimizerRun
+) -> dict[str, object] | None:
     revision = session.get(PolicyRevision, run.policy_revision_id)
     if revision is None:
         return None
@@ -1264,7 +1425,13 @@ def _policy_revision_run_display_context(session: Session, run: OptimizerRun) ->
     settings: dict[str, object] = {}
     for key in _RUN_DISPLAY_POLICY_SETTINGS:
         value = getattr(revision, key)
-        settings[key] = value.isoformat() if isinstance(value, date) else str(value) if isinstance(value, Decimal) else value
+        settings[key] = (
+            value.isoformat()
+            if isinstance(value, date)
+            else str(value)
+            if isinstance(value, Decimal)
+            else value
+        )
     return {
         "available": True,
         "source": "policy_revision",
@@ -1330,14 +1497,17 @@ def _run_display_context(run: OptimizerRun, session: Session | None) -> dict[str
     }
 
 
-
 def run_summary(run: OptimizerRun, *, session: Session | None = None) -> dict[str, object]:
     metrics = run.metrics
     bundle = run.frozen_input_bundle
     policy = bundle.get("policy")
     settings = policy.get("settings", {}) if isinstance(policy, dict) else {}
     display_context = _run_display_context(run, session)
-    display_settings = display_context["settings"] if isinstance(display_context.get("settings"), dict) else settings
+    display_settings = (
+        display_context["settings"]
+        if isinstance(display_context.get("settings"), dict)
+        else settings
+    )
     tax_status = metrics.get("estimated_tax_benefit_status", "tax_profile_incomplete")
     return {
         "run_id": run.id,
@@ -1552,9 +1722,13 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
         )
     }
     if file_format == "json":
-        return "application/json", json.dumps({"metadata": metadata, "run": response}, default=str, sort_keys=True)
+        return "application/json", json.dumps(
+            {"metadata": metadata, "run": response}, default=str, sort_keys=True
+        )
     if file_format != "csv":
-        raise AppError("invalid_export_format", "Export format must be json or csv", status_code=422)
+        raise AppError(
+            "invalid_export_format", "Export format must be json or csv", status_code=422
+        )
     output = io.StringIO(newline="")
     fields = [
         "run_id",
@@ -1613,7 +1787,9 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
             "record_type": "metadata",
             "warnings": ";".join(metadata["warnings"]),
             "estimated_tax_benefit_status": response["estimated_tax_benefit_status"],
-            "optimizer_metrics_json": json.dumps(response["optimizer_metrics"], sort_keys=True, separators=(",", ":"), default=str),
+            "optimizer_metrics_json": json.dumps(
+                response["optimizer_metrics"], sort_keys=True, separators=(",", ":"), default=str
+            ),
             "orders_count": response["orders_count"],
             "lots_sold_count": response["lots_sold_count"],
             "positions_exited_count": response["positions_exited_count"],
@@ -1623,7 +1799,10 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
             "cash_before_usd": response["cash_before_usd"],
             "cash_after_usd": response["cash_after_usd"],
             "frozen_display_context_json": json.dumps(
-                response["frozen_display_context"], sort_keys=True, separators=(",", ":"), default=str
+                response["frozen_display_context"],
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
             ),
             "portfolio_effects_json": json.dumps(
                 response["portfolio_effects"], sort_keys=True, separators=(",", ":"), default=str
@@ -1644,7 +1823,9 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
                     "group_ids": json.dumps(leg["group_ids"], separators=(",", ":")),
                     "rank": ";".join(str(group["rank"]) for group in linked_groups),
                     "selected": leg["selected"],
-                    "rejected": any(group["rejected"] for group in linked_groups) if leg["side"] == "SELL" else "",
+                    "rejected": any(group["rejected"] for group in linked_groups)
+                    if leg["side"] == "SELL"
+                    else "",
                     "note": ";".join(group["note"] or "" for group in linked_groups),
                     "leg_id": leg["leg_id"],
                     "side": leg["side"],
@@ -1662,7 +1843,11 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
                     "realized_pl_usd": lot["realized_pl_usd"] if lot else "",
                     "net_st_realized_usd": leg["net_st_realized_usd"],
                     "net_lt_realized_usd": leg["net_lt_realized_usd"],
-                    "warnings": ";".join(dict.fromkeys(warning for group in linked_groups for warning in group["warnings"])),
+                    "warnings": ";".join(
+                        dict.fromkeys(
+                            warning for group in linked_groups for warning in group["warnings"]
+                        )
+                    ),
                 }
             )
     return "text/csv; charset=utf-8", output.getvalue()
@@ -1671,7 +1856,9 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
 def wash_sales(session: Session) -> dict[str, object]:
     account = session.get(Account, 1)
     if account is None:
-        raise AppError("demo_account_required", "A synced single-account demo is required", status_code=409)
+        raise AppError(
+            "demo_account_required", "A synced single-account demo is required", status_code=409
+        )
     transactions = session.scalars(
         select(BrokerTransaction)
         .where(BrokerTransaction.account_id == account.id)
@@ -1694,7 +1881,14 @@ def wash_sales(session: Session) -> dict[str, object]:
         }
         history.append(row)
         if transaction.is_acquisition and transaction.transaction_kind == "BUY":
-            acquisitions.append({**row, "lookback_window_end_date": (transaction.trade_date + timedelta(days=30)).isoformat()})
+            acquisitions.append(
+                {
+                    **row,
+                    "lookback_window_end_date": (
+                        transaction.trade_date + timedelta(days=30)
+                    ).isoformat(),
+                }
+            )
 
     proposed: list[dict[str, object]] = []
     state = session.get(SyncState, 1)
@@ -1745,7 +1939,9 @@ def wash_sales(session: Session) -> dict[str, object]:
                             "trigger": "proposed_demo_loss_sale",
                             "loss_sale_date": loss_date.isoformat(),
                             "source": "DEMO recommendation; not an executed trade",
-                            "next_eligible_purchase_date": (loss_date + timedelta(days=31)).isoformat(),
+                            "next_eligible_purchase_date": (
+                                loss_date + timedelta(days=31)
+                            ).isoformat(),
                             "validation": "not_live_validated",
                         }
                     )

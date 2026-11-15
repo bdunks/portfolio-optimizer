@@ -32,12 +32,18 @@ npm run dev
 API: http://127.0.0.1:8000/docs. Use the URL printed by Vite for the web app.
 
 ```bash
+# Autofix and format both projects (from repository root)
+mise run format
+# Or just one: mise run format:backend / mise run format:frontend
+
 # Backend tests
 cd backend && uv run pytest && uv run ruff check .
 
 # Frontend build & tests
 cd frontend && npm run build && npx vitest run
 ```
+
+Backend formatting enables Ruff's unsafe fixes; review the diff because they can change behavior. Frontend formatting reuses `npm run lint` (Prettier + ESLint `--fix`); ESLint suggestions requiring manual review are not automatically applied.
 
 Demo mode runs without E*TRADE credentials. Keep local `.env`, account data, tokens, and `backend/data/` out of Git. Live broker submission is implemented only as the **final phase (Phase 5)** and remains gated by exact per-order approval and E*TRADE terms/account permissions.
 

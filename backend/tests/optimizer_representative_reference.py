@@ -181,8 +181,19 @@ def _blank_pool(
     complete: bool = False,
 ) -> _Pool:
     return _Pool(
-        (), (), {}, {}, {}, {}, *limits, Decimal(0), scan_count,
-        fractional_count, other_count, complete, "incomplete or unavailable",
+        (),
+        (),
+        {},
+        {},
+        {},
+        {},
+        *limits,
+        Decimal(0),
+        scan_count,
+        fractional_count,
+        other_count,
+        complete,
+        "incomplete or unavailable",
     )
 
 
@@ -229,7 +240,7 @@ def _build_pool(inputs: FinancialInputs, deadline: float) -> _PoolBuild:
                     and row.shares.is_finite()
                     and row.shares > 0
                 )
-            except (AttributeError, TypeError, ValueError):
+            except AttributeError, TypeError, ValueError:
                 valid = False
             position_caps[ticker] = _whole_floor(row.shares) if valid else 0
             portfolio_values.append(row.market_value_usd)
@@ -296,10 +307,12 @@ def _build_pool(inputs: FinancialInputs, deadline: float) -> _PoolBuild:
         ):
             portfolio_value = exact_sum(portfolio_values)
             if portfolio_value > 0:
-                buy_capacity = exact_sum((
-                    settled,
-                    exact_product(portfolio_value, turnover_pct / Decimal(100)),
-                ))
+                buy_capacity = exact_sum(
+                    (
+                        settled,
+                        exact_product(portfolio_value, turnover_pct / Decimal(100)),
+                    )
+                )
 
         prefer_etfs = inputs.policy.settings.get("prefer_etf_buys") is True
         buys: list[_BuyOption] = []
@@ -311,7 +324,10 @@ def _build_pool(inputs: FinancialInputs, deadline: float) -> _PoolBuild:
                 or security is None
                 or security.identity.ticker != ticker
                 or security.tradable is not True
-                or (prefer_etfs and security.identity.asset_type.upper() not in {"ETF", "MUTUAL_FUND"})
+                or (
+                    prefer_etfs
+                    and security.identity.asset_type.upper() not in {"ETF", "MUTUAL_FUND"}
+                )
                 or buy_capacity is None
             ):
                 continue
@@ -327,7 +343,8 @@ def _build_pool(inputs: FinancialInputs, deadline: float) -> _PoolBuild:
             sell_groups.setdefault(option.ticker, []).append(option)
         groups = {ticker: tuple(rows) for ticker, rows in sell_groups.items()}
         pool = _Pool(
-            tuple(sells), tuple(buys),
+            tuple(sells),
+            tuple(buys),
             {(row.ticker, row.lot_id): row for row in sells},
             groups,
             {row.ticker: row for row in buys},
@@ -343,15 +360,19 @@ def _build_pool(inputs: FinancialInputs, deadline: float) -> _PoolBuild:
         )
         return _PoolBuild(pool, objective_policy, False)
     except _DeadlineExpired:
-        return _PoolBuild(_blank_pool(
-            limits, scan_count=scan_count, fractional_count=fractional_count,
-            other_count=ineligible_count,
-        ), objective_policy, True)
+        return _PoolBuild(
+            _blank_pool(
+                limits,
+                scan_count=scan_count,
+                fractional_count=fractional_count,
+                other_count=ineligible_count,
+            ),
+            objective_policy,
+            True,
+        )
 
 
-def _canonical_key(
-    legs: tuple[ConsolidatedLeg, ...], deadline: float
-) -> tuple[object, ...]:
+def _canonical_key(legs: tuple[ConsolidatedLeg, ...], deadline: float) -> tuple[object, ...]:
     rows = []
     for leg in legs:
         _check_deadline(deadline)
@@ -359,10 +380,19 @@ def _canonical_key(
         for lot in leg.selected_lots:
             _check_deadline(deadline)
             allocations.append((lot.broker_lot_id, lot.shares))
-        rows.append((
-            leg.leg_id, leg.side, leg.ticker, leg.shares, leg.estimated_unit_price_usd,
-            tuple(allocations), leg.depends_on_leg_ids, leg.sequence, leg.group_ids,
-        ))
+        rows.append(
+            (
+                leg.leg_id,
+                leg.side,
+                leg.ticker,
+                leg.shares,
+                leg.estimated_unit_price_usd,
+                tuple(allocations),
+                leg.depends_on_leg_ids,
+                leg.sequence,
+                leg.group_ids,
+            )
+        )
     return tuple(rows)
 
 
@@ -381,8 +411,11 @@ def _candidate_legs(
         _check_deadline(deadline)
         option = pool.sells_by_key.get(key)
         if (
-            option is None or isinstance(quantity, bool) or not isinstance(quantity, int)
-            or quantity <= 0 or quantity > option.max_shares
+            option is None
+            or isinstance(quantity, bool)
+            or not isinstance(quantity, int)
+            or quantity <= 0
+            or quantity > option.max_shares
         ):
             return None
         by_ticker.setdefault(option.ticker, []).append((option, quantity))
@@ -399,12 +432,18 @@ def _candidate_legs(
         _check_deadline(deadline)
         option = pool.buys_by_ticker.get(ticker)
         if (
-            option is None or isinstance(quantity, bool) or not isinstance(quantity, int)
-            or quantity <= 0 or quantity > option.max_shares or ticker in by_ticker
+            option is None
+            or isinstance(quantity, bool)
+            or not isinstance(quantity, int)
+            or quantity <= 0
+            or quantity > option.max_shares
+            or ticker in by_ticker
         ):
             return None
         normalized_buys[ticker] = (option, quantity)
-    if len(by_ticker) + len(normalized_buys) > pool.max_total_orders or not (by_ticker or normalized_buys):
+    if len(by_ticker) + len(normalized_buys) > pool.max_total_orders or not (
+        by_ticker or normalized_buys
+    ):
         return None
 
     sales: list[tuple[Decimal, str, tuple[tuple[_SellOption, int], ...]]] = []
@@ -418,19 +457,32 @@ def _candidate_legs(
     legs: list[ConsolidatedLeg] = []
     for index, (_, ticker, actions) in enumerate(sales):
         _check_deadline(deadline)
-        legs.append(ConsolidatedLeg(
-            f"sell:{ticker}", "SELL", ticker,
-            exact_sum(Decimal(qty) for _, qty in actions), actions[0][0].price,
-            tuple(LotAllocation(option.lot_id, Decimal(qty)) for option, qty in actions),
-            sequence=index, group_ids=(f"sale:{ticker}",),
-        ))
+        legs.append(
+            ConsolidatedLeg(
+                f"sell:{ticker}",
+                "SELL",
+                ticker,
+                exact_sum(Decimal(qty) for _, qty in actions),
+                actions[0][0].price,
+                tuple(LotAllocation(option.lot_id, Decimal(qty)) for option, qty in actions),
+                sequence=index,
+                group_ids=(f"sale:{ticker}",),
+            )
+        )
     for index, (ticker, (option, quantity)) in enumerate(sorted(normalized_buys.items())):
         _check_deadline(deadline)
-        legs.append(ConsolidatedLeg(
-            f"buy:{ticker}", "BUY", ticker, Decimal(quantity), option.price,
-            depends_on_leg_ids=sell_ids, sequence=len(sales) + index,
-            group_ids=(f"buy:{ticker}",),
-        ))
+        legs.append(
+            ConsolidatedLeg(
+                f"buy:{ticker}",
+                "BUY",
+                ticker,
+                Decimal(quantity),
+                option.price,
+                depends_on_leg_ids=sell_ids,
+                sequence=len(sales) + index,
+                group_ids=(f"buy:{ticker}",),
+            )
+        )
     return tuple(legs)
 
 
@@ -480,12 +532,15 @@ def _draw_sells(
     totals: dict[str, int] = {}
     for option in chosen:
         _check_deadline(deadline)
-        cap = min(option.max_shares, pool.position_caps[option.ticker] - totals.get(option.ticker, 0))
+        cap = min(
+            option.max_shares, pool.position_caps[option.ticker] - totals.get(option.ticker, 0)
+        )
         if cap > 0:
             actions[(option.ticker, option.lot_id)] = rng.randint(1, cap)
-            totals[option.ticker] = totals.get(option.ticker, 0) + actions[(option.ticker, option.lot_id)]
+            totals[option.ticker] = (
+                totals.get(option.ticker, 0) + actions[(option.ticker, option.lot_id)]
+            )
     return actions or None
-
 
 
 def _draw_buys(
@@ -531,17 +586,23 @@ def _random_basket(
         gross = Decimal(0)
         for key, quantity in sells.items():
             _check_deadline(deadline)
-            gross = exact_sum((gross, exact_product(Decimal(quantity), pool.sells_by_key[key].price)))
+            gross = exact_sum(
+                (gross, exact_product(Decimal(quantity), pool.sells_by_key[key].price))
+            )
         fees = exact_product(policy.estimated_fee_per_order_usd, Decimal(2))
         funds = exact_difference(exact_sum((pool.settled_buying_power, gross)), fees)
         shares = min(buy.max_shares, _whole_floor(funds / buy.price)) if funds > 0 else 0
-        return _candidate_legs(pool, policy, sells, {buy.ticker: shares}, deadline) if shares else None
+        return (
+            _candidate_legs(pool, policy, sells, {buy.ticker: shares}, deadline) if shares else None
+        )
     if mode == "sell_only":
         return _candidate_legs(pool, policy, _draw_sells(pool, rng, deadline) or {}, {}, deadline)
     if mode == "buy_only":
         return _candidate_legs(pool, policy, {}, _draw_buys(pool, rng, deadline) or {}, deadline)
     if mode == "random":
-        return _random_basket(rng.choice(("coupled", "sell_only", "buy_only")), pool, policy, rng, deadline)
+        return _random_basket(
+            rng.choice(("coupled", "sell_only", "buy_only")), pool, policy, rng, deadline
+        )
     return None
 
 
@@ -550,11 +611,12 @@ def _multi_lot_candidate(
 ) -> tuple[ConsolidatedLeg, ...] | None:
     for ticker, options in pool.sells_by_ticker.items():
         _check_deadline(deadline)
-        selected = options[:min(len(options), pool.max_sell_lots or 0)]
+        selected = options[: min(len(options), pool.max_sell_lots or 0)]
         if len(selected) > 1:
             actions = {(ticker, option.lot_id): 1 for option in selected}
             return _candidate_legs(pool, policy, actions, {}, deadline)
     return None
+
 
 def _incumbent_actions(
     legs: tuple[ConsolidatedLeg, ...], pool: _Pool, deadline: float
@@ -563,7 +625,11 @@ def _incumbent_actions(
     buys: dict[str, int] = {}
     for leg in legs:
         _check_deadline(deadline)
-        if not leg.shares.is_finite() or leg.shares <= 0 or leg.shares != leg.shares.to_integral_value():
+        if (
+            not leg.shares.is_finite()
+            or leg.shares <= 0
+            or leg.shares != leg.shares.to_integral_value()
+        ):
             return None
         if leg.side == "SELL":
             allocated = Decimal(0)
@@ -574,8 +640,12 @@ def _incumbent_actions(
                 key = (leg.ticker.upper(), lot.broker_lot_id)
                 option = pool.sells_by_key.get(key)
                 if (
-                    option is None or key in sells or not lot.shares.is_finite() or lot.shares <= 0
-                    or lot.shares != lot.shares.to_integral_value() or lot.shares > option.max_shares
+                    option is None
+                    or key in sells
+                    or not lot.shares.is_finite()
+                    or lot.shares <= 0
+                    or lot.shares != lot.shares.to_integral_value()
+                    or lot.shares > option.max_shares
                 ):
                     return None
                 sells[key] = int(lot.shares)
@@ -585,7 +655,12 @@ def _incumbent_actions(
         elif leg.side == "BUY":
             ticker = leg.ticker.upper()
             option = pool.buys_by_ticker.get(ticker)
-            if option is None or ticker in buys or leg.selected_lots or leg.shares > option.max_shares:
+            if (
+                option is None
+                or ticker in buys
+                or leg.selected_lots
+                or leg.shares > option.max_shares
+            ):
                 return None
             buys[ticker] = int(leg.shares)
         else:
@@ -637,13 +712,17 @@ def _local_neighbors(
         _check_deadline(deadline)
         key = (option.ticker, option.lot_id)
         if key not in existing_sells:
-            candidate = _candidate_legs(pool, policy, {**base_sells, key: 1}, dict(base_buys), deadline)
+            candidate = _candidate_legs(
+                pool, policy, {**base_sells, key: 1}, dict(base_buys), deadline
+            )
             if candidate is not None:
                 yield candidate
     for option in pool.buys:
         _check_deadline(deadline)
         if option.ticker not in base_buys:
-            candidate = _candidate_legs(pool, policy, dict(base_sells), {**base_buys, option.ticker: 1}, deadline)
+            candidate = _candidate_legs(
+                pool, policy, dict(base_sells), {**base_buys, option.ticker: 1}, deadline
+            )
             if candidate is not None:
                 yield candidate
 
@@ -658,7 +737,10 @@ def _assess(
     accepted = completed and validation.accepted and validation.objective_value is not None
     evaluation = validation.evaluation
     return CandidateAssessment(
-        legs, completed, accepted, reasons[:12],
+        legs,
+        completed,
+        accepted,
+        reasons[:12],
         validation.objective_value if accepted else None,
         validation.estimated_tax_benefit_usd if completed else None,
         validation.estimated_trading_cost_usd if completed else None,
@@ -701,7 +783,11 @@ def search_representative_best_known(
 
     started = monotonic()
     deadline = started + float(time_limit_seconds)
-    checksum = inputs.source_checksum if isinstance(inputs.source_checksum, str) and inputs.source_checksum else None
+    checksum = (
+        inputs.source_checksum
+        if isinstance(inputs.source_checksum, str) and inputs.source_checksum
+        else None
+    )
     checksum_source = "frozen_source_checksum" if checksum is not None else "unavailable"
     proposals = validations = unique = feasible_count = steps = 0
     mode_counts = dict.fromkeys(_MODES, 0)
@@ -719,9 +805,12 @@ def search_representative_best_known(
             key = _canonical_key(legs, deadline)
         except _DeadlineExpired:
             assessment = _unrun(legs, "validation_deadline_exceeded")
-            traces.setdefault(source, CandidateTrace(
-                proposals, source, legs, False, False, None, None, assessment.reasons
-            ))
+            traces.setdefault(
+                source,
+                CandidateTrace(
+                    proposals, source, legs, False, False, None, None, assessment.reasons
+                ),
+            )
             return assessment
         if key in seen:
             return None
@@ -731,7 +820,9 @@ def search_representative_best_known(
             assessment = _unrun(legs, "validation_deadline_exceeded")
         else:
             validations += 1
-            assessment = _assess(legs, validate_candidate(inputs, legs, deadline=deadline), deadline)
+            assessment = _assess(
+                legs, validate_candidate(inputs, legs, deadline=deadline), deadline
+            )
         if assessment.feasible:
             feasible_count += 1
             score = assessment.objective_value
@@ -740,8 +831,14 @@ def search_representative_best_known(
         old_trace = traces.get(source)
         if old_trace is None or (assessment.feasible and not old_trace.feasible):
             traces[source] = CandidateTrace(
-                proposals, source, legs, assessment.validation_completed, assessment.feasible,
-                assessment.objective_value, assessment.estimated_trading_cost_usd, assessment.reasons[:5],
+                proposals,
+                source,
+                legs,
+                assessment.validation_completed,
+                assessment.feasible,
+                assessment.objective_value,
+                assessment.estimated_trading_cost_usd,
+                assessment.reasons[:5],
             )
         return assessment
 

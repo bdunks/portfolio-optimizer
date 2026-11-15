@@ -69,20 +69,30 @@ def test_openapi_has_named_phase_one_success_and_error_models() -> None:
                 if int(status_code) < 400:
                     continue
                 schema = _response_schema(response)
-                assert schema.get("$ref", "").endswith("/ErrorEnvelope"), (path, status_code, schema)
+                assert schema.get("$ref", "").endswith("/ErrorEnvelope"), (
+                    path,
+                    status_code,
+                    schema,
+                )
             if path == "/api/v1/optimizer/runs/{run_id}/export":
                 export_response = operation["responses"]["200"]
                 assert set(export_response["content"]) == {"application/json", "text/csv"}
-                assert _response_schema(export_response)["$ref"].endswith("/OptimizerExportJSONResponse")
+                assert _response_schema(export_response)["$ref"].endswith(
+                    "/OptimizerExportJSONResponse"
+                )
                 assert export_response["content"]["text/csv"]["schema"]["type"] == "string"
                 continue
-            success_status = next((status for status in operation["responses"] if 200 <= int(status) < 300), None)
+            success_status = next(
+                (status for status in operation["responses"] if 200 <= int(status) < 300), None
+            )
             if success_status is None:
                 continue
             success_schema = _response_schema(operation["responses"][success_status])
             references = [
                 branch.get("$ref", "").rsplit("/", 1)[-1]
-                for branch in success_schema.get("anyOf", success_schema.get("oneOf", [success_schema]))
+                for branch in success_schema.get(
+                    "anyOf", success_schema.get("oneOf", [success_schema])
+                )
                 if isinstance(branch, dict)
             ]
             assert references, (path, success_schema)
@@ -129,7 +139,9 @@ def test_openapi_has_named_phase_one_success_and_error_models() -> None:
             {"source_generation": 1, "broker_lot_ids": ["LOT-1", "LOT-1"]}
         )
     with pytest.raises(ValidationError):
-        OptimizerLotReviewIntentInput.model_validate({"source_generation": True, "broker_lot_ids": []})
+        OptimizerLotReviewIntentInput.model_validate(
+            {"source_generation": True, "broker_lot_ids": []}
+        )
 
     disabled = specification["paths"]["/api/v1/orders/{leg_id}/preview"]["post"]["responses"]
     assert "503" in disabled
@@ -138,8 +150,6 @@ def test_openapi_has_named_phase_one_success_and_error_models() -> None:
     assert disabled_schema["$ref"].endswith("/ErrorEnvelope")
     exact_decimal = schemas["PolicySettingsInput"]["properties"]["target_retained_net_loss_usd"]
     assert exact_decimal["type"] == "string"
-
-
 
 
 def test_lot_response_preserves_the_exact_broker_lot_id() -> None:
@@ -171,12 +181,20 @@ def test_lot_response_preserves_the_exact_broker_lot_id() -> None:
     )
     assert lot.broker_lot_id == " LOT-1 "
 
+
 def test_unseeded_and_seeded_response_dtos_validate(
     tmp_path: Path, seeded_contract_client: tuple[FastAPI, TestClient]
 ) -> None:
-    unseeded = create_app(database_url=f"sqlite:///{tmp_path / 'unseeded.sqlite3'}", broker=FakeBroker())
+    unseeded = create_app(
+        database_url=f"sqlite:///{tmp_path / 'unseeded.sqlite3'}", broker=FakeBroker()
+    )
     with TestClient(unseeded, base_url="http://localhost") as client:
-        assert TypeAdapter(PortfolioResponse).validate_python(client.get("/api/v1/portfolio").json()).status == "not_synced"
+        assert (
+            TypeAdapter(PortfolioResponse)
+            .validate_python(client.get("/api/v1/portfolio").json())
+            .status
+            == "not_synced"
+        )
         assert PolicyResponse.model_validate(client.get("/api/v1/policy").json()).active is None
         LotPageResponse.model_validate(client.get("/api/v1/lots").json())
         ActivityPageResponse.model_validate(client.get("/api/v1/activity").json())
@@ -212,9 +230,11 @@ def test_unseeded_and_seeded_response_dtos_validate(
     OptimizerRecommendationsResponse.model_validate(selection.json())
     exported = client.get(f"/api/v1/optimizer/runs/{run.run_id}/export?format=json")
     OptimizerExportJSONResponse.model_validate(exported.json())
-    assert client.get(f"/api/v1/optimizer/runs/{run.run_id}/export?format=csv").headers[
-        "content-type"
-    ].startswith("text/csv")
+    assert (
+        client.get(f"/api/v1/optimizer/runs/{run.run_id}/export?format=csv")
+        .headers["content-type"]
+        .startswith("text/csv")
+    )
 
     active = client.get("/api/v1/policy").json()["active"]
     draft_payload = {
@@ -230,9 +250,12 @@ def test_unseeded_and_seeded_response_dtos_validate(
 
 
 def test_exact_decimal_openapi_input_and_runtime_float_rejection() -> None:
-    assert PolicySettingsInput.model_json_schema(mode="validation")["properties"][
-        "target_retained_net_loss_usd"
-    ]["type"] == "string"
+    assert (
+        PolicySettingsInput.model_json_schema(mode="validation")["properties"][
+            "target_retained_net_loss_usd"
+        ]["type"]
+        == "string"
+    )
     with pytest.raises(ValidationError, match="exact strings or integers"):
         PolicySettingsInput(target_retained_net_loss_usd=12.5)
     assert OptimizerRunInput.model_validate({}).mode == "recommendations_only"

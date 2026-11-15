@@ -395,8 +395,12 @@ def _production_json(
         "status": status,
         "legs": serialized_legs,
         "independently_revalidated": validation_completed,
-        "owner_validation": _validation_json(validation, validation_completed) if validation else None,
-        "returned_legs_in_declared_domain": domain["in_domain"] if malformed_error is None else None,
+        "owner_validation": _validation_json(validation, validation_completed)
+        if validation
+        else None,
+        "returned_legs_in_declared_domain": domain["in_domain"]
+        if malformed_error is None
+        else None,
         "domain_check_completed": domain["check_completed"],
         "domain_exclusion_reasons": domain["reasons"] if malformed_error is None else [],
         "malformed_output": malformed_error is not None,
@@ -543,11 +547,7 @@ async def _compare_case(
     if reference_optimum is not None and optimum_validation is not None:
         reference_metrics = _economic_metrics(case.inputs, optimum_validation)
     objective_gap_pct: Decimal | None = None
-    if (
-        denominator_eligible
-        and reference_metrics is not None
-        and production_metrics is not None
-    ):
+    if denominator_eligible and reference_metrics is not None and production_metrics is not None:
         for name, production_value in production_metrics.items():
             reference_value = reference_metrics[name]
             deltas[name] = (
@@ -598,12 +598,12 @@ async def _compare_case(
             "reference_has_no_feasible_basket": no_reference_feasible,
             "missed_improvement_case": missed_improvement,
             "economic_metrics": {
-                "production": {
-                    key: _decimal(value) for key, value in production_metrics.items()
-                } if production_metrics is not None else None,
-                "reference": {
-                    key: _decimal(value) for key, value in reference_metrics.items()
-                } if reference_metrics is not None else None,
+                "production": {key: _decimal(value) for key, value in production_metrics.items()}
+                if production_metrics is not None
+                else None,
+                "reference": {key: _decimal(value) for key, value in reference_metrics.items()}
+                if reference_metrics is not None
+                else None,
             },
             "deltas_production_minus_exact_reference": deltas,
             "objective_gap_percent": _decimal(objective_gap_pct),

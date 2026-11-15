@@ -38,8 +38,8 @@ from app.domain.financial_inputs import (
     LookThroughExposureInput,
     LotInput,
     PolicyInput,
-    PolicySettings,
     PolicySectorBandInput,
+    PolicySettings,
     PositionInput,
     QuoteInput,
     SecurityInput,
@@ -50,9 +50,10 @@ from app.services.errors import AppError
 
 
 def _fingerprint(value: object) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str).encode()
+    encoded = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str
+    ).encode()
     return hashlib.sha256(encoded).hexdigest()
-
 
 
 def _coverage_date(value: object) -> date | None:
@@ -114,7 +115,9 @@ def load_allocation_policy(session: Session, revision_id: str) -> AllocationPoli
     allowed = session.scalars(
         select(PolicyAllowedSecurity)
         .where(PolicyAllowedSecurity.policy_revision_id == revision_id)
-        .order_by(PolicyAllowedSecurity.ticker, PolicyAllowedSecurity.priority, PolicyAllowedSecurity.id)
+        .order_by(
+            PolicyAllowedSecurity.ticker, PolicyAllowedSecurity.priority, PolicyAllowedSecurity.id
+        )
     ).all()
     override_rows = session.execute(
         select(PolicySecurityOverride, Security.ticker)
@@ -164,10 +167,7 @@ def load_allocation_policy(session: Session, revision_id: str) -> AllocationPoli
 
 def load_policy_input(session: Session, revision: PolicyRevision) -> PolicyInput:
     allocation = load_allocation_policy(session, revision.id)
-    settings = {
-        field: getattr(revision, field)
-        for field in PolicySettingsInput.model_fields
-    }
+    settings = {field: getattr(revision, field) for field in PolicySettingsInput.model_fields}
     sector_rows = session.scalars(
         select(PolicySectorBand)
         .where(PolicySectorBand.policy_revision_id == revision.id)
@@ -258,7 +258,11 @@ def load_financial_inputs(
     for position in positions:
         security = security_by_id.get(position.security_id)
         if security is None:
-            raise AppError("current_state_inconsistent", "A current position references an unknown security", status_code=409)
+            raise AppError(
+                "current_state_inconsistent",
+                "A current position references an unknown security",
+                status_code=409,
+            )
         resolution = (
             resolve_holding(
                 policy.allocation,
@@ -358,7 +362,11 @@ def load_financial_inputs(
         proposed_trade_date=proposed_trade_date,
         policy=policy,
         securities=tuple(
-            SecurityInput(SecurityIdentity(row.ticker, row.asset_type, row.is_completion_etf), row.id, row.tradable)
+            SecurityInput(
+                SecurityIdentity(row.ticker, row.asset_type, row.is_completion_etf),
+                row.id,
+                row.tradable,
+            )
             for row in securities
         ),
         positions=position_inputs,

@@ -38,7 +38,6 @@ def percentage(value: Decimal, denominator: Decimal, *, places: int = 2) -> Deci
         return (value / denominator * Decimal(100)).quantize(quantum)
 
 
-
 def exact_percent_product(value: Decimal, percent: Decimal) -> Decimal:
     """Return value * percent / 100 without ambient-context division rounding."""
     return exact_product(exact_product(value, percent), Decimal("0.01"))

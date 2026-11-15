@@ -99,7 +99,9 @@ def test_allocation_editor_draft_round_trip_preserves_configuration_and_roles(
     draft = created.json()
     assert draft["status"] == "DRAFT"
     assert draft["activation_errors"] == []
-    assert draft["sector_bands"] == sorted(payload["sector_bands"], key=lambda row: row["sector_key"])
+    assert draft["sector_bands"] == sorted(
+        payload["sector_bands"], key=lambda row: row["sector_key"]
+    )
     after_draft = client.get("/api/v1/policy").json()
     assert after_draft["active"]["id"] == active_id
     assert after_draft["active"]["status"] == "ACTIVE"

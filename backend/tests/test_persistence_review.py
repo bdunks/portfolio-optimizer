@@ -68,8 +68,12 @@ def test_each_migration_revision_is_frozen_and_integrity_checks_are_present(tmp_
         _upgrade_to(engine, "0001_normalized_foundation")
         inspector = inspect(engine)
         assert "settings" in {column["name"] for column in inspector.get_columns("policy_revision")}
-        assert "short_term_tax_rate" not in {column["name"] for column in inspector.get_columns("policy_revision")}
-        assert "note" not in {column["name"] for column in inspector.get_columns("recommendation_group")}
+        assert "short_term_tax_rate" not in {
+            column["name"] for column in inspector.get_columns("policy_revision")
+        }
+        assert "note" not in {
+            column["name"] for column in inspector.get_columns("recommendation_group")
+        }
         assert "selected" not in {
             column["name"] for column in inspector.get_columns("recommendation_selected_lot")
         }
@@ -82,9 +86,14 @@ def test_each_migration_revision_is_frozen_and_integrity_checks_are_present(tmp_
         assert "ck_selected_lot_term" in _constraint_names(engine, "recommendation_selected_lot")
 
         # An application model added after 0001 must not leak into that historical revision.
-        latest_only = Table("latest_only_model", Base.metadata, Column("id", Integer, primary_key=True))
+        latest_only = Table(
+            "latest_only_model", Base.metadata, Column("id", Integer, primary_key=True)
+        )
         revision_0001 = importlib.import_module("migrations.versions.0001_normalized_foundation")
-        with engine.begin() as connection, Operations.context(MigrationContext.configure(connection)):
+        with (
+            engine.begin() as connection,
+            Operations.context(MigrationContext.configure(connection)),
+        ):
             revision_0001.upgrade()
         assert not inspect(engine).has_table("latest_only_model")
         Base.metadata.remove(latest_only)
@@ -94,7 +103,9 @@ def test_each_migration_revision_is_frozen_and_integrity_checks_are_present(tmp_
         policy_columns = {column["name"] for column in inspector.get_columns("policy_revision")}
         assert "settings" not in policy_columns
         assert {"short_term_tax_rate", "target_retained_net_loss_usd"} <= policy_columns
-        assert "note" not in {column["name"] for column in inspector.get_columns("recommendation_group")}
+        assert "note" not in {
+            column["name"] for column in inspector.get_columns("recommendation_group")
+        }
 
         _upgrade_to(engine, "0003_demo_recommendation_state")
         assert {"note", "rejected", "rejection_reason"} <= {
@@ -117,7 +128,9 @@ def test_each_migration_revision_is_frozen_and_integrity_checks_are_present(tmp_
         engine.dispose()
 
 
-def test_startup_migration_preserves_legacy_policy_dependents_and_foreign_keys(tmp_path: Path) -> None:
+def test_startup_migration_preserves_legacy_policy_dependents_and_foreign_keys(
+    tmp_path: Path,
+) -> None:
     engine = create_database_engine(f"sqlite:///{tmp_path / 'legacy-populated.sqlite3'}")
     _upgrade_to(engine, "0001_normalized_foundation")
     legacy_settings = (
@@ -179,7 +192,9 @@ def test_startup_migration_preserves_legacy_policy_dependents_and_foreign_keys(t
     upgrade_database(engine)
     with engine.connect() as connection:
         assert connection.scalar(
-            text("SELECT is_transition_destination FROM policy_sleeve WHERE policy_revision_id = 'policy-1'")
+            text(
+                "SELECT is_transition_destination FROM policy_sleeve WHERE policy_revision_id = 'policy-1'"
+            )
         ) in (0, False)
         assert connection.execute(text("PRAGMA foreign_key_check")).all() == []
         for table in (
@@ -202,12 +217,17 @@ def test_startup_migration_preserves_legacy_policy_dependents_and_foreign_keys(t
     engine.dispose()
 
 
-
-def test_integrity_migration_repairs_existing_head_tables_without_losing_rows(tmp_path: Path) -> None:
+def test_integrity_migration_repairs_existing_head_tables_without_losing_rows(
+    tmp_path: Path,
+) -> None:
     engine = create_database_engine(f"sqlite:///{tmp_path / 'old-head.sqlite3'}")
     with engine.begin() as connection:
-        connection.exec_driver_sql("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)")
-        connection.exec_driver_sql("INSERT INTO alembic_version VALUES ('0003_demo_recommendation_state')")
+        connection.exec_driver_sql(
+            "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO alembic_version VALUES ('0003_demo_recommendation_state')"
+        )
         connection.exec_driver_sql("CREATE TABLE account (id INTEGER PRIMARY KEY)")
         connection.exec_driver_sql("CREATE TABLE security (id INTEGER PRIMARY KEY)")
         connection.exec_driver_sql("CREATE TABLE recommendation_leg (id VARCHAR(36) PRIMARY KEY)")
@@ -260,10 +280,21 @@ def test_integrity_migration_repairs_existing_head_tables_without_losing_rows(tm
     upgrade_database(engine)
     with engine.connect() as connection:
         assert connection.execute(text("PRAGMA foreign_key_check")).all() == []
-        assert connection.scalar(text("SELECT available_shares FROM current_tax_lot WHERE id = 1")) == "1"
+        assert (
+            connection.scalar(text("SELECT available_shares FROM current_tax_lot WHERE id = 1"))
+            == "1"
+        )
         assert connection.scalar(text("SELECT last_usd FROM current_quote WHERE id = 1")) == "10.5"
-        assert connection.scalar(text("SELECT provider FROM security_exposure WHERE id = 1")) == "vanguard"
-        assert connection.scalar(text("SELECT st_lt_term FROM recommendation_selected_lot WHERE id = 1")) == "ST"
+        assert (
+            connection.scalar(text("SELECT provider FROM security_exposure WHERE id = 1"))
+            == "vanguard"
+        )
+        assert (
+            connection.scalar(
+                text("SELECT st_lt_term FROM recommendation_selected_lot WHERE id = 1")
+            )
+            == "ST"
+        )
         assert "ck_lot_available_nonnegative" in _constraint_names(engine, "current_tax_lot")
         assert "ck_quote_last_positive" in _constraint_names(engine, "current_quote")
         assert "ck_exposure_provider" in _constraint_names(engine, "security_exposure")
@@ -273,7 +304,9 @@ def test_integrity_migration_repairs_existing_head_tables_without_losing_rows(tm
     engine.dispose()
 
 
-def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs(tmp_path: Path) -> None:
+def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs(
+    tmp_path: Path,
+) -> None:
     database_url = f"sqlite:///{tmp_path / 'legacy-consolidated.sqlite3'}"
     engine = create_database_engine(database_url)
     _upgrade_to(engine, "0004_database_integrity_checks")
@@ -305,7 +338,9 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
         session.flush()
         policy_id = "legacy-policy"
         session.execute(
-            text("INSERT INTO policy_revision (id, revision_number, status, created_at) VALUES (:id, 1, 'ACTIVE', :created_at)"),
+            text(
+                "INSERT INTO policy_revision (id, revision_number, status, created_at) VALUES (:id, 1, 'ACTIVE', :created_at)"
+            ),
             {"id": policy_id, "created_at": timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")},
         )
         run_id = "legacy-run"
@@ -338,7 +373,11 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
                 "metrics, warnings, frozen_input_bundle) "
                 "VALUES ('legacy-no-date', :policy, 7, :as_of, 'COMPLETE', '{}', '{}', '[]', :bundle)"
             ),
-            {"policy": policy_id, "as_of": timestamp.strftime("%Y-%m-%d %H:%M:%S.%f"), "bundle": json.dumps({"legacy": True})},
+            {
+                "policy": policy_id,
+                "as_of": timestamp.strftime("%Y-%m-%d %H:%M:%S.%f"),
+                "bundle": json.dumps({"legacy": True}),
+            },
         )
         session.execute(
             text(
@@ -370,45 +409,95 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
             "risk_tracking_score": None,
         }
         group_a = RecommendationGroup(
-            id="group-a", run_id=run_id, rank=1, group_type="demo_loss_harvest", rationale="A",
-            sleeve_key="us", impact=legacy_impact,
-            selected=True, rejected=False, note="preserve note A",
+            id="group-a",
+            run_id=run_id,
+            rank=1,
+            group_type="demo_loss_harvest",
+            rationale="A",
+            sleeve_key="us",
+            impact=legacy_impact,
+            selected=True,
+            rejected=False,
+            note="preserve note A",
         )
         group_b = RecommendationGroup(
-            id="group-b", run_id=run_id, rank=2, group_type="demo_loss_harvest", rationale="B",
-            sleeve_key="us", impact=legacy_impact,
-            selected=False, rejected=True, note="preserve note B", rejection_reason="old rejection",
+            id="group-b",
+            run_id=run_id,
+            rank=2,
+            group_type="demo_loss_harvest",
+            rationale="B",
+            sleeve_key="us",
+            impact=legacy_impact,
+            selected=False,
+            rejected=True,
+            note="preserve note B",
+            rejection_reason="old rejection",
         )
         session.add_all([group_a, group_b])
         session.flush()
         sell_a = RecommendationLeg(
-            id="sell-a", group_id=group_a.id, account_id=1, security_id=sell_security.id,
-            side="SELL", shares=Decimal(2), estimated_unit_price_usd=Decimal(100),
-            net_st_realized_usd=Decimal(0), net_lt_realized_usd=Decimal(-20), sequence=1,
+            id="sell-a",
+            group_id=group_a.id,
+            account_id=1,
+            security_id=sell_security.id,
+            side="SELL",
+            shares=Decimal(2),
+            estimated_unit_price_usd=Decimal(100),
+            net_st_realized_usd=Decimal(0),
+            net_lt_realized_usd=Decimal(-20),
+            sequence=1,
             details={"sleeve_key": "us"},
         )
         sell_b = RecommendationLeg(
-            id="sell-b", group_id=group_b.id, account_id=1, security_id=sell_security_b.id,
-            side="SELL", shares=Decimal(1), estimated_unit_price_usd=Decimal(100),
-            net_st_realized_usd=Decimal(0), net_lt_realized_usd=Decimal(-10), sequence=1,
+            id="sell-b",
+            group_id=group_b.id,
+            account_id=1,
+            security_id=sell_security_b.id,
+            side="SELL",
+            shares=Decimal(1),
+            estimated_unit_price_usd=Decimal(100),
+            net_st_realized_usd=Decimal(0),
+            net_lt_realized_usd=Decimal(-10),
+            sequence=1,
             details={"sleeve_key": "us"},
         )
         zero_sell = RecommendationLeg(
-            id="sell-zero", group_id=group_b.id, account_id=1, security_id=sell_security_b.id,
-            side="SELL", shares=Decimal(0), estimated_unit_price_usd=Decimal(100),
-            net_st_realized_usd=Decimal(0), net_lt_realized_usd=Decimal(0), sequence=3,
+            id="sell-zero",
+            group_id=group_b.id,
+            account_id=1,
+            security_id=sell_security_b.id,
+            side="SELL",
+            shares=Decimal(0),
+            estimated_unit_price_usd=Decimal(100),
+            net_st_realized_usd=Decimal(0),
+            net_lt_realized_usd=Decimal(0),
+            sequence=3,
             details={"sleeve_key": "us"},
         )
         buy_a = RecommendationLeg(
-            id="buy-a", group_id=group_a.id, account_id=1, security_id=buy_security.id,
-            side="BUY", shares=Decimal(1), estimated_unit_price_usd=Decimal(200),
-            net_st_realized_usd=Decimal(0), net_lt_realized_usd=Decimal(0), sequence=2,
+            id="buy-a",
+            group_id=group_a.id,
+            account_id=1,
+            security_id=buy_security.id,
+            side="BUY",
+            shares=Decimal(1),
+            estimated_unit_price_usd=Decimal(200),
+            net_st_realized_usd=Decimal(0),
+            net_lt_realized_usd=Decimal(0),
+            sequence=2,
             details={"depends_on_leg_id": "sell-a", "min_buy_order_notional_usd": "500"},
         )
         buy_b = RecommendationLeg(
-            id="buy-b", group_id=group_b.id, account_id=1, security_id=buy_security.id,
-            side="BUY", shares=Decimal(2), estimated_unit_price_usd=Decimal(200),
-            net_st_realized_usd=Decimal(0), net_lt_realized_usd=Decimal(0), sequence=2,
+            id="buy-b",
+            group_id=group_b.id,
+            account_id=1,
+            security_id=buy_security.id,
+            side="BUY",
+            shares=Decimal(2),
+            estimated_unit_price_usd=Decimal(200),
+            net_st_realized_usd=Decimal(0),
+            net_lt_realized_usd=Decimal(0),
+            sequence=2,
             details={"depends_on_leg_id": "sell-b", "min_buy_order_notional_usd": "500"},
         )
         session.add_all([sell_a, sell_b, zero_sell, buy_a, buy_b])
@@ -416,16 +505,34 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
         session.add_all(
             [
                 RecommendationSelectedLot(
-                    leg_id="sell-a", broker_lot_id="lot-a1", shares=Decimal(1), acquired_date=date(2025, 1, 1),
-                    adjusted_basis_usd=Decimal(110), st_lt_term="LT", realized_pl_usd=Decimal(-10), selected=True,
+                    leg_id="sell-a",
+                    broker_lot_id="lot-a1",
+                    shares=Decimal(1),
+                    acquired_date=date(2025, 1, 1),
+                    adjusted_basis_usd=Decimal(110),
+                    st_lt_term="LT",
+                    realized_pl_usd=Decimal(-10),
+                    selected=True,
                 ),
                 RecommendationSelectedLot(
-                    leg_id="sell-a", broker_lot_id="lot-a2", shares=Decimal(1), acquired_date=date(2025, 1, 2),
-                    adjusted_basis_usd=Decimal(110), st_lt_term="LT", realized_pl_usd=Decimal(-10), selected=False,
+                    leg_id="sell-a",
+                    broker_lot_id="lot-a2",
+                    shares=Decimal(1),
+                    acquired_date=date(2025, 1, 2),
+                    adjusted_basis_usd=Decimal(110),
+                    st_lt_term="LT",
+                    realized_pl_usd=Decimal(-10),
+                    selected=False,
                 ),
                 RecommendationSelectedLot(
-                    leg_id="sell-b", broker_lot_id="lot-b", shares=Decimal(1), acquired_date=date(2025, 1, 3),
-                    adjusted_basis_usd=Decimal(110), st_lt_term="LT", realized_pl_usd=Decimal(-10), selected=True,
+                    leg_id="sell-b",
+                    broker_lot_id="lot-b",
+                    shares=Decimal(1),
+                    acquired_date=date(2025, 1, 3),
+                    adjusted_basis_usd=Decimal(110),
+                    st_lt_term="LT",
+                    realized_pl_usd=Decimal(-10),
+                    selected=True,
                 ),
             ]
         )
@@ -442,12 +549,16 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
         assert session.get(RecommendationLeg, "sell-a").shares == Decimal(2)
         assert session.get(RecommendationLeg, "sell-b").shares == Decimal(1)
         assert session.get(RecommendationLeg, "sell-zero").shares == Decimal(0)
-        run = session.execute(
-            text(
-                "SELECT metrics, batch_settings, frozen_input_bundle, input_fingerprint, warnings "
-                "FROM optimizer_run WHERE id = 'legacy-run'"
+        run = (
+            session.execute(
+                text(
+                    "SELECT metrics, batch_settings, frozen_input_bundle, input_fingerprint, warnings "
+                    "FROM optimizer_run WHERE id = 'legacy-run'"
+                )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
         assert json.loads(run["metrics"]) == {"orders_count": 3, "legacy_metric": "preserve me"}
         assert json.loads(run["batch_settings"]) == {"max_total_orders_per_batch": 3}
         assert json.loads(run["frozen_input_bundle"]) == frozen
@@ -459,8 +570,20 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
         assert session.get(RecommendationGroup, "group-b").selected is False
         assert session.get(RecommendationGroup, "group-b").rejected is True
         assert session.get(RecommendationGroup, "group-b").rejection_reason == "old rejection"
-        assert session.query(RecommendationSelectedLot).filter_by(broker_lot_id="lot-a1").one().selected is True
-        assert session.query(RecommendationSelectedLot).filter_by(broker_lot_id="lot-a2").one().selected is False
+        assert (
+            session.query(RecommendationSelectedLot)
+            .filter_by(broker_lot_id="lot-a1")
+            .one()
+            .selected
+            is True
+        )
+        assert (
+            session.query(RecommendationSelectedLot)
+            .filter_by(broker_lot_id="lot-a2")
+            .one()
+            .selected
+            is False
+        )
         assert {
             lot.broker_lot_id: lot.shares for lot in session.query(RecommendationSelectedLot).all()
         } == {"lot-a1": Decimal(1), "lot-a2": Decimal(1), "lot-b": Decimal(1)}
@@ -575,7 +698,9 @@ def test_orm_persistence_rejects_invalid_decimal_and_enum_values(tmp_path: Path)
             )
         )
         security = Security(ticker="ABC", asset_type="EQUITY")
-        revision = PolicyRevision(id="policy", revision_number=1, status="DRAFT", created_at=timestamp)
+        revision = PolicyRevision(
+            id="policy", revision_number=1, status="DRAFT", created_at=timestamp
+        )
         session.add_all([security, revision])
         session.flush()
         sleeve = PolicySleeve(
@@ -634,7 +759,16 @@ def test_orm_persistence_rejects_invalid_decimal_and_enum_values(tmp_path: Path)
         "sync_generation": 1,
     }
     assert_rejected(CurrentTaxLot(**lot_values))
-    assert_rejected(CurrentTaxLot(**{**lot_values, "broker_lot_id": "zero-lot", "shares": Decimal(0), "available_shares": Decimal(0)}))
+    assert_rejected(
+        CurrentTaxLot(
+            **{
+                **lot_values,
+                "broker_lot_id": "zero-lot",
+                "shares": Decimal(0),
+                "available_shares": Decimal(0),
+            }
+        )
+    )
 
     for field in ("bid_usd", "ask_usd", "last_usd"):
         assert_rejected(
@@ -667,7 +801,12 @@ def test_orm_persistence_rejects_invalid_decimal_and_enum_values(tmp_path: Path)
     assert_rejected(RecommendationSelectedLot(**selected_lot))
     assert_rejected(
         RecommendationSelectedLot(
-            **{**selected_lot, "broker_lot_id": "zero-selected-lot", "shares": Decimal(0), "st_lt_term": "ST"}
+            **{
+                **selected_lot,
+                "broker_lot_id": "zero-selected-lot",
+                "shares": Decimal(0),
+                "st_lt_term": "ST",
+            }
         )
     )
     engine.dispose()
@@ -684,7 +823,8 @@ def test_offset_timestamps_survive_sync_restart_and_frozen_run(tmp_path: Path) -
             "lots": [lot.model_copy(update={"as_of": supplied}) for lot in snapshot.lots],
             "quotes": [quote.model_copy(update={"as_of": supplied}) for quote in snapshot.quotes],
             "transactions": [
-                txn.model_copy(update={"transaction_time": supplied}) for txn in snapshot.transactions
+                txn.model_copy(update={"transaction_time": supplied})
+                for txn in snapshot.transactions
             ],
         }
     )
@@ -699,7 +839,9 @@ def test_offset_timestamps_survive_sync_restart_and_frozen_run(tmp_path: Path) -
         assert datetime.fromisoformat(detail["as_of"]) == expected
         with app.state.session_factory() as session:
             assert session.get(Account, 1).as_of == expected
-            assert all(position.as_of == expected for position in session.query(CurrentPosition).all())
+            assert all(
+                position.as_of == expected for position in session.query(CurrentPosition).all()
+            )
             assert session.query(CurrentTaxLot).first().as_of == expected
             assert session.query(CurrentQuote).first().as_of == expected
             assert session.query(BrokerTransaction).one().transaction_time == expected
@@ -715,5 +857,8 @@ def test_offset_timestamps_survive_sync_restart_and_frozen_run(tmp_path: Path) -
         assert datetime.fromisoformat(detail["as_of"]) == expected
         with restarted.state.session_factory() as session:
             assert session.get(Account, 1).as_of == expected
-            assert session.get(OptimizerRun, run_id).frozen_input_bundle["account"]["as_of"] == expected.isoformat()
+            assert (
+                session.get(OptimizerRun, run_id).frozen_input_bundle["account"]["as_of"]
+                == expected.isoformat()
+            )
     assert UTCDateTime().process_bind_param(datetime(2026, 1, 1), None).tzinfo is UTC

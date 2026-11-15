@@ -47,8 +47,6 @@ def _snapshot_with_values(cash: str, aapl_value: str) -> BrokerSnapshot:
     )
 
 
-
-
 def test_sync_persists_realized_loss_and_transaction_history_bounds(tmp_path: Path) -> None:
     snapshot = FakeBroker.demo_snapshot()
     executed_loss = snapshot.transactions[0].model_copy(
@@ -84,6 +82,7 @@ def test_sync_persists_realized_loss_and_transaction_history_bounds(tmp_path: Pa
         assert state is not None
         assert state.coverage["transaction_history_start_date"] == "2025-01-01"
         assert state.coverage["transaction_history_end_date"] == "2026-11-05"
+
 
 def _assert_no_sync_write(factory: sessionmaker[Session], broker: FakeBroker) -> None:
     assert broker.fetch_count == 0
@@ -164,7 +163,6 @@ def test_explicit_development_origin_remains_authorized(tmp_path: Path) -> None:
         assert broker.fetch_count == 1
 
 
-
 def test_failed_publication_retains_generation_and_releases_writer_for_next_sync(
     tmp_path: Path,
 ) -> None:
@@ -227,7 +225,9 @@ def test_concurrent_syncs_on_separate_engines_allocate_distinct_generations(
         upgrade_database(first_engine)
         first_factory = make_session_factory(first_engine)
         second_factory = make_session_factory(second_engine)
-        assert sync_portfolio(first_factory, FakeBroker(), correlation_id="initial")["generation"] == 1
+        assert (
+            sync_portfolio(first_factory, FakeBroker(), correlation_id="initial")["generation"] == 1
+        )
 
         first_snapshot = _snapshot_with_values("1200.00", "2100.00")
         second_snapshot = _snapshot_with_values("2400.00", "3300.00")
@@ -275,7 +275,9 @@ def test_portfolio_response_keeps_one_read_snapshot_during_sync_commit(tmp_path:
         synced = client.post("/api/v1/portfolio/sync")
         assert synced.status_code == 200, synced.text
         old_portfolio = client.get("/api/v1/portfolio").json()
-        old_positions = {item["ticker"]: item["market_value_usd"] for item in old_portfolio["positions"]}
+        old_positions = {
+            item["ticker"]: item["market_value_usd"] for item in old_portfolio["positions"]
+        }
         broker._snapshot = _snapshot_with_values("4321.00", "7654.00")
 
         account_read = Event()
@@ -291,7 +293,11 @@ def test_portfolio_response_keeps_one_read_snapshot_during_sync_commit(tmp_path:
         ) -> None:
             del connection, cursor, parameters, context, executemany
             normalized_sql = statement.lower()
-            if not account_read.is_set() and "from account" in normalized_sql and "account.id" in normalized_sql:
+            if (
+                not account_read.is_set()
+                and "from account" in normalized_sql
+                and "account.id" in normalized_sql
+            ):
                 account_read.set()
                 if not continue_read.wait(timeout=10):
                     raise RuntimeError("portfolio read was not released")
@@ -315,8 +321,15 @@ def test_portfolio_response_keeps_one_read_snapshot_during_sync_commit(tmp_path:
         portfolio = response.json()
         assert portfolio["cash_usd"] == old_portfolio["cash_usd"]
         assert portfolio["sync"]["generation"] == old_portfolio["sync"]["generation"]
-        assert {item["ticker"]: item["market_value_usd"] for item in portfolio["positions"]} == old_positions
+        assert {
+            item["ticker"]: item["market_value_usd"] for item in portfolio["positions"]
+        } == old_positions
         latest = client.get("/api/v1/portfolio").json()
         assert latest["cash_usd"] == "4321"
         assert latest["sync"]["generation"] == old_portfolio["sync"]["generation"] + 1
-        assert next(item for item in latest["positions"] if item["ticker"] == "AAPL")["market_value_usd"] == "7654"
+        assert (
+            next(item for item in latest["positions"] if item["ticker"] == "AAPL")[
+                "market_value_usd"
+            ]
+            == "7654"
+        )

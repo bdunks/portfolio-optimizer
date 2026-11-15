@@ -60,6 +60,7 @@ class TransitionProgress:
     destination_sleeve_key: str | None
     progress_pct: Decimal | None
 
+
 @dataclass(frozen=True, slots=True)
 class SecurityIdentity:
     ticker: str
@@ -124,7 +125,9 @@ def resolve_transition_destination(policy: AllocationPolicy) -> TransitionDestin
     if len(destinations) > 1:
         return TransitionDestinationResolution(None, None, "multiple_transition_destinations")
     if not destinations:
-        return TransitionDestinationResolution(containers[0] if len(containers) == 1 else None, None, None)
+        return TransitionDestinationResolution(
+            containers[0] if len(containers) == 1 else None, None, None
+        )
     if len(containers) != 1:
         return TransitionDestinationResolution(
             None, destinations[0], "transition_destination_requires_unique_direct_index_container"
@@ -183,7 +186,9 @@ def _validated_assignment(
     policy: AllocationPolicy, sleeve_key: str, sub_sleeve_key: str | None, source: str
 ) -> AssignmentResolution:
     if assignment_path(policy, sleeve_key, sub_sleeve_key) is None:
-        return AssignmentResolution(None, source, "assignment_target_missing_disabled_or_invalid_ancestry")
+        return AssignmentResolution(
+            None, source, "assignment_target_missing_disabled_or_invalid_ancestry"
+        )
     return AssignmentResolution(SleeveAssignment(sleeve_key, sub_sleeve_key), source, None)
 
 
@@ -204,7 +209,9 @@ def resolve_holding(policy: AllocationPolicy, security: SecurityIdentity) -> Ass
         preferred = [row for row in allowed if row.priority == best_priority]
         destinations = {(row.sleeve_key, row.sub_sleeve_key) for row in preferred}
         if len(destinations) != 1:
-            return AssignmentResolution(None, "allowed_security", "ambiguous_allowed_security_destination")
+            return AssignmentResolution(
+                None, "allowed_security", "ambiguous_allowed_security_destination"
+            )
         sleeve_key, sub_sleeve_key = next(iter(destinations))
         return _validated_assignment(policy, sleeve_key, sub_sleeve_key, "allowed_security")
 
@@ -212,12 +219,14 @@ def resolve_holding(policy: AllocationPolicy, security: SecurityIdentity) -> Ass
         security.is_completion_etf and security.ticker in {"VB", "VXF"}
     ):
         containers = [
-            sleeve
-            for sleeve in policy.sleeves
-            if sleeve.enabled and sleeve.direct_index_container
+            sleeve for sleeve in policy.sleeves if sleeve.enabled and sleeve.direct_index_container
         ]
         if len(containers) != 1:
-            reason = "direct_index_container_missing" if not containers else "ambiguous_direct_index_container"
+            reason = (
+                "direct_index_container_missing"
+                if not containers
+                else "ambiguous_direct_index_container"
+            )
             return AssignmentResolution(None, "direct_index_default", reason)
         container = containers[0]
         if assignment_path(policy, container.key) is None:
@@ -227,9 +236,7 @@ def resolve_holding(policy: AllocationPolicy, security: SecurityIdentity) -> Ass
         children = [
             sleeve
             for sleeve in policy.sleeves
-            if sleeve.enabled
-            and sleeve.parent_key == container.key
-            and sleeve.direct_index_sleeve
+            if sleeve.enabled and sleeve.parent_key == container.key and sleeve.direct_index_sleeve
         ]
         if len(children) > 1:
             return AssignmentResolution(
@@ -243,9 +250,7 @@ def resolve_holding(policy: AllocationPolicy, security: SecurityIdentity) -> Ass
 
 def resolve_cash(policy: AllocationPolicy) -> AssignmentResolution:
     """Resolve configured cash explicitly; an absent cash sleeve is a valid unallocated state."""
-    cash_sleeves = [
-        sleeve for sleeve in policy.sleeves if sleeve.enabled and sleeve.cash_sleeve
-    ]
+    cash_sleeves = [sleeve for sleeve in policy.sleeves if sleeve.enabled and sleeve.cash_sleeve]
     if not cash_sleeves:
         return AssignmentResolution(None, "cash", "cash_sleeve_not_configured")
     if len(cash_sleeves) > 1:

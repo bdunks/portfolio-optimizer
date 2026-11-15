@@ -57,10 +57,12 @@ class Request:
     inputs: object
     sell_lot_ids: tuple[str, ...] | None
 
+
 @dataclass(frozen=True)
 class Metadata:
     input_generation: int = 1
     source_checksum: str = "checksum"
+
 
 @dataclass(frozen=True)
 class Candidate:
@@ -104,6 +106,7 @@ class ServiceInputs:
     def account(self) -> SimpleNamespace:
         return SimpleNamespace(cash_usd=Decimal(0))
 
+
 class FakeSupervisor:
     def __init__(self, value: object, *, deadline: float | None = None) -> None:
         self.value = value
@@ -137,7 +140,15 @@ def _batch_inputs() -> Inputs:
 
 def test_batch_overrides_are_immutable_tightenings() -> None:
     inputs = _batch_inputs()
-    request = type("RunInput", (), {"max_sell_tickers_per_batch": 3, "max_sell_lots_per_batch": None, "max_total_orders_per_batch": 4})()
+    request = type(
+        "RunInput",
+        (),
+        {
+            "max_sell_tickers_per_batch": 3,
+            "max_sell_lots_per_batch": None,
+            "max_total_orders_per_batch": 4,
+        },
+    )()
 
     limited, settings = optimizer_service.apply_run_batch_limits(inputs, request)
 
@@ -160,7 +171,9 @@ def test_batch_override_cannot_widen_active_policy() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_validated_candidate_passes_explicit_lot_subset_to_core(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_run_validated_candidate_passes_explicit_lot_subset_to_core(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     candidate = Candidate((object(),))
     supervisor = FakeSupervisor(candidate)
     seen: dict[str, object] = {}
@@ -192,7 +205,9 @@ async def test_run_validated_candidate_passes_explicit_lot_subset_to_core(monkey
 
 
 @pytest.mark.asyncio
-async def test_run_validated_candidate_does_not_publish_rejected_candidate(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_run_validated_candidate_does_not_publish_rejected_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     candidate = Candidate((), status="no_trade")
     inputs = _batch_inputs()
     supervisor = FakeSupervisor(candidate)
@@ -200,7 +215,11 @@ async def test_run_validated_candidate_does_not_publish_rejected_candidate(monke
     monkeypatch.setattr(
         optimizer_service,
         "_core_contract",
-        lambda: (Request, lambda request, deadline: candidate, lambda *args, **kwargs: Validation(False, ("cash_shortfall",))),
+        lambda: (
+            Request,
+            lambda request, deadline: candidate,
+            lambda *args, **kwargs: Validation(False, ("cash_shortfall",)),
+        ),
     )
 
     with pytest.raises(AppError) as error:
@@ -208,7 +227,6 @@ async def test_run_validated_candidate_does_not_publish_rejected_candidate(monke
 
     assert error.value.code == "optimizer_candidate_rejected"
     assert error.value.details == {"reasons": ["cash_shortfall"], "basket_unchanged": True}
-
 
 
 @pytest.mark.asyncio
@@ -261,6 +279,7 @@ async def test_run_validated_candidate_rejects_fee_underfunded_nonempty_basket(
         "basket_unchanged": True,
     }
 
+
 def test_sell_persistence_rejects_missing_owner_validated_lot_effects() -> None:
     leg = ConsolidatedLeg(
         "sell:ABC",
@@ -277,28 +296,32 @@ def test_sell_persistence_rejects_missing_owner_validated_lot_effects() -> None:
         Candidate((leg,)), Validation(True), time.monotonic() + 1, "ready"
     )
 
-    with pytest.raises(
-        AppError, match="missing accepted owner-validated lot effects"
-    ) as error:
+    with pytest.raises(AppError, match="missing accepted owner-validated lot effects") as error:
         optimizer_service._validated_lot_effects(outcome, (leg,))
 
     assert error.value.code == "optimizer_core_contract_error"
 
 
-
 @pytest.mark.asyncio
-async def test_run_validated_candidate_rejects_late_owner_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_run_validated_candidate_rejects_late_owner_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     candidate = Candidate((), status="no_trade")
     inputs = _batch_inputs()
     supervisor = FakeSupervisor(candidate, deadline=time.monotonic() - 1)
     monkeypatch.setattr(
         optimizer_service,
         "_core_contract",
-        lambda: (Request, lambda request, deadline: candidate, lambda *args, **kwargs: Validation(True)),
+        lambda: (
+            Request,
+            lambda request, deadline: candidate,
+            lambda *args, **kwargs: Validation(True),
+        ),
     )
 
     with pytest.raises(WorkerTimeoutError):
         await optimizer_service.run_validated_candidate(inputs, supervisor)  # type: ignore[arg-type]
+
 
 def _owner_validation_hang(started: Event, *, deadline: float) -> str:
     started.set()
@@ -473,7 +496,6 @@ async def test_bounded_validation_executor_returns_real_candidate_validation() -
         await executor.aclose()
 
 
-
 _RUN_ID = "service-run"
 _GROUP_ID = "service-group"
 _POLICY_ID = "service-policy"
@@ -489,8 +511,9 @@ class PublicationCandidate:
     legs: tuple[object, ...] = ()
 
 
-
-def _sell_legs_for_ids(inputs: object, broker_lot_ids: tuple[str, ...]) -> tuple[ConsolidatedLeg, ...]:
+def _sell_legs_for_ids(
+    inputs: object, broker_lot_ids: tuple[str, ...]
+) -> tuple[ConsolidatedLeg, ...]:
     lots_by_id = {lot.broker_lot_id: lot for lot in getattr(inputs, "lots", ())}
     grouped: dict[str, list[str]] = {}
     for broker_lot_id in broker_lot_ids:
@@ -512,6 +535,7 @@ def _sell_legs_for_ids(inputs: object, broker_lot_ids: tuple[str, ...]) -> tuple
             )
         )
     return tuple(legs)
+
 
 def _create_sqlite_optimizer_run(
     tmp_path: Path, *, selected: bool
@@ -701,12 +725,18 @@ def _create_sqlite_subset_optimizer_run(
     return engine, session_factory
 
 
-def _patch_real_run_dependencies(monkeypatch: pytest.MonkeyPatch, *, inputs: object | None = None) -> None:
-    prepared_inputs = inputs if inputs is not None else ServiceInputs(
-        (
-            ServiceLot("ABC", "LOT-1"),
-            ServiceLot("ABC", "LOT-OLDER"),
-            ServiceLot("ABC", "LOT-NEWER"),
+def _patch_real_run_dependencies(
+    monkeypatch: pytest.MonkeyPatch, *, inputs: object | None = None
+) -> None:
+    prepared_inputs = (
+        inputs
+        if inputs is not None
+        else ServiceInputs(
+            (
+                ServiceLot("ABC", "LOT-1"),
+                ServiceLot("ABC", "LOT-OLDER"),
+                ServiceLot("ABC", "LOT-NEWER"),
+            )
         )
     )
     prepared = optimizer_service.PreparedOptimizerRun(
@@ -746,9 +776,7 @@ def _patch_real_run_dependencies(monkeypatch: pytest.MonkeyPatch, *, inputs: obj
     monkeypatch.setattr(optimizer_service, "assert_optimizer_run_current", assert_current)
 
 
-def _capture_real_run_state(
-    session: Session, run_id: str = _RUN_ID
-) -> optimizer_service._RunState:
+def _capture_real_run_state(session: Session, run_id: str = _RUN_ID) -> optimizer_service._RunState:
     with session.begin():
         _run, state, _annotations = optimizer_service._run_state(session, run_id)
     return state
@@ -797,7 +825,6 @@ def _persist_test_candidate(
     )
 
 
-
 def _persist_subset_candidate(
     session: Session,
     run: OptimizerRun,
@@ -834,9 +861,7 @@ def _persist_subset_candidate(
         for group in groups
         if isinstance(group.impact, dict) and isinstance(group.impact.get("core_group_id"), str)
     }
-    active_core_ids = {
-        core_id for leg in outcome.candidate.legs for core_id in leg.group_ids
-    }
+    active_core_ids = {core_id for leg in outcome.candidate.legs for core_id in leg.group_ids}
     overrides = annotation_overrides if isinstance(annotation_overrides, dict) else {}
     for core_id, group in groups_by_core.items():
         impact = dict(group.impact)
@@ -855,16 +880,24 @@ def _persist_subset_candidate(
         select(RecommendationLeg.id).where(RecommendationLeg.group_id.in_(group_ids))
     ).all()
     if leg_ids:
-        session.execute(delete(RecommendationSelectedLot).where(RecommendationSelectedLot.leg_id.in_(leg_ids)))
-        session.execute(delete(RecommendationGroupLeg).where(RecommendationGroupLeg.leg_id.in_(leg_ids)))
+        session.execute(
+            delete(RecommendationSelectedLot).where(RecommendationSelectedLot.leg_id.in_(leg_ids))
+        )
+        session.execute(
+            delete(RecommendationGroupLeg).where(RecommendationGroupLeg.leg_id.in_(leg_ids))
+        )
         session.execute(delete(RecommendationLeg).where(RecommendationLeg.id.in_(leg_ids)))
-    session.execute(delete(RecommendationGroupLeg).where(RecommendationGroupLeg.group_id.in_(group_ids)))
+    session.execute(
+        delete(RecommendationGroupLeg).where(RecommendationGroupLeg.group_id.in_(group_ids))
+    )
 
     lots_by_id = {lot.broker_lot_id: lot for lot in prepared.inputs.lots}
     for leg in outcome.candidate.legs:
         core_group_ids = list(leg.group_ids)
         primary_group = groups_by_core[core_group_ids[0]]
-        security_id = session.scalar(select(Security.id).where(Security.ticker == leg.ticker.upper()))
+        security_id = session.scalar(
+            select(Security.id).where(Security.ticker == leg.ticker.upper())
+        )
         assert security_id is not None
         leg_id = f"subset-service-leg-{revision}-{leg.sequence}"
         session.add(
@@ -884,7 +917,9 @@ def _persist_subset_candidate(
         )
         session.flush()
         for core_group_id in core_group_ids:
-            session.add(RecommendationGroupLeg(group_id=groups_by_core[core_group_id].id, leg_id=leg_id))
+            session.add(
+                RecommendationGroupLeg(group_id=groups_by_core[core_group_id].id, leg_id=leg_id)
+            )
         for allocation in leg.selected_lots:
             lot = lots_by_id[allocation.broker_lot_id]
             session.add(
@@ -915,7 +950,6 @@ def _get_run_rows(
         return run, group, leg_count
 
 
-
 def _subset_inputs() -> ServiceInputs:
     return ServiceInputs(
         (
@@ -940,7 +974,9 @@ def _subset_snapshot(session_factory: Callable[[], Session]) -> tuple[object, ..
                 select(RecommendationSelectedLot.broker_lot_id)
                 .join(RecommendationLeg, RecommendationLeg.id == RecommendationSelectedLot.leg_id)
                 .join(RecommendationGroupLeg, RecommendationGroupLeg.leg_id == RecommendationLeg.id)
-                .join(RecommendationGroup, RecommendationGroup.id == RecommendationGroupLeg.group_id)
+                .join(
+                    RecommendationGroup, RecommendationGroup.id == RecommendationGroupLeg.group_id
+                )
                 .where(RecommendationGroup.run_id == _SUBSET_RUN_ID)
                 .order_by(RecommendationSelectedLot.broker_lot_id)
             ).all()
@@ -961,6 +997,7 @@ def _subset_snapshot(session_factory: Callable[[], Session]) -> tuple[object, ..
             legs,
             event_count,
         )
+
 
 @pytest.mark.asyncio
 async def test_concurrent_subset_publication_cannot_overwrite_newer_basket(
@@ -986,7 +1023,10 @@ async def test_concurrent_subset_publication_cannot_overwrite_newer_basket(
         if marker == "older":
             await release_older.wait()
         return optimizer_service.ValidatedOptimizerCandidate(
-            PublicationCandidate(marker, _sell_legs_for_ids(_inputs, sell_lot_ids)), None, time.monotonic() + 60, "ready"
+            PublicationCandidate(marker, _sell_legs_for_ids(_inputs, sell_lot_ids)),
+            None,
+            time.monotonic() + 60,
+            "ready",
         )
 
     monkeypatch.setattr(optimizer_service, "run_validated_candidate", fake_solve)
@@ -1069,7 +1109,10 @@ async def test_inflight_solve_is_invalidated_by_non_solving_rejection(
         solve_started.set()
         await release_solve.wait()
         return optimizer_service.ValidatedOptimizerCandidate(
-            PublicationCandidate("stale-solve", _sell_legs_for_ids(_inputs, sell_lot_ids)), None, time.monotonic() + 60, "ready"
+            PublicationCandidate("stale-solve", _sell_legs_for_ids(_inputs, sell_lot_ids)),
+            None,
+            time.monotonic() + 60,
+            "ready",
         )
 
     monkeypatch.setattr(optimizer_service, "run_validated_candidate", fake_solve)
@@ -1278,7 +1321,14 @@ async def test_lot_intent_roundtrip_preserves_actual_selected_lots_and_rejected_
 
 @pytest.mark.parametrize(
     "worker_shape",
-    ["missing_sell", "no_trade", "fractional_quantity", "foreign_lot", "exceeds_available", "wrong_ticker"],
+    [
+        "missing_sell",
+        "no_trade",
+        "fractional_quantity",
+        "foreign_lot",
+        "exceeds_available",
+        "wrong_ticker",
+    ],
 )
 @pytest.mark.asyncio
 async def test_worker_subset_result_must_exactly_match_positive_whole_lot_intent(
@@ -1345,7 +1395,9 @@ async def test_worker_subset_result_must_exactly_match_positive_whole_lot_intent
                 else:
                     candidate = Candidate(
                         (
-                            replace(normal_legs[0], selected_lots=(LotAllocation("LOT-B1", Decimal(1)),)),
+                            replace(
+                                normal_legs[0], selected_lots=(LotAllocation("LOT-B1", Decimal(1)),)
+                            ),
                             replace(bbb, selected_lots=(LotAllocation("LOT-A1", Decimal(1)),)),
                         )
                     )
@@ -1375,7 +1427,10 @@ async def test_worker_subset_result_must_exactly_match_positive_whole_lot_intent
     if worker_shape == "foreign_lot":
         assert "sell_lot_id_outside_frozen_inputs" in error.value.details["intent_errors"]
     if worker_shape == "exceeds_available":
-        assert "sell_lot_quantity_exceeds_frozen_available_shares" in error.value.details["intent_errors"]
+        assert (
+            "sell_lot_quantity_exceeds_frozen_available_shares"
+            in error.value.details["intent_errors"]
+        )
     if worker_shape == "wrong_ticker":
         assert "sell_lot_ticker_mismatch" in error.value.details["intent_errors"]
     assert _subset_snapshot(session_factory) == before
@@ -1442,9 +1497,7 @@ def test_published_financial_metrics_use_owner_validation_and_survive_summary_re
         exposure_coverage=None,
     )
     prepared = optimizer_service.PreparedOptimizerRun(
-        inputs=SimpleNamespace(
-            lots=(), account=SimpleNamespace(cash_usd=Decimal("10.00"))
-        ),  # type: ignore[arg-type]
+        inputs=SimpleNamespace(lots=(), account=SimpleNamespace(cash_usd=Decimal("10.00"))),  # type: ignore[arg-type]
         batch_settings={},
         frozen_input_bundle={"mode": "real_optimizer", "source_checksum": "test"},
         input_fingerprint="test-fingerprint",
@@ -1690,6 +1743,7 @@ def _search_incomplete_candidate() -> SimpleNamespace:
     )
     return SimpleNamespace(status="search_incomplete", legs=(), metadata=metadata)
 
+
 def _test_core_contract(
     candidate: object,
 ) -> tuple[type[Request], Callable[..., object], Callable[..., Validation]]:
@@ -1702,7 +1756,6 @@ def _test_core_contract(
         return Validation(True)
 
     return Request, worker, validator
-
 
 
 def _assert_initial_timeout_persisted(
@@ -1722,13 +1775,23 @@ def _assert_initial_timeout_persisted(
         assert run.metrics["basket_revision"] == 0
         assert run.frozen_input_bundle == {"mode": "real_optimizer"}
         assert run.input_fingerprint == "service-fingerprint"
-        assert session.scalar(select(func.count()).select_from(RecommendationGroup).where(RecommendationGroup.run_id == run_id)) == 0
-        assert session.scalar(
-            select(func.count())
-            .select_from(RecommendationLeg)
-            .join(RecommendationGroup, RecommendationGroup.id == RecommendationLeg.group_id)
-            .where(RecommendationGroup.run_id == run_id)
-        ) == 0
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(RecommendationGroup)
+                .where(RecommendationGroup.run_id == run_id)
+            )
+            == 0
+        )
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(RecommendationLeg)
+                .join(RecommendationGroup, RecommendationGroup.id == RecommendationLeg.group_id)
+                .where(RecommendationGroup.run_id == run_id)
+            )
+            == 0
+        )
         summary = optimizer_service.real_run_summary(run, session)
         assert summary["status"] == "timeout"
         assert summary["orders_count"] == 0
@@ -1804,9 +1867,13 @@ async def test_initial_publication_deadline_persists_timeout_run(
     candidate = Candidate((), status="no_trade")
     deadline = time.monotonic() - 1
 
-    async def fake_solve(*args: object, **kwargs: object) -> optimizer_service.ValidatedOptimizerCandidate:
+    async def fake_solve(
+        *args: object, **kwargs: object
+    ) -> optimizer_service.ValidatedOptimizerCandidate:
         del args, kwargs
-        return optimizer_service.ValidatedOptimizerCandidate(candidate, Validation(True), deadline, "no_trade")
+        return optimizer_service.ValidatedOptimizerCandidate(
+            candidate, Validation(True), deadline, "no_trade"
+        )
 
     def delayed_publication(
         _session: Session, _prepared: object, *, deadline: float | None = None
@@ -1861,9 +1928,13 @@ async def test_stale_initial_publication_never_persists_success(
     _patch_real_run_dependencies(monkeypatch, inputs=_batch_inputs())
     candidate = Candidate((), status="no_trade")
 
-    async def fake_solve(*args: object, **kwargs: object) -> optimizer_service.ValidatedOptimizerCandidate:
+    async def fake_solve(
+        *args: object, **kwargs: object
+    ) -> optimizer_service.ValidatedOptimizerCandidate:
         del args, kwargs
-        return optimizer_service.ValidatedOptimizerCandidate(candidate, Validation(True), time.monotonic() + 20, "no_trade")
+        return optimizer_service.ValidatedOptimizerCandidate(
+            candidate, Validation(True), time.monotonic() + 20, "no_trade"
+        )
 
     def stale_publication(
         _session: Session, _prepared: object, *, deadline: float | None = None
@@ -1896,7 +1967,9 @@ async def test_initial_search_incomplete_is_truthful_nonactionable_terminal_resu
     _patch_real_run_dependencies(monkeypatch, inputs=ServiceInputs((ServiceLot("ABC", "LOT-1"),)))
     candidate = _search_incomplete_candidate()
 
-    async def incomplete_solve(*args: object, **kwargs: object) -> optimizer_service.ValidatedOptimizerCandidate:
+    async def incomplete_solve(
+        *args: object, **kwargs: object
+    ) -> optimizer_service.ValidatedOptimizerCandidate:
         del args, kwargs
         return optimizer_service.ValidatedOptimizerCandidate(
             candidate, None, time.monotonic() + 20, "search_incomplete"
@@ -1916,18 +1989,30 @@ async def test_initial_search_incomplete_is_truthful_nonactionable_terminal_resu
             assert "search_incomplete_no_feasibility_claim" in run.warnings
             recommendations = optimizer_service.real_run_recommendations(session, run)
             assert recommendations["status"] == "failed"
-            assert cast(dict[str, object], recommendations["optimizer_metrics"])["optimizer_status"] == "search_incomplete"
+            assert (
+                cast(dict[str, object], recommendations["optimizer_metrics"])["optimizer_status"]
+                == "search_incomplete"
+            )
             assert recommendations["groups"] == []
             assert recommendations["consolidated_legs"] == []
         with session_factory() as session:
-            assert session.scalar(
-                select(func.count()).select_from(RecommendationGroup).where(RecommendationGroup.run_id == run.id)
-            ) == 0
-            assert session.scalar(
-                select(func.count()).select_from(RecommendationLeg).join(
-                    RecommendationGroup, RecommendationGroup.id == RecommendationLeg.group_id
-                ).where(RecommendationGroup.run_id == run.id)
-            ) == 0
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(RecommendationGroup)
+                    .where(RecommendationGroup.run_id == run.id)
+                )
+                == 0
+            )
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(RecommendationLeg)
+                    .join(RecommendationGroup, RecommendationGroup.id == RecommendationLeg.group_id)
+                    .where(RecommendationGroup.run_id == run.id)
+                )
+                == 0
+            )
     finally:
         engine.dispose()
 
@@ -1941,7 +2026,9 @@ async def test_subset_search_incomplete_reports_evidence_and_preserves_saved_bas
     before = _subset_snapshot(session_factory)
     candidate = _search_incomplete_candidate()
 
-    async def incomplete_solve(*args: object, **kwargs: object) -> optimizer_service.ValidatedOptimizerCandidate:
+    async def incomplete_solve(
+        *args: object, **kwargs: object
+    ) -> optimizer_service.ValidatedOptimizerCandidate:
         del args, kwargs
         return optimizer_service.ValidatedOptimizerCandidate(
             candidate, None, time.monotonic() + 20, "search_incomplete"
@@ -1986,18 +2073,23 @@ async def test_subset_timeout_preserves_prior_recommendations_and_annotations(
     before = _subset_snapshot(session_factory)
     selected_lots = ("LOT-A1",)
 
-    async def timeout_solve(*args: object, **kwargs: object) -> optimizer_service.ValidatedOptimizerCandidate:
+    async def timeout_solve(
+        *args: object, **kwargs: object
+    ) -> optimizer_service.ValidatedOptimizerCandidate:
         del args, kwargs
         if timeout_stage == "worker":
             raise WorkerTimeoutError("subset solve timed out")
         return optimizer_service.ValidatedOptimizerCandidate(
-            PublicationCandidate("late-subset", _sell_legs_for_ids(_subset_inputs(), selected_lots)),
+            PublicationCandidate(
+                "late-subset", _sell_legs_for_ids(_subset_inputs(), selected_lots)
+            ),
             Validation(True),
             time.monotonic() - 1,
             "ready",
         )
 
     if timeout_stage == "publication":
+
         def delayed_publication(
             _session: Session, _prepared: object, *, deadline: float | None = None
         ) -> None:

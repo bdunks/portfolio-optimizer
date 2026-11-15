@@ -38,11 +38,6 @@ def _sleeves_by_key(session: Session, revision_id: str) -> dict[str, PolicySleev
     }
 
 
-
-
-
-
-
 def _security_by_ticker(session: Session, ticker: str) -> Security | None:
     return session.scalar(select(Security).where(Security.ticker == ticker.upper()))
 
@@ -61,14 +56,16 @@ def _target_parts(
 
 def create_policy_draft(session: Session, payload: PolicyDraftInput) -> PolicyRevision:
     active = session.scalar(
-        select(PolicyRevision).where(PolicyRevision.status == "ACTIVE").order_by(
-            PolicyRevision.revision_number.desc()
-        )
+        select(PolicyRevision)
+        .where(PolicyRevision.status == "ACTIVE")
+        .order_by(PolicyRevision.revision_number.desc())
     )
     source_id = payload.source_revision_id or (active.id if active else None)
     source = session.get(PolicyRevision, source_id) if source_id else None
     if payload.source_revision_id and source is None:
-        raise AppError("policy_revision_not_found", "Source policy revision was not found", status_code=404)
+        raise AppError(
+            "policy_revision_not_found", "Source policy revision was not found", status_code=404
+        )
 
     incoming_sleeves = {s.sleeve_key: s for s in payload.sleeves}
     if len(incoming_sleeves) != len(payload.sleeves):
@@ -94,17 +91,25 @@ def create_policy_draft(session: Session, payload: PolicyDraftInput) -> PolicyRe
             if sleeve.parent_sleeve_key is None or sleeve.parent_sleeve_key in inserted_keys
         ]
         if not ready:
-            raise AppError("invalid_sleeve_tree", "Sleeve hierarchy cannot contain a cycle", status_code=422)
+            raise AppError(
+                "invalid_sleeve_tree", "Sleeve hierarchy cannot contain a cycle", status_code=422
+            )
         ordered_sleeves.extend(ready)
         inserted_keys.update(sleeve.sleeve_key for sleeve in ready)
         pending_sleeves = [sleeve for sleeve in pending_sleeves if sleeve not in ready]
 
     allowed_keys = [(item.ticker, item.replacement_set_id) for item in payload.allowed_securities]
     if len(set(allowed_keys)) != len(allowed_keys):
-        raise AppError("duplicate_allowed_security", "ETF candidate entries must be unique within each set", status_code=422)
+        raise AppError(
+            "duplicate_allowed_security",
+            "ETF candidate entries must be unique within each set",
+            status_code=422,
+        )
     override_tickers = [item.ticker for item in payload.overrides]
     if len(set(override_tickers)) != len(override_tickers):
-        raise AppError("duplicate_override", "Each security can have at most one override", status_code=422)
+        raise AppError(
+            "duplicate_override", "Each security can have at most one override", status_code=422
+        )
     enabled_targets = {s.sleeve_key for s in payload.sleeves if s.enabled}
     for source_key, target_key in payload.reassignments.items():
         if not source_key or target_key not in enabled_targets:
@@ -124,12 +129,14 @@ def create_policy_draft(session: Session, payload: PolicyDraftInput) -> PolicyRe
         or not Decimal(0) <= item.band_pct <= ONE_HUNDRED
         for item in payload.sector_bands
     ):
-        raise AppError("invalid_sector_band", "Sector targets and bands must be finite values from 0 to 100", status_code=422)
+        raise AppError(
+            "invalid_sector_band",
+            "Sector targets and bands must be finite values from 0 to 100",
+            status_code=422,
+        )
 
     # Cache current holdings and their source-policy resolution to enforce explicit reassignment.
-    positions = session.scalars(
-        select(CurrentPosition).order_by(CurrentPosition.id)
-    ).all()
+    positions = session.scalars(select(CurrentPosition).order_by(CurrentPosition.id)).all()
     securities = {security.id: security for security in session.scalars(select(Security)).all()}
     resolved_sources: dict[str, tuple[str, str | None]] = {}
     if source is not None:
@@ -201,7 +208,10 @@ def create_policy_draft(session: Session, payload: PolicyDraftInput) -> PolicyRe
                 details={"ticker": item.ticker},
             )
 
-        if item.sub_sleeve_key and incoming_sleeves[item.sub_sleeve_key].parent_sleeve_key != item.sleeve_key:
+        if (
+            item.sub_sleeve_key
+            and incoming_sleeves[item.sub_sleeve_key].parent_sleeve_key != item.sleeve_key
+        ):
             raise AppError(
                 "invalid_allowed_security",
                 "An ETF sub-sleeve must be a direct child of its assigned sleeve",
@@ -210,7 +220,9 @@ def create_policy_draft(session: Session, payload: PolicyDraftInput) -> PolicyRe
             )
         security = _security_by_ticker(session, item.ticker)
         if security is None:
-            security = Security(ticker=item.ticker, asset_type="ETF", is_completion_etf=item.ticker in {"VB", "VXF"})
+            security = Security(
+                ticker=item.ticker, asset_type="ETF", is_completion_etf=item.ticker in {"VB", "VXF"}
+            )
             session.add(security)
             session.flush()
         elif security.asset_type != "ETF":
@@ -243,7 +255,10 @@ def create_policy_draft(session: Session, payload: PolicyDraftInput) -> PolicyRe
                 details={"ticker": item.ticker},
             )
 
-        if item.sub_sleeve_key and incoming_sleeves[item.sub_sleeve_key].parent_sleeve_key != item.sleeve_key:
+        if (
+            item.sub_sleeve_key
+            and incoming_sleeves[item.sub_sleeve_key].parent_sleeve_key != item.sleeve_key
+        ):
             raise AppError(
                 "invalid_override",
                 "An override sub-sleeve must be a direct child of its assigned sleeve",
@@ -325,9 +340,19 @@ def validate_policy_revision(session: Session, revision: PolicyRevision) -> list
             or not Decimal(0) <= row.band_pct <= ONE_HUNDRED
             for row in sector_bands
         ):
-            errors.append({"code": "invalid_sector_band", "message": "Sector targets and bands must be finite values from 0 to 100"})
+            errors.append(
+                {
+                    "code": "invalid_sector_band",
+                    "message": "Sector targets and bands must be finite values from 0 to 100",
+                }
+            )
         if exact_sum(row.target_weight_pct for row in sector_bands) != ONE_HUNDRED:
-            errors.append({"code": "sector_target_sum", "message": "Configured sector targets must sum exactly to 100% of invested security exposure"})
+            errors.append(
+                {
+                    "code": "sector_target_sum",
+                    "message": "Configured sector targets must sum exactly to 100% of invested security exposure",
+                }
+            )
     sleeves = session.scalars(
         select(PolicySleeve).where(PolicySleeve.policy_revision_id == revision.id)
     ).all()
@@ -335,9 +360,19 @@ def validate_policy_revision(session: Session, revision: PolicyRevision) -> list
     enabled = [s for s in sleeves if s.enabled]
     top = [s for s in enabled if s.parent_sleeve_key is None]
     if not top:
-        errors.append({"code": "missing_top_level_sleeves", "message": "At least one enabled top-level sleeve is required"})
+        errors.append(
+            {
+                "code": "missing_top_level_sleeves",
+                "message": "At least one enabled top-level sleeve is required",
+            }
+        )
     elif exact_sum(s.target_pct for s in top) != ONE_HUNDRED:
-        errors.append({"code": "top_level_target_sum", "message": "Enabled top-level targets must sum exactly to 100%"})
+        errors.append(
+            {
+                "code": "top_level_target_sum",
+                "message": "Enabled top-level targets must sum exactly to 100%",
+            }
+        )
 
     for parent in enabled:
         children = [s for s in enabled if s.parent_sleeve_key == parent.sleeve_key]
@@ -351,23 +386,44 @@ def validate_policy_revision(session: Session, revision: PolicyRevision) -> list
     for sleeve in enabled:
         if sleeve.target_pct < 0 or sleeve.drift_band_pp < 0:
             errors.append(
-                {"code": "negative_sleeve_value", "message": f"Sleeve '{sleeve.sleeve_key}' has a negative target or band"}
+                {
+                    "code": "negative_sleeve_value",
+                    "message": f"Sleeve '{sleeve.sleeve_key}' has a negative target or band",
+                }
             )
         parent = by_key.get(sleeve.parent_sleeve_key or "")
         if sleeve.parent_sleeve_key and (parent is None or not parent.enabled):
             errors.append(
-                {"code": "disabled_parent", "message": f"Enabled sleeve '{sleeve.sleeve_key}' has no enabled parent"}
+                {
+                    "code": "disabled_parent",
+                    "message": f"Enabled sleeve '{sleeve.sleeve_key}' has no enabled parent",
+                }
             )
 
     try:
         st_rate = revision.short_term_tax_rate
         lt_rate = revision.long_term_tax_rate
         if st_rate is not None and (st_rate < 0 or st_rate > 1):
-            errors.append({"code": "invalid_tax_rate", "message": "Short-term tax rate must be between 0 and 1"})
+            errors.append(
+                {
+                    "code": "invalid_tax_rate",
+                    "message": "Short-term tax rate must be between 0 and 1",
+                }
+            )
         if lt_rate is not None and (lt_rate < 0 or lt_rate > 1):
-            errors.append({"code": "invalid_tax_rate", "message": "Long-term tax rate must be between 0 and 1"})
+            errors.append(
+                {
+                    "code": "invalid_tax_rate",
+                    "message": "Long-term tax rate must be between 0 and 1",
+                }
+            )
         if st_rate is not None and lt_rate is not None and st_rate < lt_rate:
-            errors.append({"code": "invalid_tax_rate_order", "message": "Short-term tax rate must be at least the long-term rate"})
+            errors.append(
+                {
+                    "code": "invalid_tax_rate_order",
+                    "message": "Short-term tax rate must be at least the long-term rate",
+                }
+            )
         retained = revision.target_retained_net_loss_usd
         deduction = revision.ordinary_income_deduction_limit_usd
         factor = revision.carryforward_loss_discount_factor
@@ -375,30 +431,67 @@ def validate_policy_revision(session: Session, revision: PolicyRevision) -> list
         buy_minimum = revision.min_buy_order_notional_usd
         cash_reserve = revision.cash_reserve_usd
         if min(retained, deduction, buy_minimum, cash_reserve) < 0:
-            errors.append({"code": "invalid_nonnegative_setting", "message": "Loss target, deduction, buy minimum, and cash reserve cannot be negative"})
+            errors.append(
+                {
+                    "code": "invalid_nonnegative_setting",
+                    "message": "Loss target, deduction, buy minimum, and cash reserve cannot be negative",
+                }
+            )
         if not Decimal(0) <= factor <= Decimal(1):
-            errors.append({"code": "invalid_discount_factor", "message": "Carryforward discount factor must be between 0 and 1"})
+            errors.append(
+                {
+                    "code": "invalid_discount_factor",
+                    "message": "Carryforward discount factor must be between 0 and 1",
+                }
+            )
         if not Decimal(0) <= turnover <= Decimal(100):
-            errors.append({"code": "invalid_turnover", "message": "Batch turnover percent must be between 0 and 100"})
-        for key in ("max_sell_tickers_per_batch", "max_sell_lots_per_batch", "max_total_orders_per_batch"):
+            errors.append(
+                {
+                    "code": "invalid_turnover",
+                    "message": "Batch turnover percent must be between 0 and 100",
+                }
+            )
+        for key in (
+            "max_sell_tickers_per_batch",
+            "max_sell_lots_per_batch",
+            "max_total_orders_per_batch",
+        ):
             if getattr(revision, key) <= 0:
                 errors.append({"code": "invalid_batch_limit", "message": f"{key} must be positive"})
         has_ytd_values = revision.ytd_realized_st_usd != 0 or revision.ytd_realized_lt_usd != 0
-        if (has_ytd_values or revision.ytd_source is not None or revision.ytd_as_of is not None) and not (
-            revision.ytd_source and revision.ytd_as_of
-        ):
-            errors.append({"code": "incomplete_ytd_provenance", "message": "YTD realized amounts require both a source and as-of date"})
-    except (ArithmeticError, ValueError, TypeError):
-        errors.append({"code": "invalid_policy_settings", "message": "Policy settings are malformed"})
+        if (
+            has_ytd_values or revision.ytd_source is not None or revision.ytd_as_of is not None
+        ) and not (revision.ytd_source and revision.ytd_as_of):
+            errors.append(
+                {
+                    "code": "incomplete_ytd_provenance",
+                    "message": "YTD realized amounts require both a source and as-of date",
+                }
+            )
+    except ArithmeticError, ValueError, TypeError:
+        errors.append(
+            {"code": "invalid_policy_settings", "message": "Policy settings are malformed"}
+        )
     if sum(1 for s in enabled if s.is_direct_index_container) > 1:
-        errors.append({"code": "multiple_direct_index_containers", "message": "Only one enabled direct-indexing container is allowed"})
+        errors.append(
+            {
+                "code": "multiple_direct_index_containers",
+                "message": "Only one enabled direct-indexing container is allowed",
+            }
+        )
     if sum(1 for s in enabled if s.is_cash_sleeve) > 1:
-        errors.append({"code": "multiple_cash_sleeves", "message": "Only one enabled cash sleeve is allowed"})
+        errors.append(
+            {"code": "multiple_cash_sleeves", "message": "Only one enabled cash sleeve is allowed"}
+        )
 
     allocation = load_allocation_policy(session, revision.id)
     held_securities = session.execute(
-        select(CurrentPosition.security_id, Security.ticker, Security.asset_type, Security.is_completion_etf)
-        .join(Security, Security.id == CurrentPosition.security_id)
+        select(
+            CurrentPosition.security_id,
+            Security.ticker,
+            Security.asset_type,
+            Security.is_completion_etf,
+        ).join(Security, Security.id == CurrentPosition.security_id)
     ).all()
     destination_resolution = resolve_transition_destination(allocation)
     if destination_resolution.reason is not None:
@@ -439,17 +532,27 @@ def validate_policy_revision(session: Session, revision: PolicyRevision) -> list
     return errors
 
 
-def activate_policy(session: Session, revision_id: str) -> tuple[PolicyRevision, list[dict[str, str]]]:
+def activate_policy(
+    session: Session, revision_id: str
+) -> tuple[PolicyRevision, list[dict[str, str]]]:
     revision = session.get(PolicyRevision, revision_id)
     if revision is None:
-        raise AppError("policy_revision_not_found", "Policy revision was not found", status_code=404)
+        raise AppError(
+            "policy_revision_not_found", "Policy revision was not found", status_code=404
+        )
     if revision.activated_at is not None or revision.status != "DRAFT":
-        raise AppError("policy_immutable", "Activated policy revisions cannot be changed or reactivated", status_code=409)
+        raise AppError(
+            "policy_immutable",
+            "Activated policy revisions cannot be changed or reactivated",
+            status_code=409,
+        )
     errors = validate_policy_revision(session, revision)
     if errors:
         return revision, errors
     now = datetime.now(UTC)
-    for previous in session.scalars(select(PolicyRevision).where(PolicyRevision.status == "ACTIVE")).all():
+    for previous in session.scalars(
+        select(PolicyRevision).where(PolicyRevision.status == "ACTIVE")
+    ).all():
         previous.status = "SUPERSEDED"
     revision.status = "ACTIVE"
     revision.activated_at = now

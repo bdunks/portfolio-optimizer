@@ -98,11 +98,15 @@ def _typescript(openapi: dict[str, Any]) -> str:
         for method, operation in path_item.items():
             if method not in {"get", "post", "put", "patch", "delete"}:
                 continue
-            operation_key = f'{method.upper()} {path}'
+            operation_key = f"{method.upper()} {path}"
             parameters = operation.get("parameters", [])
             request_body = operation.get("requestBody", {})
             request_schema = None
-            for media_type in ("application/json", "application/x-www-form-urlencoded", "multipart/form-data"):
+            for media_type in (
+                "application/json",
+                "application/x-www-form-urlencoded",
+                "multipart/form-data",
+            ):
                 entry = request_body.get("content", {}).get(media_type)
                 if entry:
                     request_schema = entry.get("schema")

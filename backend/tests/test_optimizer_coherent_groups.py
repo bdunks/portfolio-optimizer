@@ -87,7 +87,6 @@ def _service_outcome(
     )
 
 
-
 def _outcome_with_real_priorities(
     inputs: object,
     baseline: object,
@@ -96,9 +95,7 @@ def _outcome_with_real_priorities(
     *,
     core_group_id: str | None = None,
 ) -> tuple[optimizer_service.ValidatedOptimizerCandidate, tuple[object, ...]]:
-    priorities, warnings = _group_priorities(
-        inputs, screen, baseline, legs, time.monotonic() + 5
-    )
+    priorities, warnings = _group_priorities(inputs, screen, baseline, legs, time.monotonic() + 5)
     assert warnings == ()
     outcome = _service_outcome(
         inputs,
@@ -273,6 +270,7 @@ def _inputs_with_disjoint_aapl_lot(
         screened_lot_count=len(updated_sales),
     )
     return updated_inputs, updated_baseline, updated_screen, extra_lot
+
 
 @pytest.mark.asyncio
 async def test_real_writer_reconciles_coherent_component_identity_through_review_lifecycle(
@@ -501,13 +499,16 @@ async def test_real_writer_reconciles_coherent_component_identity_through_review
             None,
             correlation_id="coherent-note",
         )
-    assert assert_readback(
-        core_group_id=canonical_core_id,
-        selected=True,
-        expected_tickers={"AAPL", "MSFT", "NEWETF"},
-        expected_lots={"loss-lot", "msft-loss-lot"},
-        expected_note="reviewed coherent opportunity",
-    ) == initial_group_id
+    assert (
+        assert_readback(
+            core_group_id=canonical_core_id,
+            selected=True,
+            expected_tickers={"AAPL", "MSFT", "NEWETF"},
+            expected_lots={"loss-lot", "msft-loss-lot"},
+            expected_note="reviewed coherent opportunity",
+        )
+        == initial_group_id
+    )
 
     with session_factory() as session:
         await optimizer_service.apply_real_lot_review_intent(
@@ -539,13 +540,16 @@ async def test_real_writer_reconciles_coherent_component_identity_through_review
             None,
             correlation_id="deselect-coherent-group",
         )
-    assert assert_readback(
-        core_group_id="sale:MSFT",
-        selected=False,
-        expected_tickers=set(),
-        expected_lots=set(),
-        expected_note="reviewed coherent opportunity",
-    ) == initial_group_id
+    assert (
+        assert_readback(
+            core_group_id="sale:MSFT",
+            selected=False,
+            expected_tickers=set(),
+            expected_lots=set(),
+            expected_note="reviewed coherent opportunity",
+        )
+        == initial_group_id
+    )
 
     with session_factory() as session:
         await optimizer_service.apply_real_selection(
@@ -556,13 +560,16 @@ async def test_real_writer_reconciles_coherent_component_identity_through_review
             None,
             correlation_id="reselect-and-restore-omitted-lots",
         )
-    assert assert_readback(
-        core_group_id=canonical_core_id,
-        selected=True,
-        expected_tickers={"AAPL", "MSFT", "NEWETF"},
-        expected_lots={"loss-lot", "msft-loss-lot"},
-        expected_note="reviewed coherent opportunity",
-    ) == initial_group_id
+    assert (
+        assert_readback(
+            core_group_id=canonical_core_id,
+            selected=True,
+            expected_tickers={"AAPL", "MSFT", "NEWETF"},
+            expected_lots={"loss-lot", "msft-loss-lot"},
+            expected_note="reviewed coherent opportunity",
+        )
+        == initial_group_id
+    )
 
     with session_factory() as session:
         await optimizer_service.annotate_real_group(
@@ -574,14 +581,17 @@ async def test_real_writer_reconciles_coherent_component_identity_through_review
             None,
             correlation_id="reject-coherent-group",
         )
-    assert assert_readback(
-        core_group_id=canonical_core_id,
-        selected=False,
-        rejected=True,
-        expected_tickers=set(),
-        expected_lots=set(),
-        expected_note="reviewed coherent opportunity",
-    ) == initial_group_id
+    assert (
+        assert_readback(
+            core_group_id=canonical_core_id,
+            selected=False,
+            rejected=True,
+            expected_tickers=set(),
+            expected_lots=set(),
+            expected_note="reviewed coherent opportunity",
+        )
+        == initial_group_id
+    )
 
     with session_factory() as session:
         await optimizer_service.annotate_real_group(
@@ -593,14 +603,17 @@ async def test_real_writer_reconciles_coherent_component_identity_through_review
             None,
             correlation_id="restore-rejected-group",
         )
-    assert assert_readback(
-        core_group_id=canonical_core_id,
-        selected=False,
-        rejected=False,
-        expected_tickers=set(),
-        expected_lots=set(),
-        expected_note="reviewed coherent opportunity",
-    ) == initial_group_id
+    assert (
+        assert_readback(
+            core_group_id=canonical_core_id,
+            selected=False,
+            rejected=False,
+            expected_tickers=set(),
+            expected_lots=set(),
+            expected_note="reviewed coherent opportunity",
+        )
+        == initial_group_id
+    )
 
     with session_factory() as session:
         await optimizer_service.apply_real_lot_review_intent(
@@ -614,13 +627,16 @@ async def test_real_writer_reconciles_coherent_component_identity_through_review
             None,
             correlation_id="restore-all-coherent-lots",
         )
-    assert assert_readback(
-        core_group_id=canonical_core_id,
-        selected=True,
-        expected_tickers={"AAPL", "MSFT", "NEWETF"},
-        expected_lots={"loss-lot", "msft-loss-lot"},
-        expected_note="reviewed coherent opportunity",
-    ) == initial_group_id
+    assert (
+        assert_readback(
+            core_group_id=canonical_core_id,
+            selected=True,
+            expected_tickers={"AAPL", "MSFT", "NEWETF"},
+            expected_lots={"loss-lot", "msft-loss-lot"},
+            expected_note="reviewed coherent opportunity",
+        )
+        == initial_group_id
+    )
     engine.dispose()
 
 
@@ -654,9 +670,7 @@ async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_o
             group_ids=("sale:MSFT",),
         ),
     )
-    msft_only_outcome, _ = _outcome_with_real_priorities(
-        inputs, baseline, screen, msft_only_legs
-    )
+    msft_only_outcome, _ = _outcome_with_real_priorities(inputs, baseline, screen, msft_only_legs)
     extra_sell = replace(
         aapl_sell,
         leg_id="sell:AAPL-extra",
@@ -803,7 +817,11 @@ async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_o
             session,
             run_id,
             disjoint_public_id,
-            RecommendationAnnotationInput(rejected=True, rejection_reason="extra lot excluded", note="disjoint-only annotation"),
+            RecommendationAnnotationInput(
+                rejected=True,
+                rejection_reason="extra lot excluded",
+                note="disjoint-only annotation",
+            ),
             object(),
             None,
             correlation_id="reject-disjoint-aapl-opportunity",
@@ -847,9 +865,7 @@ async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_o
             run_id,
             OptimizerSelectionInput(
                 selected_group_ids=[str(original_public_id)],
-                selected_sell_lots={
-                    str(original_public_id): ["loss-lot", "msft-loss-lot"]
-                },
+                selected_sell_lots={str(original_public_id): ["loss-lot", "msft-loss-lot"]},
             ),
             object(),
             None,
@@ -956,8 +972,9 @@ async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_o
         assert sum("aapl-extra-lot" in lot_ids for lot_ids in selection_universe.values()) == 1
         assert str(original_public_id) in groups
         assert groups[str(original_public_id)]["rejected"] is False
-        assert sum(group["note"] == "original selected opportunity" for group in groups.values()) == 1
-
+        assert (
+            sum(group["note"] == "original selected opportunity" for group in groups.values()) == 1
+        )
 
     async def apply_review_intent(lot_ids: list[str], correlation_id: str) -> None:
         with session_factory() as review_session:
@@ -995,19 +1012,14 @@ async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_o
 
     active_owner_snapshots: list[list[str]] = []
     for correlation_id in ("restore-original-lots-by-intent", "repeat-original-lot-intent"):
-        await apply_review_intent(
-            ["loss-lot", "msft-loss-lot"], correlation_id
-        )
+        await apply_review_intent(["loss-lot", "msft-loss-lot"], correlation_id)
         restored_result, restored_metrics = current_readback()
 
         assert (
             restored_metrics["trade_group_priorities"]
             == split_priority_snapshot[0]["trade_group_priorities"]
         )
-        restored_groups = {
-
-            group["group_id"]: group for group in restored_result["groups"]
-        }
+        restored_groups = {group["group_id"]: group for group in restored_result["groups"]}
         restored_legs = restored_result["consolidated_legs"]
         restored_lots = {
             lot["broker_lot_id"]
@@ -1030,14 +1042,16 @@ async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_o
         assert str(original_public_id) in active_owners
         assert str(disjoint_public_id) not in active_owners
         assert all(
-            restored_groups[group_id]["selected"]
-            and not restored_groups[group_id]["rejected"]
+            restored_groups[group_id]["selected"] and not restored_groups[group_id]["rejected"]
             for group_id in active_owners
         )
-        assert sum(
-            group["note"] == "original selected opportunity"
-            for group in restored_groups.values()
-        ) == 1
+        assert (
+            sum(
+                group["note"] == "original selected opportunity"
+                for group in restored_groups.values()
+            )
+            == 1
+        )
         assert restored_groups[str(disjoint_public_id)]["rejected"] is True
         assert restored_groups[str(disjoint_public_id)]["rejection_reason"] == "extra lot excluded"
         assert restored_groups[str(disjoint_public_id)]["note"] == "disjoint-only annotation"
@@ -1056,8 +1070,6 @@ async def test_real_writer_restores_original_lots_when_rejected_disjoint_alias_o
             assert shares == sum(lot_shares, Decimal(0))
     assert active_owner_snapshots[0] == active_owner_snapshots[1]
     engine.dispose()
-
-
 
 
 @pytest.mark.parametrize(
@@ -1092,9 +1104,7 @@ async def test_real_writer_reserves_inherited_group_id_before_split_fallbacks(
             group_ids=("sale:MSFT",),
         ),
     )
-    msft_only_outcome, _ = _outcome_with_real_priorities(
-        inputs, baseline, screen, msft_only_legs
-    )
+    msft_only_outcome, _ = _outcome_with_real_priorities(inputs, baseline, screen, msft_only_legs)
     aapl_sell = next(leg for leg in canonical_legs if leg.side == "SELL" and leg.ticker == "AAPL")
     split_legs = (
         replace(
@@ -1192,7 +1202,6 @@ async def test_real_writer_reserves_inherited_group_id_before_split_fallbacks(
         readback_groups = {group["group_id"]: group for group in readback["groups"]}
         assert readback_groups[inherited_public_id]["note"] is None
     engine.dispose()
-
 
 
 @pytest.mark.asyncio
@@ -1293,15 +1302,16 @@ async def test_real_writer_rolls_back_everything_after_post_flush_failure(
 
     persist_candidate = optimizer_service._persist_candidate
 
-    def persist_then_fail_after_flush(
-        session: Session, *args: object, **kwargs: object
-    ) -> None:
+    def persist_then_fail_after_flush(session: Session, *args: object, **kwargs: object) -> None:
         persist_candidate(session, *args, **kwargs)
         session.flush()
         raise RuntimeError("injected post-flush persistence failure")
 
     monkeypatch.setattr(optimizer_service, "_persist_candidate", persist_then_fail_after_flush)
-    with pytest.raises(RuntimeError, match="injected post-flush persistence failure"), session_factory() as session:
+    with (
+        pytest.raises(RuntimeError, match="injected post-flush persistence failure"),
+        session_factory() as session,
+    ):
         await optimizer_service.apply_real_lot_review_intent(
             session,
             run_id,
@@ -1322,7 +1332,6 @@ async def test_real_writer_rolls_back_everything_after_post_flush_failure(
     engine.dispose()
 
 
-
 @pytest.mark.asyncio
 async def test_real_writer_rejects_solver_output_that_misses_exact_lot_intent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1333,14 +1342,10 @@ async def test_real_writer_rejects_solver_output_that_misses_exact_lot_intent(
     full_outcome, _priorities = _outcome_with_real_priorities(
         inputs, baseline, screen, canonical_legs
     )
-    aapl_sell = next(
-        leg for leg in canonical_legs if leg.side == "SELL" and leg.ticker == "AAPL"
-    )
+    aapl_sell = next(leg for leg in canonical_legs if leg.side == "SELL" and leg.ticker == "AAPL")
     mismatched_aapl_sell = replace(
         aapl_sell,
-        selected_lots=(
-            replace(aapl_sell.selected_lots[0], broker_lot_id="aapl-extra-lot"),
-        ),
+        selected_lots=(replace(aapl_sell.selected_lots[0], broker_lot_id="aapl-extra-lot"),),
     )
     mismatched_legs = tuple(
         mismatched_aapl_sell if leg is aapl_sell else leg for leg in canonical_legs

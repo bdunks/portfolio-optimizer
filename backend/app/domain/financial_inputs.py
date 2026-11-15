@@ -124,7 +124,11 @@ class PolicySettings:
 
     def to_provenance(self) -> dict[str, object]:
         return {
-            name: value.isoformat() if isinstance(value, date) else str(value) if isinstance(value, Decimal) else value
+            name: value.isoformat()
+            if isinstance(value, date)
+            else str(value)
+            if isinstance(value, Decimal)
+            else value
             for name, value in self.values
         }
 
@@ -146,6 +150,7 @@ class PolicyInput:
     created_at: datetime | None = None
     activated_at: datetime | None = None
     sector_bands: tuple[PolicySectorBandInput, ...] = ()
+
     def to_provenance(self) -> dict[str, object]:
         return {
             "id": self.revision_id,
@@ -161,7 +166,9 @@ class PolicyInput:
                     "sort_order": row.sort_order,
                     "parent_sleeve_key": row.parent_key,
                     "target_pct": str(row.target_pct) if row.target_pct is not None else None,
-                    "drift_band_pp": str(row.drift_band_pp) if row.drift_band_pp is not None else None,
+                    "drift_band_pp": str(row.drift_band_pp)
+                    if row.drift_band_pp is not None
+                    else None,
                     "enabled": row.enabled,
                     "is_direct_index_container": row.direct_index_container,
                     "is_direct_index_sleeve": row.direct_index_sleeve,
@@ -199,6 +206,7 @@ class PolicyInput:
                 for row in self.allocation.overrides
             ],
         }
+
 
 @dataclass(frozen=True, slots=True)
 class SecurityInput:
@@ -413,7 +421,9 @@ class FinancialInputs:
                     "as_of": _iso_datetime(row.as_of),
                     "market_value_usd": str(row.market_value_usd),
                     "sleeve_key": row.assignment.sleeve_key if row.assignment is not None else None,
-                    "sub_sleeve_key": row.assignment.sub_sleeve_key if row.assignment is not None else None,
+                    "sub_sleeve_key": row.assignment.sub_sleeve_key
+                    if row.assignment is not None
+                    else None,
                 }
                 for row in self.positions
             ],
@@ -460,7 +470,9 @@ class FinancialInputs:
                     "trade_date": row.trade_date.isoformat(),
                     "shares": str(row.shares),
                     "amount_usd": str(row.amount_usd),
-                    "realized_pl_usd": str(row.realized_pl_usd) if row.realized_pl_usd is not None else None,
+                    "realized_pl_usd": str(row.realized_pl_usd)
+                    if row.realized_pl_usd is not None
+                    else None,
                     "is_acquisition": row.is_acquisition,
                     "broker_lot_id": row.broker_lot_id,
                     "source": row.source,
@@ -525,15 +537,23 @@ def financial_inputs_from_provenance(
             or not Decimal(0) <= row.band_pct <= Decimal(100)
             for row in sector_bands
         )
-        or (sector_bands and exact_sum(row.target_weight_pct for row in sector_bands) != Decimal(100))
+        or (
+            sector_bands
+            and exact_sum(row.target_weight_pct for row in sector_bands) != Decimal(100)
+        )
     ):
         raise ValueError("frozen sector band policy data is invalid")
-    if not all(isinstance(value, (dict, list)) for value in (settings_data, sleeve_data, allowed_data, override_data)):
+    if not all(
+        isinstance(value, (dict, list))
+        for value in (settings_data, sleeve_data, allowed_data, override_data)
+    ):
         raise ValueError("frozen financial provenance contains malformed policy data")
     sleeves = tuple(
         AllocationSleeve(
             key=str(row["sleeve_key"]),
-            parent_key=str(row["parent_sleeve_key"]) if row.get("parent_sleeve_key") is not None else None,
+            parent_key=str(row["parent_sleeve_key"])
+            if row.get("parent_sleeve_key") is not None
+            else None,
             enabled=bool(row["enabled"]),
             direct_index_container=bool(row.get("is_direct_index_container", False)),
             direct_index_sleeve=bool(row.get("is_direct_index_sleeve", False)),
@@ -542,7 +562,7 @@ def financial_inputs_from_provenance(
             display_name=str(row.get("display_name", "")),
             sort_order=int(row.get("sort_order", 0)),
             target_pct=_decimal(row.get("target_pct")),
-            drift_band_pp=_decimal(row.get("drift_band_pp")), 
+            drift_band_pp=_decimal(row.get("drift_band_pp")),
         )
         for row in sleeve_data
         if isinstance(row, dict)
@@ -551,12 +571,16 @@ def financial_inputs_from_provenance(
         AllowedSecurity(
             ticker=str(row["ticker"]),
             sleeve_key=str(row["sleeve_key"]),
-            sub_sleeve_key=str(row["sub_sleeve_key"]) if row.get("sub_sleeve_key") is not None else None,
+            sub_sleeve_key=str(row["sub_sleeve_key"])
+            if row.get("sub_sleeve_key") is not None
+            else None,
             priority=int(row.get("priority", 0)),
             enabled=bool(row.get("enabled", False)),
             replacement_set_id=str(row.get("replacement_set_id", "default")),
             exposure_suitability=(
-                str(row["exposure_suitability"]) if row.get("exposure_suitability") is not None else None
+                str(row["exposure_suitability"])
+                if row.get("exposure_suitability") is not None
+                else None
             ),
         )
         for row in allowed_data
@@ -566,7 +590,9 @@ def financial_inputs_from_provenance(
         SecurityOverride(
             ticker=str(row["ticker"]),
             sleeve_key=str(row["sleeve_key"]),
-            sub_sleeve_key=str(row["sub_sleeve_key"]) if row.get("sub_sleeve_key") is not None else None,
+            sub_sleeve_key=str(row["sub_sleeve_key"])
+            if row.get("sub_sleeve_key") is not None
+            else None,
         )
         for row in override_data
         if isinstance(row, dict)
@@ -578,8 +604,12 @@ def financial_inputs_from_provenance(
         sector_bands=sector_bands,
         revision_number=int(policy_data.get("revision_number", 0)),
         status=str(policy_data.get("status", "")),
-        created_at=_parse_datetime(policy_data["created_at"]) if policy_data.get("created_at") else None,
-        activated_at=_parse_datetime(policy_data["activated_at"]) if policy_data.get("activated_at") else None,
+        created_at=_parse_datetime(policy_data["created_at"])
+        if policy_data.get("created_at")
+        else None,
+        activated_at=_parse_datetime(policy_data["activated_at"])
+        if policy_data.get("activated_at")
+        else None,
     )
 
     raw_securities = bundle.get("securities")
@@ -591,7 +621,9 @@ def financial_inputs_from_provenance(
         for row in raw_securities:
             if isinstance(row, dict) and isinstance(row.get("ticker"), str):
                 identity = SecurityIdentity(
-                    row["ticker"], str(row.get("asset_type", "ETF")), bool(row.get("is_completion_etf", False))
+                    row["ticker"],
+                    str(row.get("asset_type", "ETF")),
+                    bool(row.get("is_completion_etf", False)),
                 )
                 security_inputs[identity.ticker] = SecurityInput(
                     identity,
@@ -602,7 +634,9 @@ def financial_inputs_from_provenance(
         if isinstance(row, dict) and isinstance(row.get("ticker"), str):
             ticker = row["ticker"]
             identity = SecurityIdentity(
-                ticker, str(row.get("asset_type", "EQUITY")), bool(row.get("is_completion_etf", False))
+                ticker,
+                str(row.get("asset_type", "EQUITY")),
+                bool(row.get("is_completion_etf", False)),
             )
             security_inputs.setdefault(ticker, SecurityInput(identity))
     for row in allowed_data:
@@ -618,7 +652,9 @@ def financial_inputs_from_provenance(
         security = security_inputs[ticker].identity
         resolution = resolve_holding(policy.allocation, security)
         if resolution.assignment is None:
-            raise ValueError(f"frozen position {ticker} has no valid policy assignment: {resolution.reason}")
+            raise ValueError(
+                f"frozen position {ticker} has no valid policy assignment: {resolution.reason}"
+            )
         positions.append(
             PositionInput(
                 ticker=ticker,
@@ -730,7 +766,9 @@ def financial_inputs_from_provenance(
         account_key_fingerprint=str(account_data["account_key_fingerprint"]),
         display_name=str(account_data["display_name"]),
         account_type=str(account_data["account_type"]),
-        tax_treatment=str(account_data["tax_treatment"]) if account_data.get("tax_treatment") is not None else None,
+        tax_treatment=str(account_data["tax_treatment"])
+        if account_data.get("tax_treatment") is not None
+        else None,
         source=str(account_data["source"]),
         as_of=_parse_datetime(account_data["as_of"]),
         cash_usd=Decimal(str(account_data["cash_usd"])),

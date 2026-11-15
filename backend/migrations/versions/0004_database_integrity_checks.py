@@ -1,4 +1,5 @@
 """Add exact-text domain checks to databases already at the previous head."""
+
 from __future__ import annotations
 
 import sqlalchemy as sa
@@ -17,7 +18,10 @@ _CHECKS = {
     "current_quote": (
         ("ck_quote_bid_positive", "bid_usd IS NULL OR (bid_usd NOT LIKE '-%' AND bid_usd <> '0')"),
         ("ck_quote_ask_positive", "ask_usd IS NULL OR (ask_usd NOT LIKE '-%' AND ask_usd <> '0')"),
-        ("ck_quote_last_positive", "last_usd IS NULL OR (last_usd NOT LIKE '-%' AND last_usd <> '0')"),
+        (
+            "ck_quote_last_positive",
+            "last_usd IS NULL OR (last_usd NOT LIKE '-%' AND last_usd <> '0')",
+        ),
     ),
     "security_exposure": (
         ("ck_exposure_provider", "provider IN ('vanguard', 'ishares', 'manual_csv')"),

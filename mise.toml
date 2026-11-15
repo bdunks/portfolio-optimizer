@@ -2,3 +2,35 @@
 node = "24"
 python = "3.14"
 uv = "latest"
+
+[tasks."format:backend"]
+description = "Apply Ruff fixes (including unsafe fixes), format, then report remaining lint errors"
+dir = "backend"
+run = [
+  "uv run ruff check --fix-only --unsafe-fixes",
+  "uv run ruff format",
+  "uv run ruff check",
+]
+
+[tasks."format:frontend"]
+description = "Apply Prettier formatting and ESLint autofixes for TypeScript/Vue"
+dir = "frontend"
+run = "npm run lint"
+
+[tasks.format]
+description = "Autofix and format backend and frontend"
+depends = ["format:backend", "format:frontend"]
+
+[tasks."typecheck:backend"]
+description = "Check Python types and remove unused type suppressions"
+dir = "backend"
+run = "uv run pyrefly check --remove-unused-ignores=all"
+
+[tasks."typecheck:frontend"]
+description = "Check TypeScript and Vue types"
+dir = "frontend"
+run = "npm run typecheck"
+
+[tasks.typecheck]
+description = "Typecheck backend and frontend"
+depends = ["typecheck:backend", "typecheck:frontend"]

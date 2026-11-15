@@ -1,4 +1,5 @@
 """Repair run order counts after consolidated recommendation legs are upgraded."""
+
 from __future__ import annotations
 
 import json
@@ -23,21 +24,33 @@ def upgrade() -> None:
     }
     if not required_tables <= set(sa.inspect(connection).get_table_names()):
         return
-    runs = connection.execute(sa.text("SELECT id, metrics FROM optimizer_run ORDER BY id")).mappings().all()
+    runs = (
+        connection.execute(sa.text("SELECT id, metrics FROM optimizer_run ORDER BY id"))
+        .mappings()
+        .all()
+    )
     for run in runs:
         run_id = str(run["id"])
-        legs = connection.execute(
-            sa.text(
-                "SELECT DISTINCT l.id, l.shares FROM recommendation_leg AS l "
-                "JOIN recommendation_group_leg AS gl ON gl.leg_id = l.id "
-                "JOIN recommendation_group AS g ON g.id = gl.group_id WHERE g.run_id = :run_id"
-            ),
-            {"run_id": run_id},
-        ).mappings().all()
+        legs = (
+            connection.execute(
+                sa.text(
+                    "SELECT DISTINCT l.id, l.shares FROM recommendation_leg AS l "
+                    "JOIN recommendation_group_leg AS gl ON gl.leg_id = l.id "
+                    "JOIN recommendation_group AS g ON g.id = gl.group_id WHERE g.run_id = :run_id"
+                ),
+                {"run_id": run_id},
+            )
+            .mappings()
+            .all()
+        )
         # Consolidated BUY ownership may differ from the selected funding group; positive shares are authoritative.
         orders_count = sum(1 for leg in legs if Decimal(str(leg["shares"])) > 0)
         metrics_value = run["metrics"]
-        metrics = json.loads(metrics_value) if isinstance(metrics_value, str) else dict(metrics_value or {})
+        metrics = (
+            json.loads(metrics_value)
+            if isinstance(metrics_value, str)
+            else dict(metrics_value or {})
+        )
         if metrics.get("orders_count") == orders_count:
             continue
         metrics["orders_count"] = orders_count

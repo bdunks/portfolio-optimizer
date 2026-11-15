@@ -41,15 +41,21 @@ def validate_snapshot(snapshot: BrokerSnapshot) -> None:
             details={"incomplete_sections": missing},
         )
     if snapshot.cash_usd < 0 or snapshot.settled_buying_power_usd < 0:
-        raise AppError("invalid_sync_payload", "Broker balances cannot be negative", status_code=422)
+        raise AppError(
+            "invalid_sync_payload", "Broker balances cannot be negative", status_code=422
+        )
 
     positions = {position.ticker: position for position in snapshot.positions}
     if len(positions) != len(snapshot.positions):
-        raise AppError("duplicate_position", "Broker snapshot contains duplicate positions", status_code=422)
+        raise AppError(
+            "duplicate_position", "Broker snapshot contains duplicate positions", status_code=422
+        )
     lots_by_ticker: dict[str, list[Decimal]] = defaultdict(list)
     lot_ids = [lot.broker_lot_id for lot in snapshot.lots]
     if len(set(lot_ids)) != len(lot_ids):
-        raise AppError("duplicate_lot", "Broker snapshot contains duplicate broker lot IDs", status_code=422)
+        raise AppError(
+            "duplicate_lot", "Broker snapshot contains duplicate broker lot IDs", status_code=422
+        )
     for lot in snapshot.lots:
         if lot.ticker not in positions:
             raise AppError(
@@ -59,16 +65,30 @@ def validate_snapshot(snapshot: BrokerSnapshot) -> None:
                 details={"ticker": lot.ticker},
             )
         if not lot.broker_lot_id.strip() or lot.shares <= 0:
-            raise AppError("incomplete_lot", "Open lots require a broker ID and positive shares", status_code=422)
+            raise AppError(
+                "incomplete_lot",
+                "Open lots require a broker ID and positive shares",
+                status_code=422,
+            )
         if lot.available_shares < 0 or lot.available_shares > lot.shares:
-            raise AppError("invalid_lot_quantity", "Lot available shares must be within its remaining quantity", status_code=422)
+            raise AppError(
+                "invalid_lot_quantity",
+                "Lot available shares must be within its remaining quantity",
+                status_code=422,
+            )
         if lot.adjusted_unit_basis_usd < 0:
-            raise AppError("invalid_lot_basis", "Adjusted lot basis cannot be negative", status_code=422)
+            raise AppError(
+                "invalid_lot_basis", "Adjusted lot basis cannot be negative", status_code=422
+            )
         lots_by_ticker[lot.ticker].append(lot.shares)
 
     for ticker, position in positions.items():
         if position.shares <= 0 or position.market_value_usd < 0:
-            raise AppError("invalid_position", "Positions require positive shares and nonnegative value", status_code=422)
+            raise AppError(
+                "invalid_position",
+                "Positions require positive shares and nonnegative value",
+                status_code=422,
+            )
         if exact_sum(lots_by_ticker[ticker]) != position.shares:
             raise AppError(
                 "incomplete_lots",
@@ -79,7 +99,9 @@ def validate_snapshot(snapshot: BrokerSnapshot) -> None:
 
     quote_tickers = [quote.ticker for quote in snapshot.quotes]
     if len(set(quote_tickers)) != len(quote_tickers):
-        raise AppError("duplicate_quote", "Broker snapshot contains duplicate quotes", status_code=422)
+        raise AppError(
+            "duplicate_quote", "Broker snapshot contains duplicate quotes", status_code=422
+        )
     quotes = {quote.ticker: quote for quote in snapshot.quotes}
     for ticker in positions:
         quote = quotes.get(ticker)
@@ -91,25 +113,44 @@ def validate_snapshot(snapshot: BrokerSnapshot) -> None:
                 details={"ticker": ticker},
             )
     for quote in snapshot.quotes:
-        if any(value is not None and value <= 0 for value in (quote.bid_usd, quote.ask_usd, quote.last_usd)):
-            raise AppError("invalid_quote", "Quote prices must be positive when provided", status_code=422)
+        if any(
+            value is not None and value <= 0
+            for value in (quote.bid_usd, quote.ask_usd, quote.last_usd)
+        ):
+            raise AppError(
+                "invalid_quote", "Quote prices must be positive when provided", status_code=422
+            )
         if quote.bid_usd and quote.ask_usd and quote.bid_usd > quote.ask_usd:
             raise AppError("invalid_quote", "Quote bid cannot exceed ask", status_code=422)
 
     transaction_keys = [transaction.broker_transaction_key for transaction in snapshot.transactions]
     if len(set(transaction_keys)) != len(transaction_keys):
-        raise AppError("duplicate_transaction", "Broker snapshot contains duplicate transaction IDs", status_code=422)
+        raise AppError(
+            "duplicate_transaction",
+            "Broker snapshot contains duplicate transaction IDs",
+            status_code=422,
+        )
     if any(not key.strip() for key in transaction_keys):
-        raise AppError("incomplete_transaction", "Broker transactions require stable broker IDs", status_code=422)
+        raise AppError(
+            "incomplete_transaction",
+            "Broker transactions require stable broker IDs",
+            status_code=422,
+        )
 
     exposure_keys = [
         (item.ticker, item.dimension, item.exposure_key, item.provider)
         for item in snapshot.exposures
     ]
     if len(set(exposure_keys)) != len(exposure_keys):
-        raise AppError("duplicate_exposure", "Look-through data contains duplicate exposure rows", status_code=422)
+        raise AppError(
+            "duplicate_exposure",
+            "Look-through data contains duplicate exposure rows",
+            status_code=422,
+        )
     if any(item.weight < 0 for item in snapshot.exposures):
-        raise AppError("invalid_exposure", "Look-through weights cannot be negative", status_code=422)
+        raise AppError(
+            "invalid_exposure", "Look-through weights cannot be negative", status_code=422
+        )
 
 
 def _security_for_ticker(
@@ -134,8 +175,14 @@ def _security_for_ticker(
         session.flush()
     else:
         if security.asset_type != asset_type and ticker in {"VB", "VXF"}:
-            raise AppError("security_type_mismatch", "Broker security metadata conflicts with stored type", status_code=422)
-        security.is_completion_etf = security.is_completion_etf or is_completion_etf or ticker in {"VB", "VXF"}
+            raise AppError(
+                "security_type_mismatch",
+                "Broker security metadata conflicts with stored type",
+                status_code=422,
+            )
+        security.is_completion_etf = (
+            security.is_completion_etf or is_completion_etf or ticker in {"VB", "VXF"}
+        )
         security.cusip = security.cusip or cusip
         security.isin = security.isin or isin
     return security
@@ -344,7 +391,8 @@ def sync_portfolio(
                 )
                 existing = session.scalar(
                     select(BrokerTransaction).where(
-                        BrokerTransaction.broker_transaction_key == transaction.broker_transaction_key
+                        BrokerTransaction.broker_transaction_key
+                        == transaction.broker_transaction_key
                     )
                 )
                 if existing is None:

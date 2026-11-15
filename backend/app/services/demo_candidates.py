@@ -21,7 +21,11 @@ from app.services.errors import AppError
 def _batch_limit(batch: dict[str, object], name: str) -> int:
     value = batch.get(name)
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise AppError("invalid_batch_limit", f"Demo batch setting {name} must be a nonnegative integer", status_code=422)
+        raise AppError(
+            "invalid_batch_limit",
+            f"Demo batch setting {name} must be a nonnegative integer",
+            status_code=422,
+        )
     return value
 
 
@@ -56,7 +60,11 @@ def _candidate_groups(inputs: FinancialInputs, batch: dict[str, object]) -> list
     reserve = _decimal(settings.get("cash_reserve_usd", Decimal(0)))
     cash = inputs.account.cash_usd
     if cash < reserve:
-        raise AppError("cash_reserve_unavailable", "Current cash is below the configured reserve", status_code=422)
+        raise AppError(
+            "cash_reserve_unavailable",
+            "Current cash is below the configured reserve",
+            status_code=422,
+        )
 
     candidates: list[dict[str, object]] = []
     for ticker, position in positions.items():
@@ -96,9 +104,7 @@ def _candidate_groups(inputs: FinancialInputs, batch: dict[str, object]) -> list
         if not source_lots:
             continue
 
-        source_path = assignment_path(
-            policy, assignment.sleeve_key, assignment.sub_sleeve_key
-        )
+        source_path = assignment_path(policy, assignment.sleeve_key, assignment.sub_sleeve_key)
         if not source_path:
             continue
         source_scope = source_path[0]
@@ -173,7 +179,9 @@ def _candidate_groups(inputs: FinancialInputs, batch: dict[str, object]) -> list
             }
         )
 
-    candidates.sort(key=lambda row: (_decimal(row["total_loss"]).copy_abs().copy_negate(), str(row["ticker"])))
+    candidates.sort(
+        key=lambda row: (_decimal(row["total_loss"]).copy_abs().copy_negate(), str(row["ticker"]))
+    )
     result: list[dict[str, object]] = []
     used_lots = 0
     used_turnover = Decimal(0)

@@ -121,7 +121,9 @@ class CurrentPosition(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    account_id: Mapped[int] = mapped_column(ForeignKey("account.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("account.id", ondelete="CASCADE"), nullable=False
+    )
     security_id: Mapped[int] = mapped_column(ForeignKey("security.id"), nullable=False)
     shares: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
     market_value_usd: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
@@ -140,7 +142,9 @@ class CurrentTaxLot(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    account_id: Mapped[int] = mapped_column(ForeignKey("account.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("account.id", ondelete="CASCADE"), nullable=False
+    )
     broker_lot_id: Mapped[str] = mapped_column(String(128), nullable=False)
     security_id: Mapped[int] = mapped_column(ForeignKey("security.id"), nullable=False)
     acquired_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -151,7 +155,9 @@ class CurrentTaxLot(Base):
     source: Mapped[str] = mapped_column(String(40), nullable=False)
     as_of: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     quality_flags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
-    fractional_cleanup_unsupported: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    fractional_cleanup_unsupported: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
     sync_generation: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
@@ -174,7 +180,9 @@ class CurrentQuote(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    security_id: Mapped[int] = mapped_column(ForeignKey("security.id", ondelete="CASCADE"), unique=True)
+    security_id: Mapped[int] = mapped_column(
+        ForeignKey("security.id", ondelete="CASCADE"), unique=True
+    )
     bid_usd: Mapped[Decimal | None] = mapped_column(DecimalText())
     ask_usd: Mapped[Decimal | None] = mapped_column(DecimalText())
     last_usd: Mapped[Decimal | None] = mapped_column(DecimalText())
@@ -197,7 +205,9 @@ class BrokerTransaction(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     broker_transaction_key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
-    account_id: Mapped[int] = mapped_column(ForeignKey("account.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("account.id", ondelete="CASCADE"), nullable=False
+    )
     security_id: Mapped[int] = mapped_column(ForeignKey("security.id"), nullable=False)
     transaction_kind: Mapped[str] = mapped_column(String(16), nullable=False)
     transaction_time: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
@@ -237,7 +247,9 @@ class SecurityExposure(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    security_id: Mapped[int] = mapped_column(ForeignKey("security.id", ondelete="CASCADE"), nullable=False)
+    security_id: Mapped[int] = mapped_column(
+        ForeignKey("security.id", ondelete="CASCADE"), nullable=False
+    )
     dimension: Mapped[str] = mapped_column(String(32), nullable=False)
     exposure_key: Mapped[str] = mapped_column(String(128), nullable=False)
     weight: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
@@ -260,15 +272,29 @@ class PolicyRevision(Base):
     activated_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     short_term_tax_rate: Mapped[Decimal | None] = mapped_column(DecimalText())
     long_term_tax_rate: Mapped[Decimal | None] = mapped_column(DecimalText())
-    st_loss_carryforward_usd: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False, default=Decimal(0))
-    lt_loss_carryforward_usd: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False, default=Decimal(0))
-    ytd_realized_st_usd: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False, default=Decimal(0))
-    ytd_realized_lt_usd: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False, default=Decimal(0))
+    st_loss_carryforward_usd: Mapped[Decimal] = mapped_column(
+        DecimalText(), nullable=False, default=Decimal(0)
+    )
+    lt_loss_carryforward_usd: Mapped[Decimal] = mapped_column(
+        DecimalText(), nullable=False, default=Decimal(0)
+    )
+    ytd_realized_st_usd: Mapped[Decimal] = mapped_column(
+        DecimalText(), nullable=False, default=Decimal(0)
+    )
+    ytd_realized_lt_usd: Mapped[Decimal] = mapped_column(
+        DecimalText(), nullable=False, default=Decimal(0)
+    )
     ytd_source: Mapped[str | None] = mapped_column(String(80))
     ytd_as_of: Mapped[date | None] = mapped_column(Date)
-    target_retained_net_loss_usd: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False, default=Decimal(3000))
-    ordinary_income_deduction_limit_usd: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False, default=Decimal(3000))
-    carryforward_loss_discount_factor: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False, default=Decimal("0.50"))
+    target_retained_net_loss_usd: Mapped[Decimal] = mapped_column(
+        DecimalText(), nullable=False, default=Decimal(3000)
+    )
+    ordinary_income_deduction_limit_usd: Mapped[Decimal] = mapped_column(
+        DecimalText(), nullable=False, default=Decimal(3000)
+    )
+    carryforward_loss_discount_factor: Mapped[Decimal] = mapped_column(
+        DecimalText(), nullable=False, default=Decimal("0.50")
+    )
     gain_budget_usd: Mapped[Decimal | None] = mapped_column(DecimalText())
     max_incremental_tax_cost_usd: Mapped[Decimal | None] = mapped_column(DecimalText())
     st_gain_limit_usd: Mapped[Decimal | None] = mapped_column(DecimalText())
@@ -277,9 +303,15 @@ class PolicyRevision(Base):
     max_sell_tickers_per_batch: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
     max_sell_lots_per_batch: Mapped[int] = mapped_column(Integer, nullable=False, default=20)
     max_total_orders_per_batch: Mapped[int] = mapped_column(Integer, nullable=False, default=12)
-    max_batch_turnover_pct: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False, default=Decimal("5.0"))
-    min_buy_order_notional_usd: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False, default=Decimal("500.00"))
-    cash_reserve_usd: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False, default=Decimal(0))
+    max_batch_turnover_pct: Mapped[Decimal] = mapped_column(
+        DecimalText(), nullable=False, default=Decimal("5.0")
+    )
+    min_buy_order_notional_usd: Mapped[Decimal] = mapped_column(
+        DecimalText(), nullable=False, default=Decimal("500.00")
+    )
+    cash_reserve_usd: Mapped[Decimal] = mapped_column(
+        DecimalText(), nullable=False, default=Decimal(0)
+    )
     prefer_etf_buys: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     allow_gain_sales: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     permit_etf_harvest: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -292,6 +324,7 @@ class PolicyRevision(Base):
     objective_cleanup_weight: Mapped[Decimal | None] = mapped_column(DecimalText())
     estimated_spread_bps: Mapped[Decimal | None] = mapped_column(DecimalText())
     estimated_fee_per_order_usd: Mapped[Decimal | None] = mapped_column(DecimalText())
+
 
 class PolicySleeve(Base):
     __tablename__ = "policy_sleeve"
@@ -322,12 +355,13 @@ class PolicySleeve(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
-
 class PolicySectorBand(Base):
     __tablename__ = "policy_sector_band"
     __table_args__ = (
         UniqueConstraint("policy_revision_id", "sector_key", name="uq_policy_sector_band_key"),
-        CheckConstraint("target_weight_pct NOT LIKE '-%'", name="ck_sector_band_target_nonnegative"),
+        CheckConstraint(
+            "target_weight_pct NOT LIKE '-%'", name="ck_sector_band_target_nonnegative"
+        ),
         CheckConstraint("band_pct NOT LIKE '-%'", name="ck_sector_band_band_nonnegative"),
         Index("ix_policy_sector_band_revision", "policy_revision_id", "sector_key"),
     )
@@ -339,6 +373,7 @@ class PolicySectorBand(Base):
     sector_key: Mapped[str] = mapped_column(String(128), nullable=False)
     target_weight_pct: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
     band_pct: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
+
 
 class PolicyAllowedSecurity(Base):
     __tablename__ = "policy_allowed_security"
@@ -396,7 +431,9 @@ class OptimizerRun(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    policy_revision_id: Mapped[str] = mapped_column(ForeignKey("policy_revision.id"), nullable=False)
+    policy_revision_id: Mapped[str] = mapped_column(
+        ForeignKey("policy_revision.id"), nullable=False
+    )
     source_generation: Mapped[int] = mapped_column(Integer, nullable=False)
     as_of: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     proposed_trade_date: Mapped[date | None] = mapped_column(Date, nullable=True)
@@ -417,7 +454,9 @@ class RecommendationGroup(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    run_id: Mapped[str] = mapped_column(ForeignKey("optimizer_run.id", ondelete="CASCADE"), nullable=False)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("optimizer_run.id", ondelete="CASCADE"), nullable=False
+    )
     rank: Mapped[int] = mapped_column(Integer, nullable=False)
     group_type: Mapped[str] = mapped_column(String(48), nullable=False)
     sleeve_key: Mapped[str | None] = mapped_column(String(64))
@@ -430,6 +469,7 @@ class RecommendationGroup(Base):
     note: Mapped[str | None] = mapped_column(Text)
     rejected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     rejection_reason: Mapped[str | None] = mapped_column(Text)
+
 
 class RecommendationLeg(Base):
     __tablename__ = "recommendation_leg"
@@ -470,7 +510,9 @@ class RecommendationSelectedLot(Base):
     __table_args__ = (
         UniqueConstraint("leg_id", "broker_lot_id", name="uq_selected_lot_leg_broker_id"),
         Index("ix_selected_lot_broker_id", "broker_lot_id"),
-        CheckConstraint("shares NOT LIKE '-%' AND shares <> '0'", name="ck_selected_lot_shares_positive"),
+        CheckConstraint(
+            "shares NOT LIKE '-%' AND shares <> '0'", name="ck_selected_lot_shares_positive"
+        ),
         CheckConstraint("st_lt_term IN ('ST', 'LT')", name="ck_selected_lot_term"),
     )
 
@@ -486,6 +528,7 @@ class RecommendationSelectedLot(Base):
     realized_pl_usd: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
 
     selected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
 
 class ActivityEvent(Base):
     __tablename__ = "activity_event"

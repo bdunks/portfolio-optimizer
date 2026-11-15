@@ -57,7 +57,9 @@ def test_cash_sleeve_preserves_explicit_holdings_and_cash_delta(tmp_path: Path) 
 
         run = client.post("/api/v1/optimizer/runs", json={}).json()
         recs = client.get(f"/api/v1/optimizer/runs/{run['run_id']}/recommendations").json()
-        assert [leg["ticker"] for leg in recs["consolidated_legs"] if leg["side"] == "SELL"] == ["VB"]
+        assert [leg["ticker"] for leg in recs["consolidated_legs"] if leg["side"] == "SELL"] == [
+            "VB"
+        ]
         group = recs["groups"][0]
 
         empty = client.post(
@@ -77,7 +79,10 @@ def test_cash_sleeve_preserves_explicit_holdings_and_cash_delta(tmp_path: Path) 
         )
         assert selected.status_code == 200, selected.text
         effects = selected.json()["groups"][0]["impact"]["portfolio_effects"]
-        assert effects["allocation"]["current"]["sleeve_weights_pct"] == effects["allocation"]["proposed"]["sleeve_weights_pct"]
+        assert (
+            effects["allocation"]["current"]["sleeve_weights_pct"]
+            == effects["allocation"]["proposed"]["sleeve_weights_pct"]
+        )
         assert Decimal(effects["allocation"]["proposed"]["total_portfolio_usd"]) == 3050
         assert Decimal(effects["us_transition"]["current"]["us_sleeve_value_usd"]) == 400
         assert Decimal(effects["us_transition"]["proposed_basket"]["us_sleeve_value_usd"]) == 400
@@ -119,7 +124,9 @@ def test_nested_holding_cash_and_trade_rollup_and_reassignment(tmp_path: Path) -
     with _open_app(tmp_path, "nested-allocation.sqlite3", nested_snapshot) as (_, client):
         payload = _policy_payload(client)
         by_key = {row["sleeve_key"]: row for row in payload["sleeves"]}
-        by_key["cash"].update({"sleeve_key": "cash_bucket", "display_name": "Cash bucket", "is_cash_sleeve": False})
+        by_key["cash"].update(
+            {"sleeve_key": "cash_bucket", "display_name": "Cash bucket", "is_cash_sleeve": False}
+        )
         payload["sleeves"].extend(
             [
                 {
@@ -168,7 +175,10 @@ def test_nested_holding_cash_and_trade_rollup_and_reassignment(tmp_path: Path) -
         )
         assert no_trade.status_code == 200, no_trade.text
         effects = no_trade.json()["groups"][0]["impact"]["portfolio_effects"]
-        assert effects["allocation"]["current"]["sleeve_weights_pct"] == effects["allocation"]["proposed"]["sleeve_weights_pct"]
+        assert (
+            effects["allocation"]["current"]["sleeve_weights_pct"]
+            == effects["allocation"]["proposed"]["sleeve_weights_pct"]
+        )
         assert effects["allocation"]["current"]["sleeve_weights_pct"]["cash_bucket"] == "27.87"
         assert effects["allocation"]["proposed"]["sleeve_weights_pct"]["cash_bucket"] == "27.87"
         assert Decimal(effects["us_transition"]["current"]["us_sleeve_value_usd"]) == 2200
@@ -186,16 +196,24 @@ def test_nested_holding_cash_and_trade_rollup_and_reassignment(tmp_path: Path) -
         proposed_children = selected_effects["us_transition"]["proposed_basket"]["children"]
         assert Decimal(proposed_children["direct_indexing"]["value_usd"]) == 400
         assert Decimal(proposed_children["us_etf"]["value_usd"]) == 1800
-        assert Decimal(selected_effects["us_transition"]["proposed_basket"]["us_sleeve_value_usd"]) == 2200
+        assert (
+            Decimal(selected_effects["us_transition"]["proposed_basket"]["us_sleeve_value_usd"])
+            == 2200
+        )
         assert Decimal(selected.json()["cash_after_usd"]) == 850
 
         reassignment = _policy_payload(client)
-        reassignment["sleeves"] = [row for row in reassignment["sleeves"] if row["sleeve_key"] != "stocks"]
+        reassignment["sleeves"] = [
+            row for row in reassignment["sleeves"] if row["sleeve_key"] != "stocks"
+        ]
         reassignment["overrides"] = []
         reassignment["reassignments"] = {"stocks": "direct_indexing"}
         _activate_policy(client, reassignment)
         moved_lot = client.get("/api/v1/lots?ticker=AAPL").json()["items"][0]
-        assert (moved_lot["sleeve_key"], moved_lot["sub_sleeve_key"]) == ("us_equities", "direct_indexing")
+        assert (moved_lot["sleeve_key"], moved_lot["sub_sleeve_key"]) == (
+            "us_equities",
+            "direct_indexing",
+        )
 
 
 def test_high_precision_cash_reserve_still_funds_vb_swap_and_share_floor(tmp_path: Path) -> None:

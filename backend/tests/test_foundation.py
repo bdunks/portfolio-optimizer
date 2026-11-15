@@ -53,19 +53,37 @@ def test_fresh_upgrade_reupgrade_restart_demo_and_no_order_tables(tmp_path: Path
             observed_generation = portfolio["sync"]["generation"]
             assert client.get("/api/v1/lots").json()["total"] == 2
             assert client.get("/api/v1/policy").json()["active"]["status"] == "ACTIVE"
-            columns = {column["name"] for column in inspect(app.state.engine).get_columns("policy_revision")}
-            sleeve_columns = {column["name"] for column in inspect(app.state.engine).get_columns("policy_sleeve")}
+            columns = {
+                column["name"]
+                for column in inspect(app.state.engine).get_columns("policy_revision")
+            }
+            sleeve_columns = {
+                column["name"] for column in inspect(app.state.engine).get_columns("policy_sleeve")
+            }
             assert "is_transition_destination" in sleeve_columns
             demo_sleeves = client.get("/api/v1/policy").json()["active"]["sleeves"]
-            assert next(row for row in demo_sleeves if row["sleeve_key"] == "us_etf")["is_transition_destination"] is True
+            assert (
+                next(row for row in demo_sleeves if row["sleeve_key"] == "us_etf")[
+                    "is_transition_destination"
+                ]
+                is True
+            )
             assert "settings" not in columns
-            assert {"short_term_tax_rate", "max_sell_lots_per_batch", "allow_gain_sales", "objective_band_weight", "estimated_spread_bps"} <= columns
+            assert {
+                "short_term_tax_rate",
+                "max_sell_lots_per_batch",
+                "allow_gain_sales",
+                "objective_band_weight",
+                "estimated_spread_bps",
+            } <= columns
             tables = set(inspect(app.state.engine).get_table_names())
             assert not {"order_record", "order_fill"} & tables
     assert observed_generation == 1
 
 
-def test_policy_settings_are_typed_lossless_and_nested_api_shape_persists(seeded_client: tuple[FastAPI, TestClient]) -> None:
+def test_policy_settings_are_typed_lossless_and_nested_api_shape_persists(
+    seeded_client: tuple[FastAPI, TestClient],
+) -> None:
     app, client = seeded_client
     payload = _draft_payload(client)
     settings = payload["settings"]
@@ -98,7 +116,10 @@ def test_policy_settings_are_typed_lossless_and_nested_api_shape_persists(seeded
     assert response.status_code == 201, response.text
     revision = response.json()
     assert revision["settings"]["short_term_tax_rate"] == settings["short_term_tax_rate"]
-    assert revision["settings"]["target_retained_net_loss_usd"] == settings["target_retained_net_loss_usd"]
+    assert (
+        revision["settings"]["target_retained_net_loss_usd"]
+        == settings["target_retained_net_loss_usd"]
+    )
     assert revision["settings"]["max_sell_lots_per_batch"] == 7
     assert revision["settings"]["allow_gain_sales"] is True
     assert revision["settings"]["objective_band_weight"] == settings["objective_band_weight"]
@@ -107,7 +128,9 @@ def test_policy_settings_are_typed_lossless_and_nested_api_shape_persists(seeded
     with app.state.session_factory() as session:
         persisted = session.get(PolicyRevision, revision["id"])
         assert persisted is not None
-        assert persisted.target_retained_net_loss_usd == Decimal(settings["target_retained_net_loss_usd"])
+        assert persisted.target_retained_net_loss_usd == Decimal(
+            settings["target_retained_net_loss_usd"]
+        )
         assert persisted.st_loss_carryforward_usd == Decimal(settings["st_loss_carryforward_usd"])
         assert persisted.ytd_as_of == date(2026, 11, 5)
         assert persisted.max_sell_lots_per_batch == 7
@@ -142,7 +165,9 @@ def test_policy_settings_are_typed_lossless_and_nested_api_shape_persists(seeded
     )
 
 
-def test_negative_objective_parameters_are_rejected(seeded_client: tuple[FastAPI, TestClient]) -> None:
+def test_negative_objective_parameters_are_rejected(
+    seeded_client: tuple[FastAPI, TestClient],
+) -> None:
     _, client = seeded_client
     payload = _draft_payload(client)
     payload["settings"]["objective_tax_weight"] = "-0.01"
@@ -150,7 +175,9 @@ def test_negative_objective_parameters_are_rejected(seeded_client: tuple[FastAPI
     assert response.status_code == 422
 
 
-def test_exact_top_and_nested_sums_beyond_default_decimal_precision_activate(seeded_client: tuple[FastAPI, TestClient]) -> None:
+def test_exact_top_and_nested_sums_beyond_default_decimal_precision_activate(
+    seeded_client: tuple[FastAPI, TestClient],
+) -> None:
     _, client = seeded_client
     payload = _draft_payload(client)
     sleeves = payload["sleeves"]
@@ -175,7 +202,9 @@ def test_invalid_draft_saves_but_cannot_activate(seeded_client: tuple[FastAPI, T
     cash["target_pct"] = "9"
     saved = client.post("/api/v1/policy/drafts", json=payload)
     assert saved.status_code == 201
-    assert any(error["code"] == "top_level_target_sum" for error in saved.json()["activation_errors"])
+    assert any(
+        error["code"] == "top_level_target_sum" for error in saved.json()["activation_errors"]
+    )
     blocked = client.post(f"/api/v1/policy/{saved.json()['id']}/activate")
     assert blocked.status_code == 422
     assert blocked.json()["code"] == "policy_invalid"
@@ -183,9 +212,8 @@ def test_invalid_draft_saves_but_cannot_activate(seeded_client: tuple[FastAPI, T
     assert any(revision["id"] == saved.json()["id"] for revision in drafts)
 
 
-
 def test_transition_destination_policy_is_explicit_and_unconfigured_progress_is_nullable(
-    seeded_client: tuple[FastAPI, TestClient]
+    seeded_client: tuple[FastAPI, TestClient],
 ) -> None:
     _, client = seeded_client
     active = client.get("/api/v1/policy").json()["active"]
@@ -232,6 +260,7 @@ def test_invalid_transition_destination_designations_are_rejected(
     assert activated.status_code == 422
     assert activated.json()["code"] == "policy_invalid"
 
+
 @pytest.mark.parametrize("remove_sleeve", [False, True])
 def test_held_sleeve_disable_or_delete_requires_explicit_reassignment(
     seeded_client: tuple[FastAPI, TestClient], remove_sleeve: bool
@@ -256,7 +285,9 @@ def test_held_sleeve_disable_or_delete_requires_explicit_reassignment(
     assert {"AAPL", "VB"} <= moved_tickers
 
 
-def test_default_direct_index_allowed_etf_and_override_precedence(seeded_client: tuple[FastAPI, TestClient]) -> None:
+def test_default_direct_index_allowed_etf_and_override_precedence(
+    seeded_client: tuple[FastAPI, TestClient],
+) -> None:
     app, client = seeded_client
     with app.state.session_factory.begin() as session:
         active = session.query(PolicyRevision).filter_by(status="ACTIVE").one()
@@ -269,6 +300,7 @@ def test_default_direct_index_allowed_etf_and_override_precedence(seeded_client:
                 SecurityIdentity(security.ticker, security.asset_type, security.is_completion_etf),
             )
             return resolution.assignment
+
         vb = session.query(Security).filter_by(ticker="VB").one()
         vti = session.query(Security).filter_by(ticker="VTI").one()
         vxf = Security(ticker="VXF", asset_type="ETF", is_completion_etf=True)
@@ -292,7 +324,9 @@ def test_default_direct_index_allowed_etf_and_override_precedence(seeded_client:
         assert resolution.assignment == SleeveAssignment("international")
 
 
-def test_sync_publication_is_atomic_for_failure_incomplete_and_duplicate_payloads(tmp_path: Path) -> None:
+def test_sync_publication_is_atomic_for_failure_incomplete_and_duplicate_payloads(
+    tmp_path: Path,
+) -> None:
     broker = FakeBroker()
     publication = {"fail": False}
 
@@ -327,15 +361,22 @@ def test_sync_publication_is_atomic_for_failure_incomplete_and_duplicate_payload
         assert after_failure["cash_usd"] == current["cash_usd"]
         assert client.get("/api/v1/lots").json()["items"] == expected_lots
 
-        incomplete = changed.model_copy(update={"coverage": changed.coverage.model_copy(update={"lots": False})})
+        incomplete = changed.model_copy(
+            update={"coverage": changed.coverage.model_copy(update={"lots": False})}
+        )
         broker._snapshot = incomplete
         assert client.post("/api/v1/portfolio/sync").status_code == 422
-        assert client.get("/api/v1/portfolio").json()["sync"]["generation"] == current["sync"]["generation"]
+        assert (
+            client.get("/api/v1/portfolio").json()["sync"]["generation"]
+            == current["sync"]["generation"]
+        )
         assert client.get("/api/v1/portfolio").json()["cash_usd"] == current["cash_usd"]
         assert client.get("/api/v1/lots").json()["items"] == expected_lots
 
         duplicate_position = changed.positions[0]
-        duplicate = changed.model_copy(update={"positions": [*changed.positions, duplicate_position]})
+        duplicate = changed.model_copy(
+            update={"positions": [*changed.positions, duplicate_position]}
+        )
         broker._snapshot = duplicate
         assert client.post("/api/v1/portfolio/sync").status_code == 422
         after_duplicate = client.get("/api/v1/portfolio").json()
@@ -344,7 +385,9 @@ def test_sync_publication_is_atomic_for_failure_incomplete_and_duplicate_payload
         assert client.get("/api/v1/lots").json()["items"] == expected_lots
 
 
-def test_fractional_quantities_are_lossless_flagged_and_remote_origins_rejected(tmp_path: Path) -> None:
+def test_fractional_quantities_are_lossless_flagged_and_remote_origins_rejected(
+    tmp_path: Path,
+) -> None:
     broker = FakeBroker()
     snapshot = broker.fetch_snapshot()
     lots = list(snapshot.lots)
@@ -364,7 +407,9 @@ def test_fractional_quantities_are_lossless_flagged_and_remote_origins_rejected(
         assert lot["fractional_cleanup_unsupported"] is True
         assert lot["quality_flags"] == ["fractional legacy lot"]
         fetch_count = broker.fetch_count
-        rejected = client.post("/api/v1/portfolio/sync", headers={"origin": "https://remote.example"})
+        rejected = client.post(
+            "/api/v1/portfolio/sync", headers={"origin": "https://remote.example"}
+        )
         assert rejected.status_code == 403
         assert rejected.json()["code"] == "local_origin_required"
         assert broker.fetch_count == fetch_count
@@ -380,7 +425,9 @@ def test_legacy_json_policy_migration_preserves_settings(tmp_path: Path) -> None
     )
     with engine.begin() as connection:
         connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
-        connection.execute(text("INSERT INTO alembic_version VALUES ('0001_normalized_foundation')"))
+        connection.execute(
+            text("INSERT INTO alembic_version VALUES ('0001_normalized_foundation')")
+        )
         connection.execute(
             text(
                 "CREATE TABLE policy_revision (id VARCHAR(36) PRIMARY KEY, revision_number INTEGER NOT NULL, "
@@ -388,7 +435,9 @@ def test_legacy_json_policy_migration_preserves_settings(tmp_path: Path) -> None
             )
         )
         connection.execute(
-            text("INSERT INTO policy_revision VALUES ('legacy', 1, 'DRAFT', :created, NULL, :settings)"),
+            text(
+                "INSERT INTO policy_revision VALUES ('legacy', 1, 'DRAFT', :created, NULL, :settings)"
+            ),
             {"created": datetime(2026, 11, 5, tzinfo=UTC), "settings": legacy_settings},
         )
     upgrade_database(engine)

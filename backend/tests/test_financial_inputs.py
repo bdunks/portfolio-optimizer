@@ -67,16 +67,18 @@ def test_allocation_resolver_precedence_defaults_and_invalid_destinations() -> N
     assert resolve_holding(policy, SecurityIdentity("ABC", "ETF")).assignment == SleeveAssignment(
         "international"
     )
-    assert resolve_holding(policy, SecurityIdentity("XYZ", "EQUITY")).assignment == SleeveAssignment(
-        "us_equities", "direct_indexing"
+    assert resolve_holding(
+        policy, SecurityIdentity("XYZ", "EQUITY")
+    ).assignment == SleeveAssignment("us_equities", "direct_indexing")
+    assert resolve_holding(
+        policy, SecurityIdentity("VB", "ETF", True)
+    ).assignment == SleeveAssignment("us_equities", "direct_indexing")
+    assert resolve_holding(
+        policy, SecurityIdentity("VXF", "ETF", True)
+    ).assignment == SleeveAssignment("us_equities", "direct_indexing")
+    assert (
+        resolve_holding(policy, SecurityIdentity("OTHER", "ETF")).reason == "no_policy_assignment"
     )
-    assert resolve_holding(policy, SecurityIdentity("VB", "ETF", True)).assignment == SleeveAssignment(
-        "us_equities", "direct_indexing"
-    )
-    assert resolve_holding(policy, SecurityIdentity("VXF", "ETF", True)).assignment == SleeveAssignment(
-        "us_equities", "direct_indexing"
-    )
-    assert resolve_holding(policy, SecurityIdentity("OTHER", "ETF")).reason == "no_policy_assignment"
     assert resolve_cash(policy).assignment == SleeveAssignment("cash")
 
     invalid_override = AllocationPolicy(
@@ -123,13 +125,17 @@ def test_default_equity_and_vb_vxf_routing_uses_only_direct_legacy_child() -> No
 
 
 def test_trade_date_defaults_timezone_anniversary_and_leap_day() -> None:
-    assert resolve_proposed_trade_date(None, demo=True) == DEMO_PROPOSED_TRADE_DATE == date(2026, 11, 5)
+    assert (
+        resolve_proposed_trade_date(None, demo=True)
+        == DEMO_PROPOSED_TRADE_DATE
+        == date(2026, 11, 5)
+    )
     assert resolve_proposed_trade_date(date(2024, 2, 29), demo=True) == date(2024, 2, 29)
     assert current_eastern_trade_date(datetime(2026, 11, 6, 0, 30, tzinfo=UTC)) == date(2026, 11, 5)
     assert current_eastern_trade_date(datetime(2026, 11, 7, 17, tzinfo=UTC)) == date(2026, 11, 7)
-    assert resolve_proposed_trade_date(None, demo=False, now=datetime(2026, 11, 6, 0, 30, tzinfo=UTC)) == date(
-        2026, 11, 5
-    )
+    assert resolve_proposed_trade_date(
+        None, demo=False, now=datetime(2026, 11, 6, 0, 30, tzinfo=UTC)
+    ) == date(2026, 11, 5)
     assert classify_holding_period(date(2025, 11, 5), date(2026, 11, 5)) == "ST"
     assert classify_holding_period(date(2025, 11, 5), date(2026, 11, 6)) == "LT"
     assert classify_holding_period(date(2024, 2, 29), date(2025, 2, 28)) == "ST"
@@ -195,15 +201,18 @@ def _large_snapshot() -> BrokerSnapshot:
     return BrokerSnapshot.model_validate(snapshot_data)
 
 
-
-def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tmp_path: Path) -> None:
+def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(
+    tmp_path: Path,
+) -> None:
     app = create_app(
         database_url=f"sqlite:///{tmp_path / 'bulk-inputs.sqlite3'}",
         broker=FakeBroker(_large_snapshot()),
         seed_demo_data=True,
     )
     with TestClient(app, base_url="http://localhost") as client:
-        response, portfolio_selects = count_selects(app.state.engine, lambda: client.get("/api/v1/portfolio"))
+        response, portfolio_selects = count_selects(
+            app.state.engine, lambda: client.get("/api/v1/portfolio")
+        )
         assert response.status_code == 200, response.text
         assert response.json()["position_count"] == 460
         assert portfolio_selects == 11
@@ -248,7 +257,9 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
 
         with app.state.session_factory.begin() as session:
             close_lots = [
-                session.scalar(select(CurrentTaxLot).where(CurrentTaxLot.broker_lot_id == broker_lot_id))
+                session.scalar(
+                    select(CurrentTaxLot).where(CurrentTaxLot.broker_lot_id == broker_lot_id)
+                )
                 for broker_lot_id in ("STK000-LOT-00", "STK000-LOT-01")
             ]
             assert all(lot is not None for lot in close_lots)
@@ -257,8 +268,15 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
             assert second_lot is not None
             first_lot.available_shares = Decimal("0.9999999999999999999999999999")
             second_lot.available_shares = Decimal(1)
-            for broker_lot_id in ("STK000-LOT-02", "STK000-LOT-03", "STK000-LOT-04", "STK000-LOT-05"):
-                lot = session.scalar(select(CurrentTaxLot).where(CurrentTaxLot.broker_lot_id == broker_lot_id))
+            for broker_lot_id in (
+                "STK000-LOT-02",
+                "STK000-LOT-03",
+                "STK000-LOT-04",
+                "STK000-LOT-05",
+            ):
+                lot = session.scalar(
+                    select(CurrentTaxLot).where(CurrentTaxLot.broker_lot_id == broker_lot_id)
+                )
                 assert lot is not None
                 lot.available_shares = Decimal(0)
         exact_numeric_page = client.get(
@@ -269,7 +287,9 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
             "STK000-LOT-00",
         ]
         assert exact_numeric_page["items"][0]["available_shares"] == "1"
-        assert exact_numeric_page["items"][1]["available_shares"] == "0.9999999999999999999999999999"
+        assert (
+            exact_numeric_page["items"][1]["available_shares"] == "0.9999999999999999999999999999"
+        )
         with app.state.session_factory.begin() as session:
             state = session.get(SyncState, 1)
             vti = session.scalar(select(Security).where(Security.ticker == "VTI"))
@@ -316,7 +336,9 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
             with app.state.session_factory() as session:
                 account = session.get(Account, 1)
                 state = session.get(SyncState, 1)
-                policy = session.scalar(select(PolicyRevision).where(PolicyRevision.status == "ACTIVE"))
+                policy = session.scalar(
+                    select(PolicyRevision).where(PolicyRevision.status == "ACTIVE")
+                )
                 assert account is not None
                 assert state is not None
                 assert policy is not None
@@ -324,12 +346,13 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
                     session, account, state, policy, DEMO_PROPOSED_TRADE_DATE
                 )
 
-
         def load_without_transactions() -> FinancialInputs:
             with app.state.session_factory() as session:
                 account = session.get(Account, 1)
                 state = session.get(SyncState, 1)
-                policy = session.scalar(select(PolicyRevision).where(PolicyRevision.status == "ACTIVE"))
+                policy = session.scalar(
+                    select(PolicyRevision).where(PolicyRevision.status == "ACTIVE")
+                )
                 assert account is not None
                 assert state is not None
                 assert policy is not None
@@ -341,11 +364,14 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
                     DEMO_PROPOSED_TRADE_DATE,
                     include_transactions=False,
                 )
+
         inputs, full_input_selects = count_selects(app.state.engine, load_inputs)
         without_transactions = load_without_transactions()
         assert without_transactions.transactions == ()
         assert without_transactions.source_metadata.transaction_history_complete is False
-        assert without_transactions.source_metadata.transaction_history_start_date == date(2026, 10, 1)
+        assert without_transactions.source_metadata.transaction_history_start_date == date(
+            2026, 10, 1
+        )
         assert len(inputs.positions) == 460
         assert len(inputs.lots) == 2500
         assert full_input_selects == 13
@@ -421,7 +447,11 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
         restored_settings = dict(restored.policy.settings.values)
         assert restored_settings["objective_band_weight"] == Decimal("1.0")
         assert isinstance(frozen_sleeves, list)
-        assert any(row.get("is_transition_destination") is True for row in frozen_sleeves if isinstance(row, dict))
+        assert any(
+            row.get("is_transition_destination") is True
+            for row in frozen_sleeves
+            if isinstance(row, dict)
+        )
         assert isinstance(restored.account.cash_usd, Decimal)
         assert isinstance(restored.positions[0].as_of, datetime)
         assert isinstance(restored.lots[0].acquired_date, date)
@@ -457,7 +487,10 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(tm
         assert legacy_restored.exposures == ()
         assert legacy_restored.source_metadata.transaction_history_complete is None
         assert legacy_restored.source_metadata.lookthrough_complete is None
-        assert all(not sleeve.transition_destination for sleeve in legacy_restored.policy.allocation.sleeves)
+        assert all(
+            not sleeve.transition_destination
+            for sleeve in legacy_restored.policy.allocation.sleeves
+        )
         current_bundle_missing_lot_generation = inputs.to_provenance()
         current_bundle_missing_lot_generation["lots"][0].pop("sync_generation")
         with pytest.raises(TypeError, match="frozen lot has no sync_generation"):

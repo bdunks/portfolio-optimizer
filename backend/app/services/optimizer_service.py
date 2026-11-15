@@ -4,6 +4,7 @@ The child process never writes database state. Candidate legs are published only
 when the independent request-owner validator and the source-currentness checks
 both pass within the ProcessSupervisor's shared deadline.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -129,7 +130,9 @@ class BoundedValidationExecutor:
 
 
 def _fingerprint_bundle(value: object) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
+    encoded = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str
+    )
     return hashlib.sha256(encoded.encode()).hexdigest()
 
 
@@ -152,7 +155,9 @@ def apply_run_batch_limits(
 
     effective = dict(configured)
     for key in _BATCH_LIMIT_KEYS:
-        requested = request.get(key) if isinstance(request, Mapping) else getattr(request, key, None)
+        requested = (
+            request.get(key) if isinstance(request, Mapping) else getattr(request, key, None)
+        )
         if requested is None:
             continue
         if not isinstance(requested, int) or isinstance(requested, bool) or requested <= 0:
@@ -194,12 +199,20 @@ def prepare_optimizer_run(
     """Freeze current account/policy inputs and non-widening limits for one real run."""
     account = session.get(Account, 1)
     if account is None:
-        raise AppError("account_not_found", "The managed brokerage account was not found", status_code=409)
+        raise AppError(
+            "account_not_found", "The managed brokerage account was not found", status_code=409
+        )
     sync_state = session.get(SyncState, 1)
     if sync_state is None:
-        raise AppError("current_state_unavailable", "A complete current portfolio sync is required", status_code=409)
+        raise AppError(
+            "current_state_unavailable",
+            "A complete current portfolio sync is required",
+            status_code=409,
+        )
     policy = _active_policy(session)
-    trade_date = proposed_trade_date or resolve_proposed_trade_date(request.proposed_trade_date, demo=False)
+    trade_date = proposed_trade_date or resolve_proposed_trade_date(
+        request.proposed_trade_date, demo=False
+    )
     source_inputs = _frozen_input(session, account, sync_state, policy, trade_date)
     optimizer_inputs, effective_batch = apply_run_batch_limits(
         source_inputs, batch_limits if batch_limits is not None else request
@@ -343,7 +356,9 @@ async def run_validated_candidate(
             )
     if time.monotonic() >= worker_result.overall_deadline:
         raise WorkerTimeoutError("optimizer validation missed the shared deadline")
-    return ValidatedOptimizerCandidate(candidate, validation, worker_result.overall_deadline, status)
+    return ValidatedOptimizerCandidate(
+        candidate, validation, worker_result.overall_deadline, status
+    )
 
 
 def _app_error_for_worker_error(
@@ -390,7 +405,10 @@ def _jsonable(value: object) -> object:
 def _account_snapshot_payload(snapshot: object) -> dict[str, object]:
     return {
         "total_portfolio_usd": str(object.__getattribute__(snapshot, "portfolio_total_usd")),
-        "sleeve_weights_pct": {key: str(value) for key, value in object.__getattribute__(snapshot, "sleeve_weights_pct")},
+        "sleeve_weights_pct": {
+            key: str(value)
+            for key, value in object.__getattribute__(snapshot, "sleeve_weights_pct")
+        },
     }
 
 
@@ -410,7 +428,9 @@ def _transition_snapshot_payload(snapshot: object) -> dict[str, object]:
     }
 
 
-def _portfolio_effects_payload(evaluation: object | None, inputs: FinancialInputs) -> dict[str, object] | None:
+def _portfolio_effects_payload(
+    evaluation: object | None, inputs: FinancialInputs
+) -> dict[str, object] | None:
     if evaluation is None:
         return None
     allocation = evaluation.allocation
@@ -418,7 +438,10 @@ def _portfolio_effects_payload(evaluation: object | None, inputs: FinancialInput
     transition = evaluation.transition
     us_transition: dict[str, object] | None = None
     if transition is not None:
-        sleeve = next((row for row in inputs.policy.allocation.sleeves if row.key == transition.sleeve_key), None)
+        sleeve = next(
+            (row for row in inputs.policy.allocation.sleeves if row.key == transition.sleeve_key),
+            None,
+        )
         us_transition = {
             "sleeve_key": transition.sleeve_key,
             "transition_destination_sleeve_key": transition.destination_sleeve_key,
@@ -426,7 +449,9 @@ def _portfolio_effects_payload(evaluation: object | None, inputs: FinancialInput
             "current": _transition_snapshot_payload(transition.current),
             "proposed_basket": _transition_snapshot_payload(transition.proposed_basket),
             "target": {
-                "us_sleeve_whole_portfolio_pct": str(transition.target.us_sleeve_whole_portfolio_pct),
+                "us_sleeve_whole_portfolio_pct": str(
+                    transition.target.us_sleeve_whole_portfolio_pct
+                ),
                 "children": {
                     key: {
                         "within_us_sleeve_pct": str(child.within_us_sleeve_pct),
@@ -464,7 +489,9 @@ def _tax_assessment_payload(validation: object | None) -> dict[str, object] | No
     return {name: _jsonable(object.__getattribute__(tax, name)) for name in names}
 
 
-def _wash_assessment_payload(validation: object | None) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+def _wash_assessment_payload(
+    validation: object | None,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     if validation is None:
         return [], []
     sale_rows: list[dict[str, object]] = []
@@ -477,7 +504,9 @@ def _wash_assessment_payload(validation: object | None) -> tuple[list[dict[str, 
                 "eligible": assessment.eligible,
                 "reasons": list(assessment.reasons),
                 "conflicting_transaction_keys": list(assessment.conflicting_transaction_keys),
-                "no_buy_through": assessment.no_buy_through.isoformat() if assessment.no_buy_through else None,
+                "no_buy_through": assessment.no_buy_through.isoformat()
+                if assessment.no_buy_through
+                else None,
                 "next_eligible_purchase_date": (
                     assessment.next_eligible_purchase_date.isoformat()
                     if assessment.next_eligible_purchase_date
@@ -493,7 +522,9 @@ def _wash_assessment_payload(validation: object | None) -> tuple[list[dict[str, 
                 "trade_group_id": getattr(assessment, "trade_group_id", None),
                 "eligible": getattr(assessment, "eligible", None),
                 "reasons": list(getattr(assessment, "reasons", ())),
-                "conflicting_transaction_keys": list(getattr(assessment, "conflicting_transaction_keys", ())),
+                "conflicting_transaction_keys": list(
+                    getattr(assessment, "conflicting_transaction_keys", ())
+                ),
             }
         )
     return sale_rows, buy_rows
@@ -511,7 +542,10 @@ def _exposure_coverage_payload(validation: object | None) -> dict[str, object] |
         "conflicting_tickers": list(coverage.conflicting_tickers),
         "invalid_tickers": list(coverage.invalid_tickers),
         "duplicate_rows_removed": coverage.duplicate_rows_removed,
-        "sources": [{"provider": source.provider, "as_of_date": source.as_of_date.isoformat()} for source in coverage.sources],
+        "sources": [
+            {"provider": source.provider, "as_of_date": source.as_of_date.isoformat()}
+            for source in coverage.sources
+        ],
     }
 
 
@@ -528,7 +562,9 @@ def _search_evidence(metadata: object) -> dict[str, object]:
     }
 
 
-def _optimizer_metrics(prepared: PreparedOptimizerRun, result: ValidatedOptimizerCandidate) -> dict[str, object]:
+def _optimizer_metrics(
+    prepared: PreparedOptimizerRun, result: ValidatedOptimizerCandidate
+) -> dict[str, object]:
     candidate = result.candidate
     metadata = candidate.metadata
     validation = result.validation
@@ -588,17 +624,26 @@ def _optimizer_metrics(prepared: PreparedOptimizerRun, result: ValidatedOptimize
         "portfolio_effects": portfolio,
         "cash_before_usd": str(prepared.inputs.account.cash_usd),
         "cash_after_usd": str(evaluation.proposed.cash_usd) if evaluation is not None else None,
-        "estimated_realized_st_usd": str(evaluation.realized_st_usd) if evaluation is not None else "0",
-        "estimated_realized_lt_usd": str(evaluation.realized_lt_usd) if evaluation is not None else "0",
+        "estimated_realized_st_usd": str(evaluation.realized_st_usd)
+        if evaluation is not None
+        else "0",
+        "estimated_realized_lt_usd": str(evaluation.realized_lt_usd)
+        if evaluation is not None
+        else "0",
         "lots_sold_count": evaluation.selected_lots_count if evaluation is not None else 0,
         "positions_exited_count": (
-            sum(1 for effect in evaluation.position_effects if effect.position_exited) if evaluation is not None else 0
+            sum(1 for effect in evaluation.position_effects if effect.position_exited)
+            if evaluation is not None
+            else 0
         ),
         "orders_count": len(candidate.legs),
         "constraints_satisfied": getattr(validation, "accepted", None),
         "tax_profile_configured": bool(tax and tax.get("baseline_tax_usd") is not None),
         "no_trade_reason": (
-            {"code": "no_trade", "message": "The optimizer returned no trades for the frozen inputs."}
+            {
+                "code": "no_trade",
+                "message": "The optimizer returned no trades for the frozen inputs.",
+            }
             if result.status == "no_trade"
             else None
         ),
@@ -626,6 +671,7 @@ def _core_group_ids(legs: Sequence[ConsolidatedLeg]) -> list[str]:
             groups.add(f"{leg.side.lower()}:{leg.ticker.upper()}")
     return sorted(groups)
 
+
 def _priority_map(metadata: object) -> dict[str, object]:
     return {str(row.group_id): row for row in getattr(metadata, "trade_group_priorities", ())}
 
@@ -634,7 +680,9 @@ def _stable_id(run_id: str, prefix: str, value: str) -> str:
     return str(uuid5(UUID(run_id), f"{prefix}:{value}"))
 
 
-def _add_activity(session: Session, event_type: str, correlation_id: str, details: dict[str, object]) -> None:
+def _add_activity(
+    session: Session, event_type: str, correlation_id: str, details: dict[str, object]
+) -> None:
     session.add(
         ActivityEvent(
             id=str(uuid4()),
@@ -670,7 +718,9 @@ def _existing_group_state(
     universe: dict[str, list[str]] = {}
     annotations: dict[str, dict[str, object]] = {}
     selected_lots_by_core: dict[str, list[str]] = {}
-    existing_universe = run.metrics.get("selection_universe", {}) if isinstance(run.metrics, dict) else {}
+    existing_universe = (
+        run.metrics.get("selection_universe", {}) if isinstance(run.metrics, dict) else {}
+    )
     if isinstance(existing_universe, dict):
         universe = {str(key): _unique_strings(value) for key, value in existing_universe.items()}
     for group in groups:
@@ -685,7 +735,9 @@ def _existing_group_state(
             current_selected_lots = list(
                 session.scalars(
                     select(RecommendationSelectedLot.broker_lot_id)
-                    .join(RecommendationLeg, RecommendationLeg.id == RecommendationSelectedLot.leg_id)
+                    .join(
+                        RecommendationLeg, RecommendationLeg.id == RecommendationSelectedLot.leg_id
+                    )
                     .where(
                         RecommendationLeg.id.in_(group_leg_ids),
                         RecommendationLeg.side == "SELL",
@@ -718,17 +770,25 @@ def _existing_group_state(
 
 
 def _clear_run_recommendations(session: Session, run: OptimizerRun) -> None:
-    group_ids = session.scalars(select(RecommendationGroup.id).where(RecommendationGroup.run_id == run.id)).all()
+    group_ids = session.scalars(
+        select(RecommendationGroup.id).where(RecommendationGroup.run_id == run.id)
+    ).all()
     if not group_ids:
         return
     leg_ids = session.scalars(
         select(RecommendationLeg.id).where(RecommendationLeg.group_id.in_(group_ids))
     ).all()
     if leg_ids:
-        session.execute(delete(RecommendationSelectedLot).where(RecommendationSelectedLot.leg_id.in_(leg_ids)))
-        session.execute(delete(RecommendationGroupLeg).where(RecommendationGroupLeg.leg_id.in_(leg_ids)))
+        session.execute(
+            delete(RecommendationSelectedLot).where(RecommendationSelectedLot.leg_id.in_(leg_ids))
+        )
+        session.execute(
+            delete(RecommendationGroupLeg).where(RecommendationGroupLeg.leg_id.in_(leg_ids))
+        )
         session.execute(delete(RecommendationLeg).where(RecommendationLeg.id.in_(leg_ids)))
-    session.execute(delete(RecommendationGroupLeg).where(RecommendationGroupLeg.group_id.in_(group_ids)))
+    session.execute(
+        delete(RecommendationGroupLeg).where(RecommendationGroupLeg.group_id.in_(group_ids))
+    )
     session.execute(delete(RecommendationGroup).where(RecommendationGroup.id.in_(group_ids)))
 
 
@@ -843,14 +903,22 @@ def _persist_candidate(
     for core_id in sorted(raw_active_group_ids):
         current_lots = sorted(set(sell_lots_by_core.get(core_id, ())))
         saved_lots = set(old_universe.get(core_id, ()))
-        if not current_lots or core_id not in saved_owner_keys or saved_lots.intersection(current_lots):
+        if (
+            not current_lots
+            or core_id not in saved_owner_keys
+            or saved_lots.intersection(current_lots)
+        ):
             continue
         lineage = f"{core_id}:{','.join(current_lots)}"
         owner_key = _stable_id(run.id, "review-owner", lineage)
         collision_index = 0
-        while owner_key in saved_owner_keys and not set(old_universe.get(owner_key, ())).intersection(current_lots):
+        while owner_key in saved_owner_keys and not set(
+            old_universe.get(owner_key, ())
+        ).intersection(current_lots):
             collision_index += 1
-            owner_key = _stable_id(run.id, "review-owner", f"{lineage}:replacement:{collision_index}")
+            owner_key = _stable_id(
+                run.id, "review-owner", f"{lineage}:replacement:{collision_index}"
+            )
         ownership_remap[core_id] = owner_key
 
     if ownership_remap:
@@ -859,7 +927,9 @@ def _persist_candidate(
             original_ids = tuple(leg.group_ids)
             source_ids = original_ids or (f"{leg.side.lower()}:{leg.ticker.upper()}",)
             mapped_ids = tuple(ownership_remap.get(core_id, core_id) for core_id in source_ids)
-            remapped_legs.append(replace(leg, group_ids=mapped_ids) if mapped_ids != source_ids else leg)
+            remapped_legs.append(
+                replace(leg, group_ids=mapped_ids) if mapped_ids != source_ids else leg
+            )
         legs = tuple(remapped_legs)
         active_group_ids = _core_group_ids(legs)
         sell_lots_by_core = {core_id: [] for core_id in active_group_ids}
@@ -891,12 +961,12 @@ def _persist_candidate(
     if outcome.status != "search_incomplete":
         for alias in sorted(alias_keys):
             alias_lots = (
-                    set(old_universe.get(alias, ()))
-                    if alias in old_universe
-                    else set((expected_universe or {}).get(alias, ()))
-                    if alias not in old_annotations
-                    else set()
-                )
+                set(old_universe.get(alias, ()))
+                if alias in old_universe
+                else set((expected_universe or {}).get(alias, ()))
+                if alias not in old_annotations
+                else set()
+            )
             matches = [
                 (core_id, len(alias_lots.intersection(lot_ids)))
                 for core_id, lot_ids in sell_lots_by_core.items()
@@ -924,10 +994,7 @@ def _persist_candidate(
             key=lambda key: (getattr(group_priorities.get(key), "rank", 10**6), key),
         )
     )
-    sources_by_group = {
-        core_id: sources_by_core.get(core_id, {core_id})
-        for core_id in group_ids
-    }
+    sources_by_group = {core_id: sources_by_core.get(core_id, {core_id}) for core_id in group_ids}
 
     current_lot_owner: dict[str, str] = {}
     for core_id, lot_ids in sell_lots_by_core.items():
@@ -948,11 +1015,7 @@ def _persist_candidate(
     for core_id in group_ids:
         source_keys = sorted(sources_by_group[core_id], key=lambda key: (key != core_id, key))
         candidate_universe[core_id] = list(
-            dict.fromkeys(
-                lot_id
-                for source in source_keys
-                for lot_id in universe.get(source, ())
-            )
+            dict.fromkeys(lot_id for source in source_keys for lot_id in universe.get(source, ()))
         )
         candidate_universe[core_id] = list(
             dict.fromkeys((*candidate_universe[core_id], *sell_lots_by_core.get(core_id, ())))
@@ -980,7 +1043,11 @@ def _persist_candidate(
     for core_group_id in group_ids:
         priority = group_priorities.get(core_group_id)
         proposed_rank = getattr(priority, "rank", None)
-        if isinstance(proposed_rank, int) and proposed_rank > 0 and proposed_rank not in rank_for_group.values():
+        if (
+            isinstance(proposed_rank, int)
+            and proposed_rank > 0
+            and proposed_rank not in rank_for_group.values()
+        ):
             rank_for_group[core_group_id] = proposed_rank
         else:
             while next_rank in rank_for_group.values():
@@ -989,9 +1056,17 @@ def _persist_candidate(
             next_rank += 1
 
     if (outcome.status == "ready" and not legs) or (outcome.status != "ready" and legs):
-        raise AppError("optimizer_core_contract_error", "Optimizer legs are inconsistent with result status", status_code=502)
+        raise AppError(
+            "optimizer_core_contract_error",
+            "Optimizer legs are inconsistent with result status",
+            status_code=502,
+        )
     if outcome.status in {"ready", "no_trade"} and outcome.validation is None:
-        raise AppError("optimizer_core_contract_error", "Validated optimizer output is missing owner validation", status_code=502)
+        raise AppError(
+            "optimizer_core_contract_error",
+            "Validated optimizer output is missing owner validation",
+            status_code=502,
+        )
 
     prior_metrics = run.metrics if isinstance(run.metrics, dict) else {}
     basket_revision = int(prior_metrics.get("basket_revision", 0))
@@ -1044,7 +1119,9 @@ def _persist_candidate(
         if rejection_reasons:
             state["rejection_reason"] = " / ".join(dict.fromkeys(rejection_reasons))
         if selected_groups is not None:
-            selected_values = [selected_groups[key] for key in source_keys if key in selected_groups]
+            selected_values = [
+                selected_groups[key] for key in source_keys if key in selected_groups
+            ]
             active_lots = set(sell_lots_by_core.get(core_group_id, ()))
             state["selected"] = (
                 any(selected_values)
@@ -1063,9 +1140,13 @@ def _persist_candidate(
         state.setdefault("rejection_reason", None)
         annotations[core_group_id] = state
     for source, values in (annotation_overrides or {}).items():
-        target = source if source in annotations else next(
-            (core_id for core_id, sources in sources_by_group.items() if source in sources),
-            source,
+        target = (
+            source
+            if source in annotations
+            else next(
+                (core_id for core_id, sources in sources_by_group.items() if source in sources),
+                source,
+            )
         )
         annotations.setdefault(target, {}).update(values)
     invalid_active_owners = sorted(
@@ -1164,7 +1245,9 @@ def _persist_candidate(
             for leg in group_sells
             for allocation in leg.selected_lots
         ]
-        proceeds = exact_sum(exact_product(leg.estimated_unit_price_usd, leg.shares) for leg in group_sells)
+        proceeds = exact_sum(
+            exact_product(leg.estimated_unit_price_usd, leg.shares) for leg in group_sells
+        )
         realized_st_values: list[Decimal] = []
         realized_lt_values: list[Decimal] = []
         for _allocation, lot, effect in selected_lots:
@@ -1184,7 +1267,9 @@ def _persist_candidate(
         rationale = tuple(getattr(priority, "rationale", ())) if priority is not None else ()
         state = annotations.get(core_group_id, {})
         previous_impact = state.get("impact", {}) if isinstance(state.get("impact"), dict) else {}
-        wash_status = "validated" if group_sells and outcome.validation is not None else "not_applicable"
+        wash_status = (
+            "validated" if group_sells and outcome.validation is not None else "not_applicable"
+        )
         impact: dict[str, object] = {
             "demo": False,
             "wash_status": wash_status,
@@ -1192,14 +1277,25 @@ def _persist_candidate(
             "sell_proceeds_usd": str(proceeds),
             "realized_st_usd": str(realized_st),
             "realized_lt_usd": str(realized_lt),
-            "replacement_buy_shares": str(exact_sum(leg.shares for leg in exclusive_buys)) if buy_is_fully_attributed else None,
+            "replacement_buy_shares": str(exact_sum(leg.shares for leg in exclusive_buys))
+            if buy_is_fully_attributed
+            else None,
             "replacement_buy_cost_usd": (
-                str(exact_sum(exact_product(leg.shares, leg.estimated_unit_price_usd) for leg in exclusive_buys))
+                str(
+                    exact_sum(
+                        exact_product(leg.shares, leg.estimated_unit_price_usd)
+                        for leg in exclusive_buys
+                    )
+                )
                 if buy_is_fully_attributed
                 else None
             ),
-            "cash_after_usd": str(metrics["cash_after_usd"]) if len(active_group_ids) == 1 else None,
-            "portfolio_effects": metrics["portfolio_effects"] if len(active_group_ids) == 1 else None,
+            "cash_after_usd": str(metrics["cash_after_usd"])
+            if len(active_group_ids) == 1
+            else None,
+            "portfolio_effects": metrics["portfolio_effects"]
+            if len(active_group_ids) == 1
+            else None,
             "risk_tracking_score": None,
             "core_group_id": core_group_id,
             "candidate_sell_lot_ids": universe.get(core_group_id, []),
@@ -1223,7 +1319,10 @@ def _persist_candidate(
                     sleeve_key = resolution.assignment.sleeve_key
                     break
         group_id = persisted_group_ids[core_group_id]
-        rationale_text = " ".join(rationale).strip() or "Production optimizer recommendation; see the saved solver diagnostics."
+        rationale_text = (
+            " ".join(rationale).strip()
+            or "Production optimizer recommendation; see the saved solver diagnostics."
+        )
         group = RecommendationGroup(
             id=group_id,
             run_id=run.id,
@@ -1237,7 +1336,9 @@ def _persist_candidate(
             selected=bool(state.get("selected", core_group_id in active_group_ids)),
             rejected=bool(state.get("rejected", False)),
             note=state.get("note") if isinstance(state.get("note"), str) else None,
-            rejection_reason=state.get("rejection_reason") if isinstance(state.get("rejection_reason"), str) else None,
+            rejection_reason=state.get("rejection_reason")
+            if isinstance(state.get("rejection_reason"), str)
+            else None,
         )
         session.add(group)
         groups_by_core[core_group_id] = group
@@ -1249,21 +1350,41 @@ def _persist_candidate(
     for leg in legs:
         key = (leg.side, leg.ticker.upper())
         if key in seen_leg_keys:
-            raise AppError("optimizer_core_contract_error", "Optimizer output contains duplicate ticker legs", status_code=502)
+            raise AppError(
+                "optimizer_core_contract_error",
+                "Optimizer output contains duplicate ticker legs",
+                status_code=502,
+            )
         seen_leg_keys.add(key)
         core_groups = list(leg.group_ids) or [f"buy:{leg.ticker.upper()}"]
         if any(core_group not in groups_by_core for core_group in core_groups):
-            raise AppError("optimizer_core_contract_error", "Optimizer leg references an unknown trade group", status_code=502)
+            raise AppError(
+                "optimizer_core_contract_error",
+                "Optimizer leg references an unknown trade group",
+                status_code=502,
+            )
         security_input = prepared.inputs.security_for(leg.ticker)
         security_id = security_input.security_id if security_input is not None else None
         if security_id is None:
-            security_id = session.scalar(select(Security.id).where(Security.ticker == leg.ticker.upper()))
+            security_id = session.scalar(
+                select(Security.id).where(Security.ticker == leg.ticker.upper())
+            )
         if security_id is None:
-            raise AppError("optimizer_core_contract_error", "Optimizer leg references an unknown security", status_code=502)
+            raise AppError(
+                "optimizer_core_contract_error",
+                "Optimizer leg references an unknown security",
+                status_code=502,
+            )
         persistent_id = leg_ids[str(leg.leg_id)]
-        persistent_dependencies = [leg_ids[item] for item in leg.depends_on_leg_ids if item in leg_ids]
+        persistent_dependencies = [
+            leg_ids[item] for item in leg.depends_on_leg_ids if item in leg_ids
+        ]
         if len(persistent_dependencies) != len(leg.depends_on_leg_ids):
-            raise AppError("optimizer_core_contract_error", "Optimizer leg references an unknown dependency", status_code=502)
+            raise AppError(
+                "optimizer_core_contract_error",
+                "Optimizer leg references an unknown dependency",
+                status_code=502,
+            )
         st_realized_values: list[Decimal] = []
         lt_realized_values: list[Decimal] = []
         lot_rows: list[tuple[object, object, Decimal, str]] = []
@@ -1305,7 +1426,9 @@ def _persist_candidate(
         # RecommendationGroupLeg has no ORM relationship; flush its parent before the FK row.
         session.flush()
         for core_group in core_groups:
-            session.add(RecommendationGroupLeg(group_id=groups_by_core[core_group].id, leg_id=persistent_id))
+            session.add(
+                RecommendationGroupLeg(group_id=groups_by_core[core_group].id, leg_id=persistent_id)
+            )
         for allocation, lot, realized, term in lot_rows:
             session.add(
                 RecommendationSelectedLot(
@@ -1324,8 +1447,14 @@ def _persist_candidate(
             {
                 dependency
                 for leg in legs
-                if group.id in [groups_by_core[core_group].id for core_group in (leg.group_ids or [f"buy:{leg.ticker.upper()}"])]
-                for dependency in (leg_ids[item] for item in leg.depends_on_leg_ids if item in leg_ids)
+                if group.id
+                in [
+                    groups_by_core[core_group].id
+                    for core_group in (leg.group_ids or [f"buy:{leg.ticker.upper()}"])
+                ]
+                for dependency in (
+                    leg_ids[item] for item in leg.depends_on_leg_ids if item in leg_ids
+                )
             }
         )
 
@@ -1374,7 +1503,11 @@ def _persist_initial_timeout(
             session,
             "production_optimizer_run",
             correlation_id,
-            {"run_id": run.id, "status": "deadline_exceeded", "input_fingerprint": prepared.input_fingerprint},
+            {
+                "run_id": run.id,
+                "status": "deadline_exceeded",
+                "input_fingerprint": prepared.input_fingerprint,
+            },
         )
     return run.id
 
@@ -1405,7 +1538,11 @@ async def create_production_run(
                 session,
                 "production_optimizer_run",
                 correlation_id,
-                {"run_id": run.id, "status": outcome.status, "input_fingerprint": prepared.input_fingerprint},
+                {
+                    "run_id": run.id,
+                    "status": outcome.status,
+                    "input_fingerprint": prepared.input_fingerprint,
+                },
             )
     except WorkerCapacityError as exc:
         raise _app_error_for_worker_error(exc, basket_unchanged=True) from exc
@@ -1415,6 +1552,7 @@ async def create_production_run(
             exc, basket_unchanged=True, run_id=timeout_run_id
         ) from exc
     return run
+
 
 def _run_state(
     session: Session, run_id: str
@@ -1428,7 +1566,11 @@ def _run_state(
             details={"basket_unchanged": True},
         )
     if run.status not in {"COMPLETE", "INFEASIBLE"}:
-        raise AppError("optimizer_run_not_editable", "Only completed optimizer runs can be reviewed", status_code=409)
+        raise AppError(
+            "optimizer_run_not_editable",
+            "Only completed optimizer runs can be reviewed",
+            status_code=409,
+        )
     raw_settings = run.batch_settings if isinstance(run.batch_settings, dict) else {}
     limits = {key: raw_settings.get(key) for key in _BATCH_LIMIT_KEYS}
     request = OptimizerRunInput(
@@ -1442,7 +1584,10 @@ def _run_state(
         proposed_trade_date=run.proposed_trade_date,
         batch_limits=raw_settings,
     )
-    if prepared.input_fingerprint != run.input_fingerprint or prepared.source_generation != run.source_generation:
+    if (
+        prepared.input_fingerprint != run.input_fingerprint
+        or prepared.source_generation != run.source_generation
+    ):
         raise AppError(
             "stale_optimizer_input",
             "The saved optimizer run no longer matches current account or policy inputs",
@@ -1466,8 +1611,14 @@ def _run_state(
                 "rejected": row.rejected,
                 "note": row.note,
                 "rejection_reason": row.rejection_reason,
-                "candidate_sell_lot_ids": list(universe.get(str((row.impact or {}).get("core_group_id") or row.id), [])),
-                "selected_sell_lot_ids": list(current_selected_lots.get(str((row.impact or {}).get("core_group_id") or row.id), [])),
+                "candidate_sell_lot_ids": list(
+                    universe.get(str((row.impact or {}).get("core_group_id") or row.id), [])
+                ),
+                "selected_sell_lot_ids": list(
+                    current_selected_lots.get(
+                        str((row.impact or {}).get("core_group_id") or row.id), []
+                    )
+                ),
                 "impact": row.impact,
             }
             for row in session.scalars(
@@ -1511,8 +1662,12 @@ def _selection_payload_lots(
     unknown_groups = set(request.selected_group_ids) - set(by_public_id)
     unknown_groups.update(set(request.selected_sell_lots) - set(by_public_id))
     if unknown_groups:
-        raise AppError("unknown_recommendation_group", "The selection contains an unknown trade group", status_code=422,
-                       details={"unknown_group_ids": sorted(unknown_groups), "basket_unchanged": True})
+        raise AppError(
+            "unknown_recommendation_group",
+            "The selection contains an unknown trade group",
+            status_code=422,
+            details={"unknown_group_ids": sorted(unknown_groups), "basket_unchanged": True},
+        )
     unselected_groups = set(request.selected_sell_lots) - set(request.selected_group_ids)
     if unselected_groups:
         raise AppError(
@@ -1528,8 +1683,12 @@ def _selection_payload_lots(
         row = by_public_id[public_id]
         core_id = str(row["core_group_id"])
         if row["rejected"]:
-            raise AppError("rejected_recommendation_group", "A rejected trade group cannot be selected", status_code=409,
-                           details={"group_id": public_id, "basket_unchanged": True})
+            raise AppError(
+                "rejected_recommendation_group",
+                "A rejected trade group cannot be selected",
+                status_code=409,
+                details={"group_id": public_id, "basket_unchanged": True},
+            )
         allowed = set(state.selection_universe.get(core_id, ()))
         if public_id in request.selected_sell_lots:
             lot_ids = request.selected_sell_lots[public_id]
@@ -1539,35 +1698,60 @@ def _selection_payload_lots(
             lot_ids = list(allowed)
         invalid = set(lot_ids) - allowed
         if invalid:
-            raise AppError("invalid_group_lot_selection", "Selected broker lots do not belong to this saved trade group", status_code=422,
-                           details={"group_id": public_id, "unknown_lot_ids": sorted(invalid), "basket_unchanged": True})
+            raise AppError(
+                "invalid_group_lot_selection",
+                "Selected broker lots do not belong to this saved trade group",
+                status_code=422,
+                details={
+                    "group_id": public_id,
+                    "unknown_lot_ids": sorted(invalid),
+                    "basket_unchanged": True,
+                },
+            )
         if not allowed or not lot_ids:
-            raise AppError("group_has_no_sell_lots", "A real optimizer trade group must identify exact SELL lots before re-solving", status_code=422,
-                           details={"group_id": public_id, "basket_unchanged": True})
+            raise AppError(
+                "group_has_no_sell_lots",
+                "A real optimizer trade group must identify exact SELL lots before re-solving",
+                status_code=422,
+                details={"group_id": public_id, "basket_unchanged": True},
+            )
         selected_core_ids.add(core_id)
         for lot_id in lot_ids:
             if lot_id in seen_lots:
-                raise AppError("duplicate_selected_lot", "A broker lot may be selected only once", status_code=422,
-                               details={"broker_lot_id": lot_id, "basket_unchanged": True})
+                raise AppError(
+                    "duplicate_selected_lot",
+                    "A broker lot may be selected only once",
+                    status_code=422,
+                    details={"broker_lot_id": lot_id, "basket_unchanged": True},
+                )
             seen_lots.add(lot_id)
             requested_lots.append(lot_id)
-    selected = {str(row["core_group_id"]): str(row["core_group_id"]) in selected_core_ids for row in state.group_rows}
+    selected = {
+        str(row["core_group_id"]): str(row["core_group_id"]) in selected_core_ids
+        for row in state.group_rows
+    }
     return tuple(requested_lots), selected
 
 
-def _validate_intent_lots(state: _RunState, request: OptimizerLotReviewIntentInput) -> tuple[str, ...]:
+def _validate_intent_lots(
+    state: _RunState, request: OptimizerLotReviewIntentInput
+) -> tuple[str, ...]:
     if request.source_generation != state.source_generation:
         raise AppError(
             "stale_lot_review_intent",
             "The requested broker lots belong to a different source generation",
             status_code=409,
-            details={"requested_source_generation": request.source_generation, "run_source_generation": state.source_generation,
-                     "basket_unchanged": True},
+            details={
+                "requested_source_generation": request.source_generation,
+                "run_source_generation": state.source_generation,
+                "basket_unchanged": True,
+            },
         )
     by_id = {lot.broker_lot_id: lot for lot in state.prepared.inputs.lots}
     missing = [lot_id for lot_id in request.broker_lot_ids if lot_id not in by_id]
     unavailable = [
-        lot_id for lot_id in request.broker_lot_ids
+        lot_id
+        for lot_id in request.broker_lot_ids
         if lot_id in by_id and by_id[lot_id].available_shares <= 0
     ]
     if missing or unavailable:
@@ -1575,7 +1759,11 @@ def _validate_intent_lots(state: _RunState, request: OptimizerLotReviewIntentInp
             "lot_review_intent_rejected",
             "Every requested lot must exist in the frozen current portfolio; no basket changes were applied",
             status_code=422,
-            details={"missing_lot_ids": missing, "unavailable_lot_ids": unavailable, "basket_unchanged": True},
+            details={
+                "missing_lot_ids": missing,
+                "unavailable_lot_ids": unavailable,
+                "basket_unchanged": True,
+            },
         )
     rejected_groups_by_lot: dict[str, set[str]] = {}
     for row in state.group_rows:
@@ -1598,13 +1786,22 @@ def _validate_intent_lots(state: _RunState, request: OptimizerLotReviewIntentInp
             "rejected_recommendation_group",
             "A lot from a rejected trade group cannot be selected until the group is restored",
             status_code=409,
-            details={"group_ids": rejected_group_ids, "broker_lot_ids": rejected_lots, "basket_unchanged": True},
+            details={
+                "group_ids": rejected_group_ids,
+                "broker_lot_ids": rejected_lots,
+                "basket_unchanged": True,
+            },
         )
     return tuple(request.broker_lot_ids)
 
 
 def _positive_whole_shares(value: object) -> bool:
-    return isinstance(value, Decimal) and value.is_finite() and value > 0 and value == value.to_integral_value()
+    return (
+        isinstance(value, Decimal)
+        and value.is_finite()
+        and value > 0
+        and value == value.to_integral_value()
+    )
 
 
 def _sell_lot_intent_errors(
@@ -1760,7 +1957,11 @@ async def _recompute_real_basket(
             annotation_overrides=annotation_overrides,
             expected_universe=expected_universe,
         )
-        details = {"run_id": run.id, "selected_sell_lot_ids": list(selected_lot_ids), **event_details}
+        details = {
+            "run_id": run.id,
+            "selected_sell_lot_ids": list(selected_lot_ids),
+            **event_details,
+        }
         _add_activity(session, event_type, correlation_id, details)
     return run
 
@@ -1841,7 +2042,11 @@ async def annotate_real_group(
         run, state, annotations = _run_state(session, run_id)
         target = next((row for row in state.group_rows if row["id"] == group_id), None)
         if target is None:
-            raise AppError("recommendation_group_not_found", "Recommendation group was not found", status_code=404)
+            raise AppError(
+                "recommendation_group_not_found",
+                "Recommendation group was not found",
+                status_code=404,
+            )
         core_id = str(target["core_group_id"])
         current = annotations.get(core_id, {})
         current_selected = bool(current.get("selected", False))
@@ -1859,7 +2064,11 @@ async def annotate_real_group(
                 .execution_options(populate_existing=True)
             )
             if group is None:
-                raise AppError("recommendation_group_not_found", "Recommendation group was not found", status_code=404)
+                raise AppError(
+                    "recommendation_group_not_found",
+                    "Recommendation group was not found",
+                    status_code=404,
+                )
             if changes_rejection:
                 metrics = dict(run.metrics) if isinstance(run.metrics, dict) else {}
                 metrics["basket_revision"] = state.basket_revision + 1
@@ -1882,9 +2091,12 @@ async def annotate_real_group(
             )
             return run
         note_value = request.note if "note" in request.model_fields_set else current.get("note")
-        rejection_reason = request.rejection_reason if "rejection_reason" in request.model_fields_set else None
+        rejection_reason = (
+            request.rejection_reason if "rejection_reason" in request.model_fields_set else None
+        )
         selected_groups = {
-            str(row["core_group_id"]): bool(row["selected"]) and str(row["core_group_id"]) != core_id
+            str(row["core_group_id"]): bool(row["selected"])
+            and str(row["core_group_id"]) != core_id
             for row in state.group_rows
         }
         selected_lots = tuple(
@@ -1973,14 +2185,20 @@ def real_run_summary(run: OptimizerRun, session: Session) -> dict[str, object]:
 def real_run_recommendations(session: Session, run: OptimizerRun) -> dict[str, object]:
     response = real_run_summary(run, session)
     groups = session.scalars(
-        select(RecommendationGroup).where(RecommendationGroup.run_id == run.id).order_by(RecommendationGroup.rank)
+        select(RecommendationGroup)
+        .where(RecommendationGroup.run_id == run.id)
+        .order_by(RecommendationGroup.rank)
     ).all()
     group_ids = [group.id for group in groups]
-    group_leg_rows = session.execute(
-        select(RecommendationGroupLeg.group_id, RecommendationGroupLeg.leg_id).where(
-            RecommendationGroupLeg.group_id.in_(group_ids)
-        )
-    ).all() if group_ids else []
+    group_leg_rows = (
+        session.execute(
+            select(RecommendationGroupLeg.group_id, RecommendationGroupLeg.leg_id).where(
+                RecommendationGroupLeg.group_id.in_(group_ids)
+            )
+        ).all()
+        if group_ids
+        else []
+    )
     leg_ids_by_group: dict[str, list[str]] = {group_id: [] for group_id in group_ids}
     for group_id, leg_id in group_leg_rows:
         leg_ids_by_group.setdefault(group_id, []).append(leg_id)
@@ -2040,7 +2258,9 @@ def real_run_recommendations(session: Session, run: OptimizerRun) -> dict[str, o
                 "ticker": session.get(Security, leg.security_id).ticker,
                 "shares": str(leg.shares),
                 "estimated_unit_price_usd": str(leg.estimated_unit_price_usd),
-                "estimated_notional_usd": str(exact_product(leg.shares, leg.estimated_unit_price_usd)),
+                "estimated_notional_usd": str(
+                    exact_product(leg.shares, leg.estimated_unit_price_usd)
+                ),
                 "net_st_realized_usd": str(leg.net_st_realized_usd),
                 "net_lt_realized_usd": str(leg.net_lt_realized_usd),
                 "selected": True,

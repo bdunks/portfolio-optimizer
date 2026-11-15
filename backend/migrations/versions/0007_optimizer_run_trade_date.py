@@ -1,4 +1,5 @@
 """Persist the proposed trade date used to classify recommendation lots."""
+
 from __future__ import annotations
 
 import json
@@ -19,7 +20,7 @@ def _bundle(value: object) -> dict[str, Any] | None:
     if isinstance(value, str):
         try:
             value = json.loads(value)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
     return value if isinstance(value, dict) else None
 
@@ -49,7 +50,7 @@ def upgrade() -> None:
                 proposed_date = datetime.fromisoformat(bundle["account"]["as_of"]).date()
             else:
                 continue
-        except (KeyError, TypeError, ValueError):
+        except KeyError, TypeError, ValueError:
             continue
         connection.execute(
             sa.text("UPDATE optimizer_run SET proposed_trade_date = :date WHERE id = :run_id"),
@@ -66,7 +67,9 @@ def downgrade() -> None:
         return
     if connection.dialect.name == "sqlite":
         if sqlite3.sqlite_version_info < (3, 35, 0):
-            raise RuntimeError("SQLite 3.35 or newer is required to safely drop the proposed trade date")
+            raise RuntimeError(
+                "SQLite 3.35 or newer is required to safely drop the proposed trade date"
+            )
         connection.exec_driver_sql("ALTER TABLE optimizer_run DROP COLUMN proposed_trade_date")
     else:
         op.drop_column("optimizer_run", "proposed_trade_date")

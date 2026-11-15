@@ -105,8 +105,11 @@ def test_production_worker_failures_count_against_complete_reference() -> None:
     for error in (TimeoutError("supervisor deadline"), RuntimeError("worker failed")):
         row = asyncio.run(
             _compare_case(
-                case, FailingSupervisor(error), max_assignments=64,
-                reference_time_limit_seconds=2, production_timeout_seconds=1,
+                case,
+                FailingSupervisor(error),
+                max_assignments=64,
+                reference_time_limit_seconds=2,
+                production_timeout_seconds=1,
                 validation_reserve_seconds=0,
             )
         )
@@ -134,8 +137,11 @@ def test_owner_validation_deadline_failure_counts_as_missed_feasibility() -> Non
 
     row = asyncio.run(
         _compare_case(
-            case, LateResultSupervisor(), max_assignments=64,
-            reference_time_limit_seconds=2, production_timeout_seconds=1,
+            case,
+            LateResultSupervisor(),
+            max_assignments=64,
+            reference_time_limit_seconds=2,
+            production_timeout_seconds=1,
             validation_reserve_seconds=0,
         )
     )
@@ -159,8 +165,11 @@ def test_malformed_worker_output_is_production_failure_and_reference_still_runs(
 
     row = asyncio.run(
         _compare_case(
-            case, ReturningSupervisor(), max_assignments=64,
-            reference_time_limit_seconds=2, production_timeout_seconds=1,
+            case,
+            ReturningSupervisor(),
+            max_assignments=64,
+            reference_time_limit_seconds=2,
+            production_timeout_seconds=1,
             validation_reserve_seconds=0,
         )
     )
@@ -172,6 +181,7 @@ def test_malformed_worker_output_is_production_failure_and_reference_still_runs(
     assert row["comparison"]["out_of_domain_production_candidate"] is False
     assert row["comparison"]["exact_small_case_denominator_eligible"] is True
     assert row["comparison"]["missed_feasibility_case"] is True
+
 
 def test_checksum_mismatch_and_actual_out_of_domain_output_remain_excluded() -> None:
     case = build_small_quality_case("fee-consolidation", 20261113)
@@ -189,10 +199,14 @@ def test_checksum_mismatch_and_actual_out_of_domain_output_remain_excluded() -> 
             return self.worker_result
 
     oversized_leg = SimpleNamespace(
-        leg_id="sell-eq1", side="SELL", ticker="EQ1", shares=Decimal(2),
+        leg_id="sell-eq1",
+        side="SELL",
+        ticker="EQ1",
+        shares=Decimal(2),
         estimated_unit_price_usd=Decimal(10),
         selected_lots=(SimpleNamespace(broker_lot_id="EQ1-L1", shares=Decimal(2)),),
-        depends_on_leg_ids=(), sequence=1,
+        depends_on_leg_ids=(),
+        sequence=1,
     )
     for worker_result in (
         result((), "different-checksum"),
@@ -200,8 +214,11 @@ def test_checksum_mismatch_and_actual_out_of_domain_output_remain_excluded() -> 
     ):
         row = asyncio.run(
             _compare_case(
-                case, FixedSupervisor(worker_result), max_assignments=64,
-                reference_time_limit_seconds=2, production_timeout_seconds=1,
+                case,
+                FixedSupervisor(worker_result),
+                max_assignments=64,
+                reference_time_limit_seconds=2,
+                production_timeout_seconds=1,
                 validation_reserve_seconds=0,
             )
         )
@@ -215,12 +232,15 @@ def test_sector_fixture_security_and_sector_dimensions_are_consistent() -> None:
     for ticker in ("ETF_A", "ETF_B"):
         exposure = [row for row in case.inputs.exposures if row.ticker == ticker]
         sectors = {row.exposure_key: row.weight for row in exposure if row.dimension == "sector"}
-        securities = {row.exposure_key: row.weight for row in exposure if row.dimension == "security"}
+        securities = {
+            row.exposure_key: row.weight for row in exposure if row.dimension == "security"
+        }
         from_security = {
             "technology": securities.get("EQ1", Decimal(0)),
             "healthcare": securities.get("EQ2", Decimal(0)),
         }
         assert from_security == sectors
+
 
 def test_one_real_spawned_production_comparison_is_provisional_and_bounded() -> None:
     report = asyncio.run(

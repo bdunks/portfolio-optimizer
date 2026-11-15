@@ -185,8 +185,11 @@ def _origin_is_allowed(origin: str, allowed_origins: list[str], request: Request
     if normalized_origin == _request_origin(request):
         return True
     return normalized_origin in {
-        normalized for configured in allowed_origins if (normalized := _normalized_local_origin(configured))
+        normalized
+        for configured in allowed_origins
+        if (normalized := _normalized_local_origin(configured))
     }
+
 
 def _whole_share_fields(shares: Decimal) -> dict[str, Any]:
     whole = shares.to_integral_value(rounding=ROUND_DOWN)
@@ -195,10 +198,6 @@ def _whole_share_fields(shares: Decimal) -> dict[str, Any]:
         "fractional_shares": str(exact_difference(shares, whole)),
         "fractional_cleanup_unsupported": shares != whole,
     }
-
-
-
-
 
 
 def _demo_seed(factory: sessionmaker[Session], broker: ReadOnlyBroker) -> None:
@@ -266,18 +265,22 @@ def create_app(
     application.state.optimizer_validation_executor = validation_executor
 
     @application.middleware("http")
-    async def correlation_and_local_write_boundary(request: Request, call_next: RequestResponseEndpoint) -> Response:
+    async def correlation_and_local_write_boundary(
+        request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
         raw_id = request.headers.get("x-correlation-id", "")
         try:
             correlation_id = str(UUID(raw_id))
-        except (ValueError, TypeError, AttributeError):
+        except ValueError, TypeError, AttributeError:
             correlation_id = str(uuid4())
         request.state.correlation_id = correlation_id
         if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             hostname = _local_hostname(request.headers.get("host"))
             if hostname not in LOCAL_HOSTS:
                 response = JSONResponse(
-                    _error_payload(request, "local_host_required", "Writes are restricted to a local Host", {}),
+                    _error_payload(
+                        request, "local_host_required", "Writes are restricted to a local Host", {}
+                    ),
                     status_code=403,
                 )
                 response.headers["X-Correlation-ID"] = correlation_id
@@ -285,7 +288,12 @@ def create_app(
             origin = request.headers.get("origin")
             if origin is not None and not _origin_is_allowed(origin, cors_origins, request):
                 response = JSONResponse(
-                    _error_payload(request, "local_origin_required", "Writes require a configured or actual same-origin local browser Origin", {}),
+                    _error_payload(
+                        request,
+                        "local_origin_required",
+                        "Writes require a configured or actual same-origin local browser Origin",
+                        {},
+                    ),
                     status_code=403,
                 )
                 response.headers["X-Correlation-ID"] = correlation_id
@@ -316,13 +324,17 @@ def create_app(
         )
 
     @application.exception_handler(RequestValidationError)
-    async def request_validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    async def request_validation_handler(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
         details = [
             {"location": list(error.get("loc", ())), "message": error.get("msg", "Invalid request")}
             for error in exc.errors()
         ]
         return JSONResponse(
-            _error_payload(request, "request_validation_error", "Request payload is invalid", details),
+            _error_payload(
+                request, "request_validation_error", "Request payload is invalid", details
+            ),
             status_code=422,
         )
 
@@ -350,7 +362,9 @@ def create_app(
             "order_submission_enabled": False,
         }
 
-    @application.post("/api/v1/portfolio/sync", response_model=SyncResponseDTO, responses=API_ERROR_RESPONSES)
+    @application.post(
+        "/api/v1/portfolio/sync", response_model=SyncResponseDTO, responses=API_ERROR_RESPONSES
+    )
     def sync_endpoint(request: Request) -> dict[str, Any]:
         return sync_portfolio(
             sessions,
@@ -359,7 +373,9 @@ def create_app(
             publication_hook=publication_hook,
         )
 
-    @application.get("/api/v1/portfolio", response_model=PortfolioResponse, responses=API_ERROR_RESPONSES)
+    @application.get(
+        "/api/v1/portfolio", response_model=PortfolioResponse, responses=API_ERROR_RESPONSES
+    )
     def portfolio(session: Session = session_dependency) -> dict[str, Any]:
         account = session.get(Account, 1)
         state = session.get(SyncState, 1)
@@ -413,7 +429,9 @@ def create_app(
                     "asset_type": position.asset_type,
                     "shares": str(position.shares),
                     "market_value_usd": str(position.market_value_usd),
-                    "last_price_usd": str(quote.last_usd) if quote and quote.last_usd is not None else None,
+                    "last_price_usd": str(quote.last_usd)
+                    if quote and quote.last_usd is not None
+                    else None,
                     "quote_source": quote.source if quote else None,
                     "quote_as_of": quote.as_of if quote else None,
                     "sleeve_key": assignment.sleeve_key if assignment is not None else None,
@@ -453,6 +471,7 @@ def create_app(
             "allocation": allocation,
             "us_transition": us_transition,
         }
+
     @application.get("/api/v1/lots", response_model=LotPageResponse, responses=API_ERROR_RESPONSES)
     def lots(
         session: Session = session_dependency,
@@ -488,7 +507,9 @@ def create_app(
     ) -> dict[str, Any]:
         sync_state = session.get(SyncState, 1)
         source_generation = (
-            sync_state.current_generation if sync_state is not None and sync_state.complete else None
+            sync_state.current_generation
+            if sync_state is not None and sync_state.complete
+            else None
         )
         search_text = search.strip().casefold() if search else ""
         query = select(CurrentTaxLot).where(CurrentTaxLot.account_id == 1)
@@ -517,7 +538,9 @@ def create_app(
             security.id: (
                 resolve_holding(
                     allocation_policy,
-                    SecurityIdentity(security.ticker, security.asset_type, security.is_completion_etf),
+                    SecurityIdentity(
+                        security.ticker, security.asset_type, security.is_completion_etf
+                    ),
                 ).assignment
                 if allocation_policy is not None
                 else None
@@ -551,7 +574,9 @@ def create_app(
                 "adjusted_total_basis_usd": str(basis_total),
                 "current_price_usd": str(price) if price is not None else None,
                 "unrealized_pl_usd": str(unrealized) if unrealized is not None else None,
-                "unrealized_pl_pct": _percent(unrealized, basis_total) if unrealized is not None else None,
+                "unrealized_pl_pct": _percent(unrealized, basis_total)
+                if unrealized is not None
+                else None,
                 "source": lot.source,
                 "as_of": lot.as_of,
                 "term": lot_term,
@@ -564,7 +589,10 @@ def create_app(
             }
             if term and lot_term != term:
                 continue
-            if fractional is not None and lot_dict["fractional_cleanup_unsupported"] is not fractional:
+            if (
+                fractional is not None
+                and lot_dict["fractional_cleanup_unsupported"] is not fractional
+            ):
                 continue
             if (
                 search_text
@@ -602,7 +630,12 @@ def create_app(
             "source_generation": source_generation,
         }
 
-    @application.get("/api/v1/policy", response_model=PolicyResponse, response_model_exclude_unset=True, responses=API_ERROR_RESPONSES)
+    @application.get(
+        "/api/v1/policy",
+        response_model=PolicyResponse,
+        response_model_exclude_unset=True,
+        responses=API_ERROR_RESPONSES,
+    )
     def policy(session: Session = session_dependency) -> dict[str, Any]:
         revisions = session.scalars(
             select(PolicyRevision).order_by(PolicyRevision.revision_number.desc())
@@ -610,22 +643,37 @@ def create_app(
         serialized = {r.id: policy_to_dict(session, r) for r in revisions}
         for revision in revisions:
             if revision.status == "DRAFT":
-                serialized[revision.id]["activation_errors"] = validate_policy_revision(session, revision)
+                serialized[revision.id]["activation_errors"] = validate_policy_revision(
+                    session, revision
+                )
         return {
             "active": next((serialized[r.id] for r in revisions if r.status == "ACTIVE"), None),
             "drafts": [serialized[r.id] for r in revisions if r.status == "DRAFT"],
             "superseded": [serialized[r.id] for r in revisions if r.status == "SUPERSEDED"],
         }
 
-    @application.post("/api/v1/policy/drafts", status_code=201, response_model=PolicyRevisionResponse, response_model_exclude_unset=True, responses=API_ERROR_RESPONSES)
-    def save_policy_draft(payload: PolicyDraftInput, session: Session = session_dependency) -> dict[str, Any]:
+    @application.post(
+        "/api/v1/policy/drafts",
+        status_code=201,
+        response_model=PolicyRevisionResponse,
+        response_model_exclude_unset=True,
+        responses=API_ERROR_RESPONSES,
+    )
+    def save_policy_draft(
+        payload: PolicyDraftInput, session: Session = session_dependency
+    ) -> dict[str, Any]:
         with session.begin():
             revision = create_policy_draft(session, payload)
             result = policy_to_dict(session, revision)
             result["activation_errors"] = validate_policy_revision(session, revision)
         return result
 
-    @application.post("/api/v1/policy/{revision_id}/activate", response_model=PolicyRevisionResponse, response_model_exclude_unset=True, responses=API_ERROR_RESPONSES)
+    @application.post(
+        "/api/v1/policy/{revision_id}/activate",
+        response_model=PolicyRevisionResponse,
+        response_model_exclude_unset=True,
+        responses=API_ERROR_RESPONSES,
+    )
     def activate_policy_endpoint(
         revision_id: str,
         request: Request,
@@ -652,7 +700,9 @@ def create_app(
             )
             return policy_to_dict(session, revision)
 
-    @application.get("/api/v1/activity", response_model=ActivityPageResponse, responses=API_ERROR_RESPONSES)
+    @application.get(
+        "/api/v1/activity", response_model=ActivityPageResponse, responses=API_ERROR_RESPONSES
+    )
     def activity(
         session: Session = session_dependency,
         offset: int = Query(default=0, ge=0),
@@ -695,7 +745,12 @@ def create_app(
             "limit": limit,
         }
 
-    @application.post("/api/v1/optimizer/runs", status_code=201, response_model=OptimizerRecommendationsResponse, responses=API_ERROR_RESPONSES)
+    @application.post(
+        "/api/v1/optimizer/runs",
+        status_code=201,
+        response_model=OptimizerRecommendationsResponse,
+        responses=API_ERROR_RESPONSES,
+    )
     async def create_optimizer_run(
         payload: OptimizerRunInput,
         request: Request,
@@ -719,21 +774,35 @@ def create_app(
             )
             return run_recommendations(session, run)
 
-    @application.get("/api/v1/optimizer/runs/{run_id}", response_model=OptimizerRunResponse, responses=API_ERROR_RESPONSES)
+    @application.get(
+        "/api/v1/optimizer/runs/{run_id}",
+        response_model=OptimizerRunResponse,
+        responses=API_ERROR_RESPONSES,
+    )
     def optimizer_run_detail(run_id: str, session: Session = session_dependency) -> dict[str, Any]:
         run = get_run(session, run_id)
         if run.frozen_input_bundle.get("mode") != "real_optimizer":
             return run_summary(run, session=session)
         return real_run_summary(run, session)
 
-    @application.get("/api/v1/optimizer/runs/{run_id}/recommendations", response_model=OptimizerRecommendationsResponse, responses=API_ERROR_RESPONSES)
-    def optimizer_run_recommendations(run_id: str, session: Session = session_dependency) -> dict[str, Any]:
+    @application.get(
+        "/api/v1/optimizer/runs/{run_id}/recommendations",
+        response_model=OptimizerRecommendationsResponse,
+        responses=API_ERROR_RESPONSES,
+    )
+    def optimizer_run_recommendations(
+        run_id: str, session: Session = session_dependency
+    ) -> dict[str, Any]:
         run = get_run(session, run_id)
         if run.frozen_input_bundle.get("mode") != "real_optimizer":
             return run_recommendations(session, run)
         return real_run_recommendations(session, run)
 
-    @application.post("/api/v1/optimizer/runs/{run_id}/selection", response_model=OptimizerRecommendationsResponse, responses=API_ERROR_RESPONSES)
+    @application.post(
+        "/api/v1/optimizer/runs/{run_id}/selection",
+        response_model=OptimizerRecommendationsResponse,
+        responses=API_ERROR_RESPONSES,
+    )
     async def optimizer_run_selection(
         run_id: str,
         payload: OptimizerSelectionInput,
@@ -745,7 +814,9 @@ def create_app(
             is_demo = run.frozen_input_bundle.get("mode") != "real_optimizer"
         if is_demo:
             with session.begin():
-                run = apply_selection(session, run_id, payload, correlation_id=request.state.correlation_id)
+                run = apply_selection(
+                    session, run_id, payload, correlation_id=request.state.correlation_id
+                )
                 return run_recommendations(session, run)
         run = await apply_real_selection(
             session,
@@ -795,7 +866,11 @@ def create_app(
         )
         return real_run_recommendations(session, get_run(session, run.id))
 
-    @application.patch("/api/v1/optimizer/runs/{run_id}/recommendations/{group_id}", response_model=OptimizerRecommendationsResponse, responses=API_ERROR_RESPONSES)
+    @application.patch(
+        "/api/v1/optimizer/runs/{run_id}/recommendations/{group_id}",
+        response_model=OptimizerRecommendationsResponse,
+        responses=API_ERROR_RESPONSES,
+    )
     async def annotate_recommendation_group(
         run_id: str,
         group_id: str,
@@ -827,7 +902,9 @@ def create_app(
         )
         return real_run_recommendations(session, get_run(session, run.id))
 
-    @application.get("/api/v1/optimizer/runs/{run_id}/export", response_model=None, responses=EXPORT_RESPONSES)
+    @application.get(
+        "/api/v1/optimizer/runs/{run_id}/export", response_model=None, responses=EXPORT_RESPONSES
+    )
     def export_optimizer_run(
         run_id: str,
         format: str = Query(default="json", pattern="^(json|csv)$"),
@@ -838,10 +915,14 @@ def create_app(
         return Response(
             content=content,
             media_type=media_type,
-            headers={"Content-Disposition": f'attachment; filename="optimizer-run-{run.id}.{format}"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="optimizer-run-{run.id}.{format}"'
+            },
         )
 
-    @application.get("/api/v1/wash-sales", response_model=WashSalesResponse, responses=API_ERROR_RESPONSES)
+    @application.get(
+        "/api/v1/wash-sales", response_model=WashSalesResponse, responses=API_ERROR_RESPONSES
+    )
     def wash_sales_endpoint(session: Session = session_dependency) -> dict[str, Any]:
         return wash_sales(session)
 
@@ -892,7 +973,12 @@ def create_app(
             )
         return etrade_oauth.verify(body.verifier)
 
-    @application.post("/api/v1/orders/{leg_id}/preview", status_code=503, response_model=ErrorEnvelope, responses=API_ERROR_RESPONSES)
+    @application.post(
+        "/api/v1/orders/{leg_id}/preview",
+        status_code=503,
+        response_model=ErrorEnvelope,
+        responses=API_ERROR_RESPONSES,
+    )
     def disabled_order_preview(leg_id: str) -> None:
         del leg_id
         raise AppError(
@@ -902,7 +988,12 @@ def create_app(
             details={"available": False, "actionable": False, "phase": 5},
         )
 
-    @application.post("/api/v1/orders/{leg_id}/submit", status_code=503, response_model=ErrorEnvelope, responses=API_ERROR_RESPONSES)
+    @application.post(
+        "/api/v1/orders/{leg_id}/submit",
+        status_code=503,
+        response_model=ErrorEnvelope,
+        responses=API_ERROR_RESPONSES,
+    )
     def disabled_order_submit(leg_id: str) -> None:
         del leg_id
         raise AppError(

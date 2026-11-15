@@ -3,6 +3,7 @@
 Revision ID: 0003_demo_recommendation_state
 Revises: 0002_typed_policy_settings
 """
+
 from __future__ import annotations
 
 import sqlalchemy as sa
@@ -28,12 +29,15 @@ def upgrade() -> None:
             if column.name not in group_columns:
                 op.add_column("recommendation_group", column)
     if "recommendation_selected_lot" in tables:
-        lot_columns = {column["name"] for column in inspector.get_columns("recommendation_selected_lot")}
+        lot_columns = {
+            column["name"] for column in inspector.get_columns("recommendation_selected_lot")
+        }
         if "selected" not in lot_columns:
             op.add_column(
                 "recommendation_selected_lot",
                 sa.Column("selected", sa.Boolean(), nullable=False, server_default=sa.text("1")),
             )
+
 
 def downgrade() -> None:
     raise NotImplementedError("Demo recommendation user state is intentionally not downgraded")

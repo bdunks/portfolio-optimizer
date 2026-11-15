@@ -113,9 +113,7 @@ def _apply_benchmark_scenario(inputs: FinancialInputs, scenario: str) -> Financi
         )
     return replace(
         inputs,
-        source_checksum=hashlib.sha256(
-            f"{inputs.source_checksum}:{scenario}".encode()
-        ).hexdigest(),
+        source_checksum=hashlib.sha256(f"{inputs.source_checksum}:{scenario}".encode()).hexdigest(),
         policy=replace(
             inputs.policy,
             revision_id=f"benchmark-policy-{scenario}-r1",

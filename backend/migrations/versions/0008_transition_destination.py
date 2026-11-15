@@ -3,6 +3,7 @@
 Revision ID: 0008_transition_destination
 Revises: 0007_optimizer_run_trade_date
 """
+
 from __future__ import annotations
 
 import sqlalchemy as sa
@@ -22,7 +23,9 @@ def upgrade() -> None:
     if "is_transition_destination" not in columns:
         op.add_column(
             "policy_sleeve",
-            sa.Column("is_transition_destination", sa.Boolean(), nullable=False, server_default=sa.false()),
+            sa.Column(
+                "is_transition_destination", sa.Boolean(), nullable=False, server_default=sa.false()
+            ),
         )
 
 

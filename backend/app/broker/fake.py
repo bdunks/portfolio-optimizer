@@ -20,7 +20,11 @@ class FakeBroker:
         self.fetch_count += 1
         if self.fetch_error is not None:
             raise self.fetch_error
-        return BrokerSnapshot.model_validate(self._snapshot.model_dump() if isinstance(self._snapshot, BrokerSnapshot) else self._snapshot)
+        return BrokerSnapshot.model_validate(
+            self._snapshot.model_dump()
+            if isinstance(self._snapshot, BrokerSnapshot)
+            else self._snapshot
+        )
 
     @staticmethod
     def demo_snapshot() -> BrokerSnapshot:
@@ -91,14 +95,14 @@ class FakeBroker:
                         "source": "DEMO",
                         "as_of": as_of,
                     },
-                        {
-                            "ticker": "VTI",
-                            "bid_usd": "199.99",
-                            "ask_usd": "200.01",
-                            "last_usd": "200.00",
-                            "source": "DEMO",
-                            "as_of": as_of,
-                        },
+                    {
+                        "ticker": "VTI",
+                        "bid_usd": "199.99",
+                        "ask_usd": "200.01",
+                        "last_usd": "200.00",
+                        "source": "DEMO",
+                        "as_of": as_of,
+                    },
                     {
                         "ticker": "VB",
                         "bid_usd": "199.99",

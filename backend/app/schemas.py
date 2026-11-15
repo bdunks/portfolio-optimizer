@@ -159,6 +159,7 @@ class SleeveInput(StrictModel):
     is_cash_sleeve: bool = False
     enabled: bool = True
 
+
 class SectorBandInput(StrictModel):
     sector_key: str = Field(min_length=1, max_length=128)
 
@@ -171,7 +172,6 @@ class SectorBandInput(StrictModel):
         if not value.strip():
             raise ValueError("sector key must not be blank")
         return value
-
 
 
 class AllowedSecurityInput(StrictModel):
@@ -269,7 +269,6 @@ class PolicySectorBandResponse(StrictModel):
     band_pct: str
 
 
-
 class OptimizerRunInput(StrictModel):
     mode: Literal["recommendations_only", "real_optimizer"] = "recommendations_only"
     proposed_trade_date: date | None = None
@@ -299,6 +298,7 @@ class OptimizerSelectionInput(StrictModel):
 
 class OptimizerLotReviewIntentInput(StrictModel):
     """Generation-bound desired sell-lot basket; this is not order approval."""
+
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
 
     source_generation: StrictInt = Field(
@@ -346,17 +346,16 @@ class RecommendationAnnotationInput(StrictModel):
         return self
 
 
-
 # Response DTOs are the authoritative HTTP contracts. Monetary and share values
 # are serialized as exact decimal strings; only provenance/details are open JSON.
 type JSONValue = str | int | float | bool | list[JSONValue] | dict[str, JSONValue] | None
+
+
 class ErrorEnvelope(StrictModel):
     code: str
     message: str
     details: JSONValue
     correlation_id: str
-
-
 
 
 class CoverageResponse(StrictModel):
@@ -533,6 +532,7 @@ class LotPageResponse(StrictModel):
         description="Complete current sync generation for the lots in this query, or null when unavailable."
     )
 
+
 class PolicySettingsResponse(StrictModel):
     short_term_tax_rate: str | None
     long_term_tax_rate: str | None
@@ -658,8 +658,6 @@ class GroupImpactResponse(StrictModel):
     cash_after_usd: str | None
     portfolio_effects: PortfolioEffectsResponse | None
     risk_tracking_score: str | None
-
-
 
 
 class SelectedLotResponse(StrictModel):
@@ -831,7 +829,9 @@ class EtradeAuthVerifyInput(StrictModel):
 
 
 class EtradeAuthStatusResponse(StrictModel):
-    status: Literal["disabled", "unavailable", "unauthenticated", "pending", "authenticated", "expired"]
+    status: Literal[
+        "disabled", "unavailable", "unauthenticated", "pending", "authenticated", "expired"
+    ]
     available: bool
     authenticated: bool
     account_id_key: None
@@ -842,6 +842,7 @@ class EtradeAuthStatusResponse(StrictModel):
     pending_expires_at: datetime | None = None
     last_activity_at: datetime | None = None
     renewal_due: bool = False
+
 
 class OptimizerExportMetadataResponse(StrictModel):
     run_id: str

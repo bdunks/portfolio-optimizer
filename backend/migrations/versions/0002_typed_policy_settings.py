@@ -3,6 +3,7 @@
 Revision ID: 0002_typed_policy_settings
 Revises: 0001_normalized_foundation
 """
+
 from __future__ import annotations
 
 import json
@@ -43,19 +44,41 @@ _SETTING_COLUMNS = (
     sa.Column("ytd_realized_lt_usd", sa.Text(), nullable=False, server_default=sa.text("'0'")),
     sa.Column("ytd_source", sa.String(80), nullable=True),
     sa.Column("ytd_as_of", sa.Date(), nullable=True),
-    sa.Column("target_retained_net_loss_usd", sa.Text(), nullable=False, server_default=sa.text("'3000'")),
-    sa.Column("ordinary_income_deduction_limit_usd", sa.Text(), nullable=False, server_default=sa.text("'3000'")),
-    sa.Column("carryforward_loss_discount_factor", sa.Text(), nullable=False, server_default=sa.text("'0.50'")),
+    sa.Column(
+        "target_retained_net_loss_usd", sa.Text(), nullable=False, server_default=sa.text("'3000'")
+    ),
+    sa.Column(
+        "ordinary_income_deduction_limit_usd",
+        sa.Text(),
+        nullable=False,
+        server_default=sa.text("'3000'"),
+    ),
+    sa.Column(
+        "carryforward_loss_discount_factor",
+        sa.Text(),
+        nullable=False,
+        server_default=sa.text("'0.50'"),
+    ),
     sa.Column("gain_budget_usd", sa.Text(), nullable=True),
     sa.Column("max_incremental_tax_cost_usd", sa.Text(), nullable=True),
     sa.Column("st_gain_limit_usd", sa.Text(), nullable=True),
     sa.Column("lt_gain_limit_usd", sa.Text(), nullable=True),
-    sa.Column("budget_period", sa.String(32), nullable=False, server_default=sa.text("'calendar_year'")),
-    sa.Column("max_sell_tickers_per_batch", sa.Integer(), nullable=False, server_default=sa.text("10")),
-    sa.Column("max_sell_lots_per_batch", sa.Integer(), nullable=False, server_default=sa.text("20")),
-    sa.Column("max_total_orders_per_batch", sa.Integer(), nullable=False, server_default=sa.text("12")),
+    sa.Column(
+        "budget_period", sa.String(32), nullable=False, server_default=sa.text("'calendar_year'")
+    ),
+    sa.Column(
+        "max_sell_tickers_per_batch", sa.Integer(), nullable=False, server_default=sa.text("10")
+    ),
+    sa.Column(
+        "max_sell_lots_per_batch", sa.Integer(), nullable=False, server_default=sa.text("20")
+    ),
+    sa.Column(
+        "max_total_orders_per_batch", sa.Integer(), nullable=False, server_default=sa.text("12")
+    ),
     sa.Column("max_batch_turnover_pct", sa.Text(), nullable=False, server_default=sa.text("'5.0'")),
-    sa.Column("min_buy_order_notional_usd", sa.Text(), nullable=False, server_default=sa.text("'500.00'")),
+    sa.Column(
+        "min_buy_order_notional_usd", sa.Text(), nullable=False, server_default=sa.text("'500.00'")
+    ),
     sa.Column("cash_reserve_usd", sa.Text(), nullable=False, server_default=sa.text("'0'")),
     sa.Column("prefer_etf_buys", sa.Boolean(), nullable=False, server_default=sa.text("1")),
     sa.Column("allow_gain_sales", sa.Boolean(), nullable=False, server_default=sa.text("0")),
@@ -68,7 +91,11 @@ def upgrade() -> None:
     connection = op.get_bind()
     existing = {column["name"] for column in sa.inspect(connection).get_columns("policy_revision")}
     legacy_settings = "settings" in existing
-    if legacy_settings and connection.dialect.name == "sqlite" and sqlite3.sqlite_version_info < (3, 35, 0):
+    if (
+        legacy_settings
+        and connection.dialect.name == "sqlite"
+        and sqlite3.sqlite_version_info < (3, 35, 0)
+    ):
         raise RuntimeError("SQLite 3.35 or newer is required to safely drop legacy policy settings")
 
     for column in _SETTING_COLUMNS:
@@ -76,7 +103,9 @@ def upgrade() -> None:
             op.add_column("policy_revision", column)
 
     if legacy_settings:
-        rows = connection.execute(sa.text("SELECT id, settings FROM policy_revision")).mappings().all()
+        rows = (
+            connection.execute(sa.text("SELECT id, settings FROM policy_revision")).mappings().all()
+        )
         for row in rows:
             settings = row["settings"]
             if isinstance(settings, str):
@@ -94,7 +123,7 @@ def upgrade() -> None:
                 values["ytd_as_of"] = str(values["ytd_as_of"])
             assignments = ", ".join(f'"{name}" = :{name}' for name in names)
             connection.execute(
-                sa.text(f'UPDATE policy_revision SET {assignments} WHERE id = :id'),
+                sa.text(f"UPDATE policy_revision SET {assignments} WHERE id = :id"),
                 {**values, "id": row["id"]},
             )
         if connection.dialect.name == "sqlite":

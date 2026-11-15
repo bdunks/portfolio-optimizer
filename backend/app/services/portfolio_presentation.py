@@ -17,7 +17,9 @@ def _transition_snapshot_view(state: TransitionSnapshot) -> dict[str, object]:
     return {
         "us_sleeve_value_usd": str(state.us_sleeve_value_usd),
         "us_sleeve_whole_portfolio_pct": str(state.us_sleeve_whole_portfolio_pct),
-        "etf_progress_pct": str(state.etf_progress_pct) if state.etf_progress_pct is not None else None,
+        "etf_progress_pct": str(state.etf_progress_pct)
+        if state.etf_progress_pct is not None
+        else None,
         "children": {
             key: {
                 "value_usd": str(child.value_usd),
@@ -52,7 +54,9 @@ def present_portfolio_evaluation(
             "current": _transition_snapshot_view(transition.current),
             "proposed_basket": _transition_snapshot_view(transition.proposed_basket),
             "target": {
-                "us_sleeve_whole_portfolio_pct": str(transition.target.us_sleeve_whole_portfolio_pct),
+                "us_sleeve_whole_portfolio_pct": str(
+                    transition.target.us_sleeve_whole_portfolio_pct
+                ),
                 "children": {
                     key: {
                         "within_us_sleeve_pct": str(child.within_us_sleeve_pct),

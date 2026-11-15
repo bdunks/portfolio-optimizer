@@ -77,6 +77,21 @@ class Validation:
     reasons: tuple[str, ...] = ()
 
 
+def _validated_outcome(
+    candidate: object,
+    validation: object | None,
+    overall_deadline: float,
+    status: str,
+) -> optimizer_service.ValidatedOptimizerCandidate:
+    """Type duck-typed worker and validator fixtures at their injection boundary."""
+    return optimizer_service.ValidatedOptimizerCandidate(
+        cast(OptimizerResult, candidate),
+        cast(CandidateValidation | None, validation),
+        overall_deadline,
+        status,
+    )
+
+
 @dataclass(frozen=True)
 class Policy:
     settings: PolicySettings
@@ -200,6 +215,7 @@ async def test_run_validated_candidate_passes_explicit_lot_subset_to_core(
     assert supervisor.request.inputs is inputs
     assert supervisor.request.sell_lot_ids == lots
     assert result.candidate is candidate
+    assert result.validation is not None
     assert result.validation.accepted is True
     assert seen["legs"] == candidate.legs
 
@@ -292,9 +308,7 @@ def test_sell_persistence_rejects_missing_owner_validated_lot_effects() -> None:
         0,
         ("sale:ABC",),
     )
-    outcome = optimizer_service.ValidatedOptimizerCandidate(
-        Candidate((leg,)), Validation(True), time.monotonic() + 1, "ready"
-    )
+    outcome = _validated_outcome(Candidate((leg,)), Validation(True), time.monotonic() + 1, "ready")
 
     with pytest.raises(AppError, match="missing accepted owner-validated lot effects") as error:
         optimizer_service._validated_lot_effects(outcome, (leg,))
@@ -1022,7 +1036,7 @@ async def test_concurrent_subset_publication_cannot_overwrite_newer_basket(
         await both_solves_started.wait()
         if marker == "older":
             await release_older.wait()
-        return optimizer_service.ValidatedOptimizerCandidate(
+        return _validated_outcome(
             PublicationCandidate(marker, _sell_legs_for_ids(_inputs, sell_lot_ids)),
             None,
             time.monotonic() + 60,
@@ -1108,7 +1122,7 @@ async def test_inflight_solve_is_invalidated_by_non_solving_rejection(
         assert sell_lot_ids is not None
         solve_started.set()
         await release_solve.wait()
-        return optimizer_service.ValidatedOptimizerCandidate(
+        return _validated_outcome(
             PublicationCandidate("stale-solve", _sell_legs_for_ids(_inputs, sell_lot_ids)),
             None,
             time.monotonic() + 60,
@@ -1220,9 +1234,7 @@ async def test_lot_intent_roundtrip_preserves_actual_selected_lots_and_rejected_
         candidate = PublicationCandidate(
             f"solve-{len(solve_lot_sets)}", _sell_legs_for_ids(_inputs, selected_lots)
         )
-        return optimizer_service.ValidatedOptimizerCandidate(
-            candidate, Validation(True), time.monotonic() + 60, "ready"
-        )
+        return _validated_outcome(candidate, Validation(True), time.monotonic() + 60, "ready")
 
     monkeypatch.setattr(optimizer_service, "run_validated_candidate", fake_solve)
     supervisor = FakeSupervisor(None)
@@ -1401,7 +1413,7 @@ async def test_worker_subset_result_must_exactly_match_positive_whole_lot_intent
                             replace(bbb, selected_lots=(LotAllocation("LOT-A1", Decimal(1)),)),
                         )
                     )
-        return optimizer_service.ValidatedOptimizerCandidate(
+        return _validated_outcome(
             candidate, Validation(True), time.monotonic() + 60, candidate_status
         )
 
@@ -1506,9 +1518,7 @@ def test_published_financial_metrics_use_owner_validation_and_survive_summary_re
         as_of=datetime(2026, 11, 13, tzinfo=UTC),
         proposed_trade_date=date(2026, 11, 13),
     )
-    outcome = optimizer_service.ValidatedOptimizerCandidate(
-        candidate, validation, time.monotonic() + 60, "no_trade"
-    )
+    outcome = _validated_outcome(candidate, validation, time.monotonic() + 60, "no_trade")
 
     with session_factory.begin() as session:
         run = session.get(OptimizerRun, run_id)
@@ -1545,14 +1555,17 @@ async def test_create_run_persists_native_fee_adjusted_multilot_basket(
 ) -> None:
     inputs = _fee_safety_inputs()
     settings = inputs.policy.settings
-    batch_settings: dict[str, object] = {
-        "max_sell_tickers_per_batch": settings.get("max_sell_tickers_per_batch"),
-        "max_sell_lots_per_batch": settings.get("max_sell_lots_per_batch"),
-        "max_total_orders_per_batch": settings.get("max_total_orders_per_batch"),
-        "max_batch_turnover_pct": str(settings.get("max_batch_turnover_pct")),
-        "min_buy_order_notional_usd": str(settings.get("min_buy_order_notional_usd")),
-        "cash_reserve_usd": str(settings.get("cash_reserve_usd")),
-    }
+    batch_settings = cast(
+        dict[str, int | str],
+        {
+            "max_sell_tickers_per_batch": settings.get("max_sell_tickers_per_batch"),
+            "max_sell_lots_per_batch": settings.get("max_sell_lots_per_batch"),
+            "max_total_orders_per_batch": settings.get("max_total_orders_per_batch"),
+            "max_batch_turnover_pct": str(settings.get("max_batch_turnover_pct")),
+            "min_buy_order_notional_usd": str(settings.get("min_buy_order_notional_usd")),
+            "cash_reserve_usd": str(settings.get("cash_reserve_usd")),
+        },
+    )
     frozen_bundle = inputs.to_provenance()
     frozen_bundle["batch_settings"] = batch_settings
     frozen_bundle["mode"] = "real_optimizer"
@@ -1871,9 +1884,7 @@ async def test_initial_publication_deadline_persists_timeout_run(
         *args: object, **kwargs: object
     ) -> optimizer_service.ValidatedOptimizerCandidate:
         del args, kwargs
-        return optimizer_service.ValidatedOptimizerCandidate(
-            candidate, Validation(True), deadline, "no_trade"
-        )
+        return _validated_outcome(candidate, Validation(True), deadline, "no_trade")
 
     def delayed_publication(
         _session: Session, _prepared: object, *, deadline: float | None = None
@@ -1932,9 +1943,7 @@ async def test_stale_initial_publication_never_persists_success(
         *args: object, **kwargs: object
     ) -> optimizer_service.ValidatedOptimizerCandidate:
         del args, kwargs
-        return optimizer_service.ValidatedOptimizerCandidate(
-            candidate, Validation(True), time.monotonic() + 20, "no_trade"
-        )
+        return _validated_outcome(candidate, Validation(True), time.monotonic() + 20, "no_trade")
 
     def stale_publication(
         _session: Session, _prepared: object, *, deadline: float | None = None
@@ -1971,9 +1980,7 @@ async def test_initial_search_incomplete_is_truthful_nonactionable_terminal_resu
         *args: object, **kwargs: object
     ) -> optimizer_service.ValidatedOptimizerCandidate:
         del args, kwargs
-        return optimizer_service.ValidatedOptimizerCandidate(
-            candidate, None, time.monotonic() + 20, "search_incomplete"
-        )
+        return _validated_outcome(candidate, None, time.monotonic() + 20, "search_incomplete")
 
     monkeypatch.setattr(optimizer_service, "run_validated_candidate", incomplete_solve)
     try:
@@ -2030,9 +2037,7 @@ async def test_subset_search_incomplete_reports_evidence_and_preserves_saved_bas
         *args: object, **kwargs: object
     ) -> optimizer_service.ValidatedOptimizerCandidate:
         del args, kwargs
-        return optimizer_service.ValidatedOptimizerCandidate(
-            candidate, None, time.monotonic() + 20, "search_incomplete"
-        )
+        return _validated_outcome(candidate, None, time.monotonic() + 20, "search_incomplete")
 
     monkeypatch.setattr(optimizer_service, "run_validated_candidate", incomplete_solve)
     try:
@@ -2079,7 +2084,7 @@ async def test_subset_timeout_preserves_prior_recommendations_and_annotations(
         del args, kwargs
         if timeout_stage == "worker":
             raise WorkerTimeoutError("subset solve timed out")
-        return optimizer_service.ValidatedOptimizerCandidate(
+        return _validated_outcome(
             PublicationCandidate(
                 "late-subset", _sell_legs_for_ids(_subset_inputs(), selected_lots)
             ),

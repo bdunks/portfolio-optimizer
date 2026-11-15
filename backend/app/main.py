@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from collections import Counter
-from collections.abc import AsyncIterator, Callable, Generator
+from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from decimal import ROUND_DOWN, Decimal
@@ -110,13 +110,13 @@ DEFAULT_ORIGINS = [
 ]
 
 
-API_ERROR_RESPONSES = {
+API_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     status_code: {"model": ErrorEnvelope, "description": "Consistent API error envelope"}
     for status_code in (403, 404, 409, 422, 500, 502, 503)
 }
 
 
-EXPORT_RESPONSES = {
+EXPORT_RESPONSES: dict[int | str, dict[str, Any]] = {
     **API_ERROR_RESPONSES,
     200: {
         "model": OptimizerExportJSONResponse,
@@ -241,7 +241,7 @@ def create_app(
     validation_executor = BoundedValidationExecutor(max_workers=2)
 
     @asynccontextmanager
-    async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(application: FastAPI) -> AsyncGenerator[None]:
         try:
             upgrade_database(db_engine)
             if seed_demo_data:

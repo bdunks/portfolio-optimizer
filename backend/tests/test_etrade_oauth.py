@@ -541,7 +541,7 @@ def test_malformed_renewal_response_expires_tokens_without_extending_activity(
         [
             _token_response("request-token", "request-secret-marker"),
             _token_response("access-token-marker", "access-secret-marker"),
-            _response(200, text="oauth_token=partial-token-marker"),
+            _response(200, text="oauth_token"),
         ],
     )
     clock.now += timedelta(minutes=90, seconds=1)

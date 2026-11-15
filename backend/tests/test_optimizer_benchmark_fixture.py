@@ -81,7 +81,8 @@ def test_optimizer_benchmark_fixture_is_deterministic_complete_and_full_sized() 
     basis_comparisons: list[bool] = []
     for lot in first.lots:
         quote = first.quote_for(lot.ticker)
-        assert quote is not None and quote.last_usd is not None
+        assert quote is not None
+        assert quote.last_usd is not None
         basis_comparisons.append(lot.adjusted_unit_basis_usd > quote.last_usd)
     assert any(basis_comparisons)
     assert any(not comparison for comparison in basis_comparisons)
@@ -122,14 +123,17 @@ def test_recent_loss_scenario_links_recent_acquisition_to_lot_and_old_loss() -> 
     )
     recent_start = inputs.proposed_trade_date - timedelta(days=30)
 
-    assert recent_lot.ticker == old_loss_lot.ticker == recent_buy.ticker == "EQ000"
+    assert recent_lot.ticker == "EQ000"
+    assert old_loss_lot.ticker == "EQ000"
+    assert recent_buy.ticker == "EQ000"
     assert recent_lot.acquired_date == recent_buy.trade_date
     assert recent_start <= recent_buy.trade_date <= inputs.proposed_trade_date
     assert recent_buy.is_acquisition is True
     assert recent_buy.broker_lot_id == recent_lot.broker_lot_id
     assert old_loss_lot.acquired_date < recent_start
     quote = inputs.quote_for("EQ000")
-    assert quote is not None and quote.last_usd is not None
+    assert quote is not None
+    assert quote.last_usd is not None
     assert old_loss_lot.adjusted_unit_basis_usd > quote.last_usd
 
 

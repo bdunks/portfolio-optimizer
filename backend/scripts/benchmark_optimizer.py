@@ -16,10 +16,12 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
+
 import cvxpy
 
 from app.domain.financial_inputs import FinancialInputs
-from app.optimizer.core import ConsolidatedLeg, OptimizerRequest, optimize_worker
+from app.domain.portfolio_accounting import ConsolidatedLeg
+from app.optimizer.core import OptimizerRequest, OptimizerResult, optimize_worker
 from app.optimizer.runtime import ProcessSupervisor
 from app.optimizer.validation import validate_candidate
 from tests.optimizer_benchmark_fixture import build_optimizer_benchmark_inputs
@@ -70,6 +72,7 @@ def _cpu_model() -> str | None:
 
 
 def _measured_worker(request: OptimizerRequest, deadline: float) -> tuple[OptimizerResult, int | None]:
+    """Return optimizer payload and child-process peak RSS in bytes where supported."""
     result = optimize_worker(request, deadline)
     try:
         import resource
@@ -110,7 +113,7 @@ def _path_coverage(
         and any(sell.leg_id in buy.depends_on_leg_ids for sell in sells)
         for buy in buys
     )
-    coverage = {
+    coverage: dict[str, bool | str | None] = {
         "path_covered": False,
         "explicit_failure": None,
         "sell_present": bool(sells),

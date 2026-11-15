@@ -7,6 +7,7 @@ import json
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import TypedDict, cast
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -65,6 +66,36 @@ from app.services.portfolio_presentation import present_portfolio_evaluation
 DEMO_WARNING = "real_optimizer_unavailable"
 DEMO_WASH_WARNING = "wash_sale_validation_deferred_demo"
 DEMO_RISK_WARNING = "risk_tracking_validation_not_run_demo"
+
+
+class _DemoAction(TypedDict):
+    group: RecommendationGroup
+    sell_leg: RecommendationLeg
+    buy_leg: RecommendationLeg
+    source_ticker: str
+    source_asset_type: str
+    target_ticker: str
+    target_asset_type: str
+    source_sleeve_key: object
+    source_sub_sleeve_key: object
+    target_sleeve_key: object
+    target_sub_sleeve_key: object
+    shares_sold: Decimal
+    proceeds: Decimal
+    buy_shares: Decimal
+    buy_cost: Decimal
+    apply_buy: bool
+    realized_st: Decimal
+    realized_lt: Decimal
+    selected: bool
+    selected_rows: list[RecommendationSelectedLot]
+
+
+class _DemoBuyPool(TypedDict):
+    leg: RecommendationLeg
+    proceeds: Decimal
+    sell_leg_ids: list[str]
+    group_ids: list[str]
 
 
 def _fingerprint(value: object) -> str:
@@ -464,20 +495,24 @@ def _group_lot_rows(session: Session, group_id: str) -> list[RecommendationSelec
     )
     if sell_leg is None:
         return []
-    return session.scalars(
-        select(RecommendationSelectedLot)
-        .where(RecommendationSelectedLot.leg_id == sell_leg.id)
-        .order_by(RecommendationSelectedLot.broker_lot_id)
-    ).all()
+    return list(
+        session.scalars(
+            select(RecommendationSelectedLot)
+            .where(RecommendationSelectedLot.leg_id == sell_leg.id)
+            .order_by(RecommendationSelectedLot.broker_lot_id)
+        ).all()
+    )
 
 
 def _group_legs(session: Session, group_id: str) -> list[RecommendationLeg]:
-    return session.scalars(
-        select(RecommendationLeg)
-        .join(RecommendationGroupLeg, RecommendationGroupLeg.leg_id == RecommendationLeg.id)
-        .where(RecommendationGroupLeg.group_id == group_id)
-        .order_by(RecommendationLeg.sequence, RecommendationLeg.id)
-    ).all()
+    return list(
+        session.scalars(
+            select(RecommendationLeg)
+            .join(RecommendationGroupLeg, RecommendationGroupLeg.leg_id == RecommendationLeg.id)
+            .where(RecommendationGroupLeg.group_id == group_id)
+            .order_by(RecommendationLeg.sequence, RecommendationLeg.id)
+        ).all()
+    )
 
 
 def _check_run_current(session: Session, run: OptimizerRun) -> None:
@@ -702,8 +737,8 @@ def _recalculate_selection(
             },
         )
 
-    actions: list[dict[str, object]] = []
-    buy_pools: dict[str, dict[str, object]] = {}
+    actions: list[_DemoAction] = []
+    buy_pools: dict[str, _DemoBuyPool] = {}
 
     selected_tickers: set[str] = set()
     for group in groups:
@@ -771,9 +806,9 @@ def _recalculate_selection(
                 buy_leg.id,
                 {"leg": buy_leg, "proceeds": Decimal(0), "sell_leg_ids": [], "group_ids": []},
             )
-            pool["proceeds"] = exact_sum((pool["proceeds"], proceeds))  # type: ignore[arg-type]
-            pool["sell_leg_ids"].append(sell_leg.id)  # type: ignore[union-attr]
-            pool["group_ids"].append(group.id)  # type: ignore[union-attr]
+            pool["proceeds"] = exact_sum((pool["proceeds"], proceeds))
+            pool["sell_leg_ids"].append(sell_leg.id)
+            pool["group_ids"].append(group.id)
 
         sell_leg.shares = shares_sold if selected else Decimal(0)
         sell_leg.net_st_realized_usd = Decimal(0)
@@ -817,7 +852,8 @@ def _recalculate_selection(
         if pool is None:
             buy_leg.shares = Decimal(0)
             details = dict(buy_leg.details)
-            details["depends_on_leg_ids"] = []
+            empty_dependencies: list[str] = []
+            details["depends_on_leg_ids"] = empty_dependencies
             buy_leg.details = details
             continue
         proceeds = _decimal(pool["proceeds"])
@@ -841,9 +877,7 @@ def _recalculate_selection(
         buy_leg.shares = buy_shares
         details = dict(buy_leg.details)
         details.pop("depends_on_leg_id", None)
-        details["depends_on_leg_ids"] = list(
-            dict.fromkeys(str(item) for item in pool["sell_leg_ids"])
-        )
+        details["depends_on_leg_ids"] = list(dict.fromkeys(item for item in pool["sell_leg_ids"]))
         buy_leg.details = details
 
         first_group = group_ids[0]
@@ -866,20 +900,19 @@ def _recalculate_selection(
             continue
         sell_leg = action["sell_leg"]
         selected_rows = action["selected_rows"]
-        assert isinstance(sell_leg, RecommendationLeg)
-        assert isinstance(selected_rows, list)
+
         consolidated_legs.append(
             ConsolidatedLeg(
                 leg_id=sell_leg.id,
                 side="SELL",
-                ticker=str(action["source_ticker"]),
+                ticker=action["source_ticker"],
                 shares=_decimal(action["shares_sold"]),
                 estimated_unit_price_usd=sell_leg.estimated_unit_price_usd,
                 selected_lots=tuple(
                     LotAllocation(row.broker_lot_id, row.shares) for row in selected_rows
                 ),
                 sequence=sell_leg.sequence,
-                group_ids=(str(action["group"].id),),
+                group_ids=(action["group"].id,),
             )
         )
     for buy_leg in all_buy_legs:
@@ -898,9 +931,9 @@ def _recalculate_selection(
                 ticker=buy_security.ticker,
                 shares=buy_leg.shares,
                 estimated_unit_price_usd=buy_leg.estimated_unit_price_usd,
-                depends_on_leg_ids=tuple(dict.fromkeys(str(item) for item in pool["sell_leg_ids"])),
+                depends_on_leg_ids=tuple(dict.fromkeys(item for item in pool["sell_leg_ids"])),
                 sequence=buy_leg.sequence,
-                group_ids=tuple(dict.fromkeys(str(item) for item in pool["group_ids"])),
+                group_ids=tuple(dict.fromkeys(item for item in pool["group_ids"])),
             )
         )
     try:
@@ -1081,7 +1114,7 @@ def apply_lot_review_intent(
         raise _lot_intent_error(exc) from exc
 
     requested_ids = request.broker_lot_ids
-    current_lots = {}
+    current_lots: dict[str, CurrentTaxLot] = {}
     if requested_ids:
         current_lots = {
             lot.broker_lot_id: lot
@@ -1373,7 +1406,7 @@ def _frozen_run_display_context(run: OptimizerRun) -> dict[str, object] | None:
         activated_at = _run_context_datetime(raw_activated_at)
     except TypeError, ValueError:
         return None
-    context = {
+    context: dict[str, object] = {
         "available": True,
         "source": "frozen_input_bundle",
         "policy_revision_id": run.policy_revision_id,
@@ -1556,7 +1589,7 @@ def _leg_dict(
     elif details.get("depends_on_leg_id"):
         dependencies = [details["depends_on_leg_id"]]
     else:
-        dependencies = []
+        dependencies: list[str] = []
     selected_lots = (
         [
             {
@@ -1630,7 +1663,7 @@ def run_recommendations(session: Session, run: OptimizerRun) -> dict[str, object
         group_leg_ids[membership.group_id].append(membership.leg_id)
         leg_group_ids.setdefault(membership.leg_id, []).append(membership.group_id)
 
-    legs = (
+    legs: list[RecommendationLeg] = list(
         session.scalars(
             select(RecommendationLeg)
             .join(RecommendationGroupLeg, RecommendationGroupLeg.leg_id == RecommendationLeg.id)
@@ -1785,7 +1818,7 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
         {
             **{key: metadata.get(key) for key in fields if key in metadata},
             "record_type": "metadata",
-            "warnings": ";".join(metadata["warnings"]),
+            "warnings": ";".join(cast(list[str], metadata["warnings"])),
             "estimated_tax_benefit_status": response["estimated_tax_benefit_status"],
             "optimizer_metrics_json": json.dumps(
                 response["optimizer_metrics"], sort_keys=True, separators=(",", ":"), default=str
@@ -1809,24 +1842,31 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
             ),
         }
     )
-    groups_by_id = {group["group_id"]: group for group in response["groups"]}
-    for leg in response["consolidated_legs"]:
-        linked_groups = [groups_by_id[group_id] for group_id in leg["group_ids"]]
-        lot_rows = leg["selected_lots"] if leg["side"] == "SELL" else [None]
+    export_groups = cast(list[dict[str, object]], response["groups"])
+    export_legs = cast(list[dict[str, object]], response["consolidated_legs"])
+    groups_by_id = {group["group_id"]: group for group in export_groups}
+    for leg in export_legs:
+        group_ids = cast(list[str], leg["group_ids"])
+        linked_groups = [groups_by_id[group_id] for group_id in group_ids]
+        lot_rows = (
+            cast(list[dict[str, object]], leg["selected_lots"]) if leg["side"] == "SELL" else [None]
+        )
         for lot in lot_rows:
             writer.writerow(
                 {
                     **{key: metadata.get(key) for key in fields if key in metadata},
                     "estimated_tax_benefit_usd": "",
                     "estimated_tax_benefit_status": response["estimated_tax_benefit_status"],
-                    "group_id": ";".join(leg["group_ids"]),
+                    "group_id": ";".join(group_ids),
                     "group_ids": json.dumps(leg["group_ids"], separators=(",", ":")),
                     "rank": ";".join(str(group["rank"]) for group in linked_groups),
                     "selected": leg["selected"],
                     "rejected": any(group["rejected"] for group in linked_groups)
                     if leg["side"] == "SELL"
                     else "",
-                    "note": ";".join(group["note"] or "" for group in linked_groups),
+                    "note": ";".join(
+                        cast(str | None, group["note"]) or "" for group in linked_groups
+                    ),
                     "leg_id": leg["leg_id"],
                     "side": leg["side"],
                     "ticker": leg["ticker"],
@@ -1845,7 +1885,9 @@ def export_run(session: Session, run: OptimizerRun, file_format: str) -> tuple[s
                     "net_lt_realized_usd": leg["net_lt_realized_usd"],
                     "warnings": ";".join(
                         dict.fromkeys(
-                            warning for group in linked_groups for warning in group["warnings"]
+                            warning
+                            for group in linked_groups
+                            for warning in cast(list[str], group["warnings"])
                         )
                     ),
                 }
@@ -1866,10 +1908,10 @@ def wash_sales(session: Session) -> dict[str, object]:
     ).all()
     history: list[dict[str, object]] = []
     securities = {row.id: row for row in session.scalars(select(Security)).all()}
-    acquisitions = []
+    acquisitions: list[dict[str, object]] = []
     for transaction in transactions:
         security = securities.get(transaction.security_id)
-        row = {
+        row: dict[str, object] = {
             "broker_transaction_key": transaction.broker_transaction_key,
             "ticker": security.ticker if security else None,
             "transaction_kind": transaction.transaction_kind,

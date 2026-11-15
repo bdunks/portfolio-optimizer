@@ -15,10 +15,15 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal, TypeGuard, cast
 from uuid import UUID, uuid4, uuid5
 
+if TYPE_CHECKING:
+    from app.optimizer.core import OptimizerMetadata, OptimizerResult, TradeGroupPriority
+    from app.optimizer.validation import CandidateValidation
+
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from app.db.models import (
@@ -34,8 +39,15 @@ from app.db.models import (
 )
 from app.domain.allocation import resolve_holding
 from app.domain.decimal_math import exact_product, exact_sum
-from app.domain.financial_inputs import FinancialInputs, PolicySettings
-from app.domain.portfolio_accounting import ConsolidatedLeg, LotEffect
+from app.domain.financial_inputs import FinancialInputs, LotInput, PolicySettings
+from app.domain.portfolio_accounting import (
+    AccountSnapshot,
+    ConsolidatedLeg,
+    LotAllocation,
+    LotEffect,
+    PortfolioEvaluation,
+    TransitionSnapshot,
+)
 from app.domain.trade_dates import resolve_proposed_trade_date
 from app.optimizer.runtime import (
     DEFAULT_TIMEOUT_SECONDS,
@@ -62,8 +74,8 @@ _BATCH_LIMIT_KEYS = (
 
 @dataclass(frozen=True, slots=True)
 class ValidatedOptimizerCandidate:
-    candidate: object
-    validation: object | None
+    candidate: OptimizerResult
+    validation: CandidateValidation | None
     overall_deadline: float
     status: str
 
@@ -71,7 +83,7 @@ class ValidatedOptimizerCandidate:
 @dataclass(frozen=True, slots=True)
 class PreparedOptimizerRun:
     inputs: FinancialInputs
-    batch_settings: dict[str, object]
+    batch_settings: dict[str, int | str]
     frozen_input_bundle: dict[str, object]
     input_fingerprint: str
     policy_revision_id: str
@@ -138,7 +150,7 @@ def _fingerprint_bundle(value: object) -> str:
 
 def apply_run_batch_limits(
     inputs: FinancialInputs, request: object
-) -> tuple[FinancialInputs, dict[str, object]]:
+) -> tuple[FinancialInputs, dict[str, int | str]]:
     """Apply request limits as an immutable policy tightening for this saved run."""
     settings = inputs.policy.settings
     configured: dict[str, int] = {}
@@ -180,7 +192,7 @@ def apply_run_batch_limits(
     setting_values.update(effective)
     limited_policy = replace(inputs.policy, settings=PolicySettings.from_mapping(setting_values))
     limited_inputs = replace(inputs, policy=limited_policy)
-    batch_settings: dict[str, object] = {
+    batch_settings: dict[str, int | str] = {
         **effective,
         "max_batch_turnover_pct": str(settings.get("max_batch_turnover_pct")),
         "min_buy_order_notional_usd": str(settings.get("min_buy_order_notional_usd")),
@@ -241,7 +253,8 @@ def assert_optimizer_run_current(
     deadline: float | None = None,
 ) -> None:
     """Re-read policy and portfolio state immediately before atomic publication."""
-    limits = {key: prepared.batch_settings[key] for key in _BATCH_LIMIT_KEYS}
+    # apply_run_batch_limits validated these fixed keys as positive integers before freezing.
+    limits = cast(dict[str, int], {key: prepared.batch_settings[key] for key in _BATCH_LIMIT_KEYS})
     request = OptimizerRunInput(
         mode="real_optimizer",
         proposed_trade_date=prepared.proposed_trade_date,
@@ -268,7 +281,7 @@ def assert_optimizer_run_current(
         raise WorkerTimeoutError("optimizer publication missed the shared deadline")
 
 
-def _core_contract() -> tuple[type[Any], Any, Any]:
+def _core_contract() -> tuple[type[Any], Callable[..., object], Callable[..., object]]:
     """Load worker and validator lazily so deterministic DEMO does not require the core."""
     core = importlib.import_module("app.optimizer.core")
     validation_module = importlib.import_module("app.optimizer.validation")
@@ -335,29 +348,32 @@ async def run_validated_candidate(
             details={"basket_unchanged": True},
         )
 
-    validation: object | None = None
+    validation: CandidateValidation | None = None
     if status in {"ready", "no_trade"}:
         if validation_executor is None:
-            validation = validator(inputs, candidate_legs, deadline=worker_result.overall_deadline)
+            raw_validation = validator(
+                inputs, candidate_legs, deadline=worker_result.overall_deadline
+            )
         else:
-            validation = await validation_executor.run(
+            raw_validation = await validation_executor.run(
                 validator, inputs, candidate_legs, deadline=worker_result.overall_deadline
             )
-        if getattr(validation, "accepted", False) is not True:
-            reasons = getattr(validation, "reasons", ())
+        if getattr(raw_validation, "accepted", False) is not True:
+            reasons = getattr(raw_validation, "reasons", ())
             raise CandidateRejectedError(
                 "optimizer_candidate_rejected",
                 "The optimizer candidate failed independent owner validation; no recommendation run was created",
                 status_code=422,
                 details={
-                    "reasons": list(reasons) if isinstance(reasons, tuple | list) else [],
+                    "reasons": list(reasons) if isinstance(reasons, (tuple, list)) else [],
                     "basket_unchanged": True,
                 },
             )
+        validation = cast("CandidateValidation", raw_validation)
     if time.monotonic() >= worker_result.overall_deadline:
         raise WorkerTimeoutError("optimizer validation missed the shared deadline")
     return ValidatedOptimizerCandidate(
-        candidate, validation, worker_result.overall_deadline, status
+        cast("OptimizerResult", candidate), validation, worker_result.overall_deadline, status
     )
 
 
@@ -395,24 +411,21 @@ def _jsonable(value: object) -> object:
         return value.isoformat()
     if isinstance(value, Mapping):
         return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, tuple | list):
+    if isinstance(value, (tuple, list)):
         return [_jsonable(item) for item in value]
     if isinstance(value, bool | int | float | str) or value is None:
         return value
     return str(value)
 
 
-def _account_snapshot_payload(snapshot: object) -> dict[str, object]:
+def _account_snapshot_payload(snapshot: AccountSnapshot) -> dict[str, object]:
     return {
-        "total_portfolio_usd": str(object.__getattribute__(snapshot, "portfolio_total_usd")),
-        "sleeve_weights_pct": {
-            key: str(value)
-            for key, value in object.__getattribute__(snapshot, "sleeve_weights_pct")
-        },
+        "total_portfolio_usd": str(snapshot.portfolio_total_usd),
+        "sleeve_weights_pct": {key: str(value) for key, value in snapshot.sleeve_weights_pct},
     }
 
 
-def _transition_snapshot_payload(snapshot: object) -> dict[str, object]:
+def _transition_snapshot_payload(snapshot: TransitionSnapshot) -> dict[str, object]:
     return {
         "us_sleeve_value_usd": str(snapshot.us_sleeve_value_usd),
         "us_sleeve_whole_portfolio_pct": str(snapshot.us_sleeve_whole_portfolio_pct),
@@ -429,7 +442,7 @@ def _transition_snapshot_payload(snapshot: object) -> dict[str, object]:
 
 
 def _portfolio_effects_payload(
-    evaluation: object | None, inputs: FinancialInputs
+    evaluation: PortfolioEvaluation | None, inputs: FinancialInputs
 ) -> dict[str, object] | None:
     if evaluation is None:
         return None
@@ -549,16 +562,16 @@ def _exposure_coverage_payload(validation: object | None) -> dict[str, object] |
     }
 
 
-def _search_evidence(metadata: object) -> dict[str, object]:
+def _search_evidence(metadata: OptimizerMetadata) -> dict[str, object]:
     """Expose incomplete-search diagnostics without presenting infeasibility as proven."""
     return {
         "search_state": "incomplete",
         "feasibility_proven": False,
-        "tax_regions_considered": getattr(metadata, "tax_regions_considered", 0),
-        "tax_regions_solved": getattr(metadata, "tax_regions_solved", 0),
-        "tax_region_search_complete": getattr(metadata, "tax_region_search_complete", False),
-        "integer_search_complete": getattr(metadata, "integer_search_complete", False),
-        "solver_statuses": list(getattr(metadata, "solver_statuses", ())),
+        "tax_regions_considered": metadata.tax_regions_considered,
+        "tax_regions_solved": metadata.tax_regions_solved,
+        "tax_region_search_complete": metadata.tax_region_search_complete,
+        "integer_search_complete": metadata.integer_search_complete,
+        "solver_statuses": list(metadata.solver_statuses),
     }
 
 
@@ -568,15 +581,15 @@ def _optimizer_metrics(
     candidate = result.candidate
     metadata = candidate.metadata
     validation = result.validation
-    evaluation = getattr(validation, "evaluation", None) if validation is not None else None
+    evaluation = validation.evaluation if validation is not None else None
     sale_wash, buy_wash = _wash_assessment_payload(validation)
     portfolio = _portfolio_effects_payload(evaluation, prepared.inputs)
     tax = _tax_assessment_payload(validation)
     warnings = list(metadata.warnings)
     if result.status == "search_incomplete":
         warnings.append("search_incomplete_no_feasibility_claim")
-    priorities = []
-    for priority in getattr(metadata, "trade_group_priorities", ()):
+    priorities: list[dict[str, object]] = []
+    for priority in metadata.trade_group_priorities:
         priorities.append(
             {
                 "core_group_id": priority.group_id,
@@ -657,9 +670,9 @@ def _optimizer_metrics(
 
 
 def _unique_strings(values: object) -> list[str]:
-    if not isinstance(values, list | tuple):
+    if not isinstance(values, (list, tuple)):
         return []
-    return list(dict.fromkeys(str(value) for value in values if isinstance(value, str) and value))
+    return list(dict.fromkeys(value for value in values if isinstance(value, str) and value))
 
 
 def _core_group_ids(legs: Sequence[ConsolidatedLeg]) -> list[str]:
@@ -672,8 +685,8 @@ def _core_group_ids(legs: Sequence[ConsolidatedLeg]) -> list[str]:
     return sorted(groups)
 
 
-def _priority_map(metadata: object) -> dict[str, object]:
-    return {str(row.group_id): row for row in getattr(metadata, "trade_group_priorities", ())}
+def _priority_map(metadata: OptimizerMetadata) -> dict[str, TradeGroupPriority]:
+    return {row.group_id: row for row in metadata.trade_group_priorities}
 
 
 def _stable_id(run_id: str, prefix: str, value: str) -> str:
@@ -752,8 +765,8 @@ def _existing_group_state(
         if current_selected_lots:
             selected_lots_by_core.setdefault(core_id, []).extend(current_selected_lots)
         annotations[core_id] = {
-            "selected": bool(group.selected),
-            "rejected": bool(group.rejected),
+            "selected": group.selected,
+            "rejected": group.rejected,
             "note": group.note,
             "rejection_reason": group.rejection_reason,
             "rank": group.rank,
@@ -945,7 +958,7 @@ def _persist_candidate(
         remapped_selection = dict(selected_groups)
         for old_core_id, owner_key in ownership_remap.items():
             if old_core_id in remapped_selection:
-                remapped_selection[owner_key] = bool(
+                remapped_selection[owner_key] = (
                     remapped_selection.get(owner_key, False) or remapped_selection[old_core_id]
                 )
                 remapped_selection[old_core_id] = False
@@ -991,7 +1004,7 @@ def _persist_candidate(
         if outcome.status == "search_incomplete"
         else sorted(
             set(active_group_ids) | (alias_keys - assigned_aliases),
-            key=lambda key: (getattr(group_priorities.get(key), "rank", 10**6), key),
+            key=lambda key: (group_priorities[key].rank if key in group_priorities else 10**6, key),
         )
     )
     sources_by_group = {core_id: sources_by_core.get(core_id, {core_id}) for core_id in group_ids}
@@ -1009,7 +1022,7 @@ def _persist_candidate(
 
     ordered_group_ids = sorted(
         group_ids,
-        key=lambda key: (getattr(group_priorities.get(key), "rank", 10**6), key),
+        key=lambda key: (group_priorities[key].rank if key in group_priorities else 10**6, key),
     )
     candidate_universe: dict[str, list[str]] = {}
     for core_id in group_ids:
@@ -1042,7 +1055,7 @@ def _persist_candidate(
     rank_for_group: dict[str, int] = {}
     for core_group_id in group_ids:
         priority = group_priorities.get(core_group_id)
-        proposed_rank = getattr(priority, "rank", None)
+        proposed_rank = priority.rank if priority is not None else None
         if (
             isinstance(proposed_rank, int)
             and proposed_rank > 0
@@ -1096,9 +1109,7 @@ def _persist_candidate(
             sources_by_group[core_group_id],
             key=lambda key: (
                 key != core_group_id,
-                old_groups_by_core.get(key, [None])[0].rank
-                if old_groups_by_core.get(key)
-                else 10**6,
+                old_groups_by_core[key][0].rank if key in old_groups_by_core else 10**6,
                 key,
             ),
         )
@@ -1264,9 +1275,13 @@ def _persist_candidate(
         realized_lt = exact_sum(realized_lt_values)
         exclusive_buys = [leg for leg in group_buys if len(leg.group_ids) == 1]
         buy_is_fully_attributed = len(exclusive_buys) == len(group_buys)
-        rationale = tuple(getattr(priority, "rationale", ())) if priority is not None else ()
-        state = annotations.get(core_group_id, {})
-        previous_impact = state.get("impact", {}) if isinstance(state.get("impact"), dict) else {}
+        rationale = priority.rationale if priority is not None else ()
+        state: dict[str, object] = annotations.get(core_group_id, dict[str, object]())
+        previous_impact = (
+            state.get("impact", dict[str, object]())
+            if isinstance(state.get("impact"), dict)
+            else dict[str, object]()
+        )
         wash_status = (
             "validated" if group_sells and outcome.validation is not None else "not_applicable"
         )
@@ -1332,7 +1347,7 @@ def _persist_candidate(
             rationale=rationale_text,
             estimated_benefit_usd=None,
             impact=impact,
-            dependencies=[],
+            dependencies=list[str](),
             selected=bool(state.get("selected", core_group_id in active_group_ids)),
             rejected=bool(state.get("rejected", False)),
             note=state.get("note") if isinstance(state.get("note"), str) else None,
@@ -1345,7 +1360,7 @@ def _persist_candidate(
 
     # Membership rows are inserted without ORM relationships, so persist their groups first.
     session.flush()
-    leg_ids = {str(leg.leg_id): _stable_id(run.id, "leg", str(leg.leg_id)) for leg in legs}
+    leg_ids = {leg.leg_id: _stable_id(run.id, "leg", leg.leg_id) for leg in legs}
     seen_leg_keys: set[tuple[str, str]] = set()
     for leg in legs:
         key = (leg.side, leg.ticker.upper())
@@ -1375,7 +1390,7 @@ def _persist_candidate(
                 "Optimizer leg references an unknown security",
                 status_code=502,
             )
-        persistent_id = leg_ids[str(leg.leg_id)]
+        persistent_id = leg_ids[leg.leg_id]
         persistent_dependencies = [
             leg_ids[item] for item in leg.depends_on_leg_ids if item in leg_ids
         ]
@@ -1387,7 +1402,7 @@ def _persist_candidate(
             )
         st_realized_values: list[Decimal] = []
         lt_realized_values: list[Decimal] = []
-        lot_rows: list[tuple[object, object, Decimal, str]] = []
+        lot_rows: list[tuple[LotAllocation, LotInput, Decimal, Literal["ST", "LT"]]] = []
         for allocation in leg.selected_lots:
             lot = lots_by_id.get(allocation.broker_lot_id)
             effect = validated_lot_effects.get(allocation.broker_lot_id)
@@ -1635,16 +1650,19 @@ def _run_state(
 
 def _assert_same_run_state(session: Session, state: _RunState) -> None:
     revision = func.coalesce(func.json_extract(OptimizerRun.metrics, "$.basket_revision"), 0)
-    result = session.execute(
-        update(OptimizerRun)
-        .where(
-            OptimizerRun.id == state.run_id,
-            OptimizerRun.input_fingerprint == state.input_fingerprint,
-            OptimizerRun.source_generation == state.source_generation,
-            revision == state.basket_revision,
-        )
-        .values(input_fingerprint=OptimizerRun.input_fingerprint)
-        .execution_options(synchronize_session=False)
+    result = cast(
+        CursorResult[Any],
+        session.execute(
+            update(OptimizerRun)
+            .where(
+                OptimizerRun.id == state.run_id,
+                OptimizerRun.input_fingerprint == state.input_fingerprint,
+                OptimizerRun.source_generation == state.source_generation,
+                revision == state.basket_revision,
+            )
+            .values(input_fingerprint=OptimizerRun.input_fingerprint)
+            .execution_options(synchronize_session=False)
+        ),
     )
     if result.rowcount != 1:
         raise AppError(
@@ -1795,7 +1813,7 @@ def _validate_intent_lots(
     return tuple(request.broker_lot_ids)
 
 
-def _positive_whole_shares(value: object) -> bool:
+def _positive_whole_shares(value: object) -> TypeGuard[Decimal]:
     return (
         isinstance(value, Decimal)
         and value.is_finite()
@@ -1912,8 +1930,8 @@ async def _recompute_real_basket(
     except (WorkerCapacityError, WorkerTimeoutError) as exc:
         raise _app_error_for_worker_error(exc, basket_unchanged=True) from exc
     if outcome.status not in {"ready", "no_trade"}:
-        candidate_metadata = getattr(outcome.candidate, "metadata", None)
-        warnings = list(getattr(candidate_metadata, "warnings", ()))
+        candidate_metadata = outcome.candidate.metadata
+        warnings = list(candidate_metadata.warnings)
         if outcome.status == "search_incomplete":
             warnings.append("search_incomplete_no_feasibility_claim")
         details: dict[str, object] = {
@@ -2251,11 +2269,12 @@ def real_run_recommendations(session: Session, run: OptimizerRun) -> dict[str, o
             .where(RecommendationSelectedLot.leg_id == leg.id)
             .order_by(RecommendationSelectedLot.broker_lot_id)
         ).all()
+        security = session.scalars(select(Security).where(Security.id == leg.security_id)).one()
         leg_responses.append(
             {
                 "leg_id": leg.id,
                 "side": leg.side,
-                "ticker": session.get(Security, leg.security_id).ticker,
+                "ticker": security.ticker,
                 "shares": str(leg.shares),
                 "estimated_unit_price_usd": str(leg.estimated_unit_price_usd),
                 "estimated_notional_usd": str(

@@ -28,9 +28,9 @@ from app.optimizer.core import (
     OptimizerMetadata,
     OptimizerResult,
     TradeGroupPriority,
-    _Screen,
     _cohere_trade_group_legs,
     _group_priorities,
+    _Screen,
 )
 from app.optimizer.validation import CandidateValidation, validate_candidate
 from app.schemas import (
@@ -63,10 +63,10 @@ class _LegDetails(TypedDict):
     core_group_ids: list[str]
 
 
-
 class _RecommendationImpact(TypedDict):
     sell_proceeds_usd: str
     replacement_buy_cost_usd: str
+
 
 class _RecommendationLeg(TypedDict):
     side: str
@@ -104,9 +104,7 @@ class _IntentErrorDetails(TypedDict):
 type _ReviewRuntime = tuple[
     optimizer_service.ProcessSupervisor, optimizer_service.BoundedValidationExecutor
 ]
-type _PrioritySnapshot = tuple[
-    _OptimizerMetrics, _Recommendations, dict[str, tuple[str, int]]
-]
+type _PrioritySnapshot = tuple[_OptimizerMetrics, _Recommendations, dict[str, tuple[str, int]]]
 
 
 @pytest_asyncio.fixture
@@ -192,6 +190,7 @@ def _service_outcome(
     return optimizer_service.ValidatedOptimizerCandidate(
         candidate, validation, time.monotonic() + 60, status
     )
+
 
 def _outcome_with_real_priorities(
     inputs: FinancialInputs,

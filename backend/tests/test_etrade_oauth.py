@@ -611,9 +611,7 @@ def test_oauth_dependency_debug_logging_does_not_expose_credentials(
         ],
     )
     started = service.start()
-    assert parse_qs(urlsplit(started["authorize_url"]).query)["token"] == [
-        "request-public-token"
-    ]
+    assert parse_qs(urlsplit(started["authorize_url"]).query)["token"] == ["request-public-token"]
     service.verify("246810")
     clock.now += timedelta(minutes=90, seconds=1)
 
@@ -649,6 +647,7 @@ def test_oauth_dependency_debug_logging_does_not_expose_credentials(
         )
     )
     service.close()
+
 
 def test_renewal_failure_expires_tokens_and_hides_broker_body(
     caplog: pytest.LogCaptureFixture,

@@ -323,7 +323,7 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
     tmp_path: Path,
     legacy_details: object,
     expected_details: dict[str, object] | None,
-) -> None
+) -> None:
     database_url = f"sqlite:///{tmp_path / 'legacy-consolidated.sqlite3'}"
     engine = create_database_engine(database_url)
     _upgrade_to(engine, "0004_database_integrity_checks")
@@ -559,7 +559,7 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
         )
 
     if expected_details is None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="dictionary update sequence"):
             _upgrade_to(engine, "0005_consolidated_recommendation_legs")
         assert "recommendation_group_leg" not in inspect(engine).get_table_names()
         engine.dispose()

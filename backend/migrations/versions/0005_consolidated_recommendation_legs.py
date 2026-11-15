@@ -6,8 +6,8 @@ Revises: 0004_database_integrity_checks
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 import json
+from collections.abc import Iterable
 from decimal import Decimal, localcontext
 from typing import cast
 
@@ -100,7 +100,10 @@ def upgrade() -> None:
     for duplicates in grouped.values():
         if len(duplicates) < 2:
             continue
-        affected_run_ids.add(str(duplicates[0]["run_id"]))
+        run_id = duplicates[0]["run_id"]
+        if not isinstance(run_id, str):
+            raise TypeError("Legacy recommendation run ID must be text")
+        affected_run_ids.add(run_id)
         canonical = duplicates[0]
         duplicate_ids = [str(row["id"]) for row in duplicates[1:]]
         group_ids = list(dict.fromkeys(str(row["group_id"]) for row in duplicates))
@@ -121,13 +124,13 @@ def upgrade() -> None:
             details = json.loads(details)
         details = dict(cast(Iterable[tuple[object, object]] | dict[object, object], details or {}))
         details.pop("depends_on_leg_id", None)
-        details["depends_on_leg_ids"] = [str(leg_id) for leg_id in sell_ids]
+        details["depends_on_leg_ids"] = sell_ids
         share_values = tuple(Decimal(str(row["shares"])) for row in duplicates)
         exponents: list[int] = []
         for value in share_values:
             exponent = value.as_tuple().exponent
             if not isinstance(exponent, int):
-                raise ValueError("Decimal share values must be finite")
+                raise TypeError("Decimal share exponent must be an integer")
             exponents.append(exponent)
         min_exponent = min(exponents)
         max_adjusted = max(value.adjusted() if value else 0 for value in share_values)

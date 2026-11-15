@@ -11,7 +11,7 @@ def _required_precision(values: tuple[Decimal, ...]) -> int:
     for value in values:
         exponent = value.as_tuple().exponent
         if not isinstance(exponent, int):
-            raise ValueError("Decimal values must be finite")
+            raise TypeError("Decimal exponent must be an integer")
         exponents.append(exponent)
     min_exponent = min(exponents)
     max_adjusted = max(value.adjusted() if value else 0 for value in values)

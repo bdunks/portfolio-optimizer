@@ -69,7 +69,6 @@ def create_database_engine(database_url: str) -> Engine:
     return engine
 
 
-def make_session_factory(engine: Engine) -> sessionmaker:
 def make_session_factory(engine: Engine) -> sessionmaker[Session]:
     return sessionmaker[Session](bind=engine, expire_on_commit=False, autoflush=False)
 

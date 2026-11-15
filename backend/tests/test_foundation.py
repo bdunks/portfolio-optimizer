@@ -468,7 +468,7 @@ def test_exact_difference_does_not_round_unary_negation() -> None:
 
 @pytest.mark.parametrize("special_value", ["NaN", "sNaN", "Infinity", "-Infinity"])
 def test_exact_sum_rejects_nonfinite_decimal_values(special_value: str) -> None:
-    with pytest.raises(ValueError, match="Decimal values must be finite"):
+    with pytest.raises(TypeError, match="Decimal exponent must be an integer"):
         exact_sum([Decimal(special_value)])
 
 

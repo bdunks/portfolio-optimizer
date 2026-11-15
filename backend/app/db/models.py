@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, override
 
 from sqlalchemy import (
     JSON,
@@ -40,6 +40,7 @@ class DecimalText(TypeDecorator[Decimal]):
     impl = Text
     cache_ok = True
 
+    @override
     def process_bind_param(self, value: Decimal | str | None, dialect: object) -> str | None:
         del dialect
         if value is None:
@@ -48,6 +49,7 @@ class DecimalText(TypeDecorator[Decimal]):
             value = Decimal(value)
         return canonical_decimal(value)
 
+    @override
     def process_result_value(self, value: str | None, dialect: object) -> Decimal | None:
         del dialect
         return Decimal(value) if value is not None else None
@@ -59,6 +61,7 @@ class UTCDateTime(TypeDecorator[datetime]):
     impl = DateTime(timezone=True)
     cache_ok = True
 
+    @override
     def process_bind_param(self, value: datetime | None, dialect: object) -> datetime | None:
         del dialect
         if value is None:
@@ -67,6 +70,7 @@ class UTCDateTime(TypeDecorator[datetime]):
             return value.replace(tzinfo=UTC)
         return value.astimezone(UTC)
 
+    @override
     def process_result_value(self, value: datetime | None, dialect: object) -> datetime | None:
         del dialect
         if value is None:

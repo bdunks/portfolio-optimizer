@@ -264,7 +264,7 @@ class EtradeOAuthService:
         try:
             fields = parse_qs(body, keep_blank_values=True, strict_parsing=True, max_num_fields=20)
         except ValueError:
-            fields = {}
+            fields: dict[str, list[str]] = {}
         tokens = fields.get("oauth_token", [])
         secrets = fields.get("oauth_token_secret", [])
         if len(tokens) != 1 or not tokens[0] or len(secrets) != 1 or not secrets[0]:

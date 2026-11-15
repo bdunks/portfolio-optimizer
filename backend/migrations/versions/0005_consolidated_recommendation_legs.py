@@ -6,8 +6,10 @@ Revises: 0004_database_integrity_checks
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import json
 from decimal import Decimal, localcontext
+from typing import cast
 
 import sqlalchemy as sa
 from alembic import op
@@ -117,11 +119,17 @@ def upgrade() -> None:
         details = canonical["details"]
         if isinstance(details, str):
             details = json.loads(details)
-        details = dict(details or {})
+        details = dict(cast(Iterable[tuple[object, object]] | dict[object, object], details or {}))
         details.pop("depends_on_leg_id", None)
         details["depends_on_leg_ids"] = [str(leg_id) for leg_id in sell_ids]
         share_values = tuple(Decimal(str(row["shares"])) for row in duplicates)
-        min_exponent = min(value.as_tuple().exponent for value in share_values)
+        exponents: list[int] = []
+        for value in share_values:
+            exponent = value.as_tuple().exponent
+            if not isinstance(exponent, int):
+                raise ValueError("Decimal share values must be finite")
+            exponents.append(exponent)
+        min_exponent = min(exponents)
         max_adjusted = max(value.adjusted() if value else 0 for value in share_values)
         with localcontext() as context:
             context.prec = max(28, max_adjusted - min_exponent + len(str(len(share_values))) + 4)

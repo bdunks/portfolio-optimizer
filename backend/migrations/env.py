@@ -16,7 +16,12 @@ target_metadata = Base.metadata
 
 
 def _database_url() -> str:
-    return os.environ.get("PORTFOLIO_DATABASE_URL") or config.get_main_option("sqlalchemy.url")
+    database_url = os.environ.get("PORTFOLIO_DATABASE_URL") or config.get_main_option(
+        "sqlalchemy.url"
+    )
+    if database_url is None:
+        raise RuntimeError("Alembic database URL is not configured")
+    return database_url
 
 
 def run_migrations_offline() -> None:

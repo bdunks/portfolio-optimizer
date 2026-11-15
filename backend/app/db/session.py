@@ -70,9 +70,10 @@ def create_database_engine(database_url: str) -> Engine:
 
 
 def make_session_factory(engine: Engine) -> sessionmaker:
-    return sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+def make_session_factory(engine: Engine) -> sessionmaker[Session]:
+    return sessionmaker[Session](bind=engine, expire_on_commit=False, autoflush=False)
 
 
-def get_session(factory: sessionmaker) -> Generator[Session]:
+def get_session(factory: sessionmaker[Session]) -> Generator[Session]:
     with factory() as session:
         yield session

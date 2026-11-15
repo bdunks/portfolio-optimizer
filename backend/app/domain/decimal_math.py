@@ -7,10 +7,15 @@ from decimal import Decimal, localcontext
 def _required_precision(values: tuple[Decimal, ...]) -> int:
     if not values:
         return 28
-    min_exponent = min(value.as_tuple().exponent for value in values)
+    exponents: list[int] = []
+    for value in values:
+        exponent = value.as_tuple().exponent
+        if not isinstance(exponent, int):
+            raise ValueError("Decimal values must be finite")
+        exponents.append(exponent)
+    min_exponent = min(exponents)
     max_adjusted = max(value.adjusted() if value else 0 for value in values)
     return max(28, max_adjusted - min_exponent + len(str(len(values))) + 4)
-
 
 def exact_sum(values: Iterable[Decimal]) -> Decimal:
     items = tuple(values)

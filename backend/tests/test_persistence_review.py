@@ -304,9 +304,26 @@ def test_integrity_migration_repairs_existing_head_tables_without_losing_rows(
     engine.dispose()
 
 
+@pytest.mark.parametrize(
+    ("legacy_details", "expected_details"),
+    [
+        (
+            {"depends_on_leg_id": "sell-a", "min_buy_order_notional_usd": "500"},
+            {"min_buy_order_notional_usd": "500"},
+        ),
+        ([], {}),
+        (
+            [["depends_on_leg_id", "sell-a"], ["legacy_note", "preserved"]],
+            {"legacy_note": "preserved"},
+        ),
+        ("invalid", None),
+    ],
+)
 def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs(
     tmp_path: Path,
-) -> None:
+    legacy_details: object,
+    expected_details: dict[str, object] | None,
+) -> None
     database_url = f"sqlite:///{tmp_path / 'legacy-consolidated.sqlite3'}"
     engine = create_database_engine(database_url)
     _upgrade_to(engine, "0004_database_integrity_checks")
@@ -502,6 +519,10 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
         )
         session.add_all([sell_a, sell_b, zero_sell, buy_a, buy_b])
         session.flush()
+        session.execute(
+            text("UPDATE recommendation_leg SET details = :details WHERE id = 'buy-a'"),
+            {"details": json.dumps(legacy_details)},
+        )
         session.add_all(
             [
                 RecommendationSelectedLot(
@@ -537,13 +558,22 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
             ]
         )
 
+    if expected_details is None:
+        with pytest.raises(ValueError):
+            _upgrade_to(engine, "0005_consolidated_recommendation_legs")
+        assert "recommendation_group_leg" not in inspect(engine).get_table_names()
+        engine.dispose()
+        return
     _upgrade_to(engine, "0005_consolidated_recommendation_legs")
     with factory() as session:
         buys = session.query(RecommendationLeg).filter_by(side="BUY").all()
         assert len(buys) == 1
         assert buys[0].id == "buy-a"
         assert buys[0].shares == Decimal(3)
-        assert buys[0].details["depends_on_leg_ids"] == ["sell-a", "sell-b"]
+        assert buys[0].details == {
+            **expected_details,
+            "depends_on_leg_ids": ["sell-a", "sell-b"],
+        }
         assert session.query(RecommendationGroupLeg).filter_by(leg_id="buy-a").count() == 2
         assert session.get(RecommendationLeg, "buy-b") is None
         assert session.get(RecommendationLeg, "sell-a").shares == Decimal(2)

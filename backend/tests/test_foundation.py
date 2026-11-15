@@ -15,7 +15,7 @@ from app.db.migrate import upgrade_database
 from app.db.models import PolicyRevision, Security
 from app.db.session import create_database_engine
 from app.domain.allocation import SecurityIdentity, SleeveAssignment, resolve_holding
-from app.domain.decimal_math import exact_difference
+from app.domain.decimal_math import exact_difference, exact_sum
 from app.main import create_app
 from app.services.financial_input_loader import load_allocation_policy
 
@@ -464,3 +464,14 @@ def test_exact_difference_does_not_round_unary_negation() -> None:
     left = Decimal(1)
     right = Decimal("0.123456789012345678901234567890123456789")
     assert exact_difference(left, right) == Decimal("0.876543210987654321098765432109876543211")
+
+
+@pytest.mark.parametrize("special_value", ["NaN", "sNaN", "Infinity", "-Infinity"])
+def test_exact_sum_rejects_nonfinite_decimal_values(special_value: str) -> None:
+    with pytest.raises(ValueError, match="Decimal values must be finite"):
+        exact_sum([Decimal(special_value)])
+
+
+def test_exact_sum_preserves_empty_and_finite_sum_behavior() -> None:
+    assert exact_sum([]) == Decimal(0)
+    assert exact_sum([Decimal("1.25"), Decimal("2.75")]) == Decimal(4)

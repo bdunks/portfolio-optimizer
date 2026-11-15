@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import random
-from datetime import UTC, date, datetime
+from dataclasses import replace
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from app.domain.allocation import (
@@ -33,8 +34,107 @@ TRADE_DATE = date(2026, 11, 5)
 AS_OF = datetime(2026, 11, 5, 15, tzinfo=UTC)
 
 
-def build_optimizer_benchmark_inputs(seed: int = 4602500) -> FinancialInputs:
-    """Build 460 risky securities and 2,500 current lots with complete provenance."""
+def _apply_benchmark_scenario(inputs: FinancialInputs, scenario: str) -> FinancialInputs:
+    if scenario == "baseline":
+        return inputs
+    if scenario not in {"replacement_buy", "recent_loss"}:
+        raise ValueError(f"unsupported optimizer benchmark scenario: {scenario}")
+
+    source_lot_id = "EQ000-LOT-002"
+    recent_lot_id = "EQ000-LOT-001"
+    quote = inputs.quote_for("EQ000")
+    if quote is None or quote.last_usd is None:
+        raise ValueError("scenario requires the EQ000 quote")
+    price = quote.last_usd
+    recent_date = TRADE_DATE - timedelta(days=10)
+    lots: list[LotInput] = []
+    for lot in inputs.lots:
+        if lot.broker_lot_id == source_lot_id:
+            lot = replace(
+                lot,
+                acquired_date=date(2025, 10, 1),
+                shares=Decimal(20),
+                available_shares=Decimal(20),
+                adjusted_unit_basis_usd=price * Decimal(2),
+            )
+        elif scenario == "recent_loss" and lot.broker_lot_id == recent_lot_id:
+            lot = replace(
+                lot,
+                acquired_date=recent_date,
+                shares=Decimal(1),
+                available_shares=Decimal(1),
+                adjusted_unit_basis_usd=price * Decimal("0.95"),
+            )
+        else:
+            lot = replace(lot, available_shares=Decimal(0))
+        lots.append(lot)
+
+    settings = dict(inputs.policy.settings.values)
+    settings.update(
+        {
+            "max_sell_tickers_per_batch": 1,
+            "max_sell_lots_per_batch": 2,
+            "max_total_orders_per_batch": 2,
+        }
+    )
+    target_pct = {
+        "us": Decimal(100),
+        "intl": Decimal(0),
+        "cash": Decimal(0),
+        "growth": Decimal(50),
+        "value": Decimal(50),
+    }
+    allocation = replace(
+        inputs.policy.allocation,
+        sleeves=tuple(
+            replace(sleeve, target_pct=target_pct[sleeve.key])
+            if sleeve.key in target_pct
+            else sleeve
+            for sleeve in inputs.policy.allocation.sleeves
+        ),
+        allowed_securities=(AllowedSecurity("VTI", "direct", "value", 0, True, "us_total"),),
+    )
+    transactions = inputs.transactions
+    if scenario == "recent_loss":
+        transactions = (
+            *transactions,
+            TransactionInput(
+                "SCENARIO-RECENT-EQ000",
+                "EQ000",
+                "BUY",
+                datetime(recent_date.year, recent_date.month, recent_date.day, tzinfo=UTC),
+                recent_date,
+                Decimal(1),
+                -(price * Decimal(1)),
+                True,
+                recent_lot_id,
+                "FAKE",
+            ),
+        )
+    return replace(
+        inputs,
+        source_checksum=hashlib.sha256(
+            f"{inputs.source_checksum}:{scenario}".encode()
+        ).hexdigest(),
+        policy=replace(
+            inputs.policy,
+            revision_id=f"benchmark-policy-{scenario}-r1",
+            allocation=allocation,
+            settings=PolicySettings.from_mapping(settings),
+        ),
+        positions=tuple(
+            replace(position, assignment=SleeveAssignment("direct", "growth"))
+            for position in inputs.positions
+        ),
+        lots=tuple(lots),
+        transactions=transactions,
+    )
+
+
+def build_optimizer_benchmark_inputs(
+    seed: int = 4602500, scenario: str = "baseline"
+) -> FinancialInputs:
+    """Build deterministic full-size inputs for baseline or controlled BUY scenarios."""
     rng = random.Random(seed)
     stock_tickers = tuple(f"EQ{i:03d}" for i in range(458))
     tickers = (*stock_tickers, "VB", "VXF")
@@ -307,7 +407,7 @@ def build_optimizer_benchmark_inputs(seed: int = 4602500) -> FinancialInputs:
     fingerprint = ";".join(
         f"{lot.broker_lot_id}:{lot.adjusted_unit_basis_usd}:{lot.shares}" for lot in lots
     )
-    return FinancialInputs(
+    inputs = FinancialInputs(
         account=AccountInput(
             1,
             "benchmark-single-account",
@@ -339,3 +439,4 @@ def build_optimizer_benchmark_inputs(seed: int = 4602500) -> FinancialInputs:
             lookthrough_complete=True,
         ),
     )
+    return _apply_benchmark_scenario(inputs, scenario)

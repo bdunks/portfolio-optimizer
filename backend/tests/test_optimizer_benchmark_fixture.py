@@ -87,7 +87,6 @@ def test_optimizer_benchmark_fixture_is_deterministic_complete_and_full_sized() 
     assert evaluate_portfolio(first).current.portfolio_total_usd > 1_000_000
 
 
-
 def test_optimizer_benchmark_scenarios_are_deterministic_full_sized_and_explicit() -> None:
     baseline = build_optimizer_benchmark_inputs(seed=17)
     explicit_baseline = build_optimizer_benchmark_inputs(seed=17, scenario="baseline")
@@ -131,7 +130,7 @@ def test_recent_loss_scenario_links_recent_acquisition_to_lot_and_old_loss() -> 
     assert old_loss_lot.adjusted_unit_basis_usd > inputs.quote_for("EQ000").last_usd
 
 
-@pytest.mark.parametrize("scenario", ("replacement_buy", "recent_loss"))
+@pytest.mark.parametrize("scenario", ["replacement_buy", "recent_loss"])
 def test_optimizer_benchmark_scenario_emits_independently_accepted_dependent_buy(
     scenario: str,
 ) -> None:

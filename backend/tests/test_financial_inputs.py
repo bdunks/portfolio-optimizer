@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -173,7 +174,7 @@ def _large_snapshot() -> BrokerSnapshot:
                     "adjusted_unit_basis_usd": "50",
                     "source": "DEMO",
                     "as_of": account_as_of,
-                    "quality_flags": [],
+                    "quality_flags": list[str](),
                 }
             )
         quotes.append(
@@ -438,8 +439,12 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(
                 duplicate_key_bundle,
                 proposed_trade_date=DEMO_PROPOSED_TRADE_DATE,
             )
-        frozen_sleeves = inputs.to_provenance()["policy"]["sleeves"]
-        frozen_settings = inputs.to_provenance()["policy"]["settings"]
+        frozen_policy_provenance = cast(dict[str, object], inputs.to_provenance()["policy"])
+        frozen_sleeves = frozen_policy_provenance["sleeves"]
+        frozen_settings = cast(
+            dict[str, Decimal | str],
+            frozen_policy_provenance["settings"],
+        )
         assert isinstance(frozen_settings, dict)
         assert Decimal(frozen_settings["objective_band_weight"]) == Decimal("1.0")
         assert Decimal(frozen_settings["estimated_spread_bps"]) == Decimal("5.0")
@@ -492,7 +497,9 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(
             for sleeve in legacy_restored.policy.allocation.sleeves
         )
         current_bundle_missing_lot_generation = inputs.to_provenance()
-        current_bundle_missing_lot_generation["lots"][0].pop("sync_generation")
+        cast(list[dict[str, object]], current_bundle_missing_lot_generation["lots"])[0].pop(
+            "sync_generation"
+        )
         with pytest.raises(TypeError, match="frozen lot has no sync_generation"):
             financial_inputs_from_provenance(
                 current_bundle_missing_lot_generation,

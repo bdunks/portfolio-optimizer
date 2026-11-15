@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from typing import SupportsInt, cast
 
 from app.domain.allocation import (
     AllocationPolicy,
@@ -76,9 +78,9 @@ def _parse_datetime(value: object) -> datetime:
 
 def _lot_sync_generation(row: dict[str, object], bundle: dict[str, object]) -> int:
     if "sync_generation" in row:
-        return int(row["sync_generation"])
+        return int(cast(SupportsInt | str, row["sync_generation"]))
     if bundle.get("schema") == "demo-run-input-v1":
-        return int(bundle["source_generation"])
+        return int(cast(SupportsInt | str, bundle["source_generation"]))
     raise TypeError("frozen lot has no sync_generation")
 
 
@@ -105,7 +107,7 @@ class PolicySettings:
             if key in _DECIMAL_SETTINGS:
                 parsed_value: SettingValue = _decimal(value)
             elif key in _INT_SETTINGS:
-                parsed_value = int(value) if value is not None else None
+                parsed_value = int(cast(SupportsInt | str, value)) if value is not None else None
             elif key in _BOOL_SETTINGS:
                 if not isinstance(value, bool):
                     raise ValueError(f"policy setting {key} must be a boolean")
@@ -548,6 +550,10 @@ def financial_inputs_from_provenance(
         for value in (settings_data, sleeve_data, allowed_data, override_data)
     ):
         raise ValueError("frozen financial provenance contains malformed policy data")
+    settings_data = cast(dict[str, object], settings_data)
+    sleeve_data = cast(Iterable[object], sleeve_data)
+    allowed_data = cast(Iterable[object], allowed_data)
+    override_data = cast(Iterable[object], override_data)
     sleeves = tuple(
         AllocationSleeve(
             key=str(row["sleeve_key"]),
@@ -776,7 +782,7 @@ def financial_inputs_from_provenance(
     )
     return FinancialInputs(
         account=account,
-        source_generation=int(bundle["source_generation"]),
+        source_generation=int(cast(SupportsInt | str, bundle["source_generation"])),
         proposed_trade_date=trade_date,
         policy=policy,
         securities=tuple(security_inputs[key] for key in sorted(security_inputs)),

@@ -576,9 +576,15 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
         }
         assert session.query(RecommendationGroupLeg).filter_by(leg_id="buy-a").count() == 2
         assert session.get(RecommendationLeg, "buy-b") is None
-        assert session.get(RecommendationLeg, "sell-a").shares == Decimal(2)
-        assert session.get(RecommendationLeg, "sell-b").shares == Decimal(1)
-        assert session.get(RecommendationLeg, "sell-zero").shares == Decimal(0)
+        sell_a = session.get(RecommendationLeg, "sell-a")
+        assert sell_a is not None
+        assert sell_a.shares == Decimal(2)
+        sell_b = session.get(RecommendationLeg, "sell-b")
+        assert sell_b is not None
+        assert sell_b.shares == Decimal(1)
+        zero_sell = session.get(RecommendationLeg, "sell-zero")
+        assert zero_sell is not None
+        assert zero_sell.shares == Decimal(0)
         run = (
             session.execute(
                 text(
@@ -594,12 +600,16 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
         assert json.loads(run["frozen_input_bundle"]) == frozen
         assert run["input_fingerprint"] == "original-fingerprint"
         assert json.loads(run["warnings"]) == ["legacy"]
-        assert session.get(RecommendationGroup, "group-a").note == "preserve note A"
-        assert session.get(RecommendationGroup, "group-a").selected is True
-        assert session.get(RecommendationGroup, "group-b").note == "preserve note B"
-        assert session.get(RecommendationGroup, "group-b").selected is False
-        assert session.get(RecommendationGroup, "group-b").rejected is True
-        assert session.get(RecommendationGroup, "group-b").rejection_reason == "old rejection"
+        group_a = session.get(RecommendationGroup, "group-a")
+        assert group_a is not None
+        assert group_a.note == "preserve note A"
+        assert group_a.selected is True
+        group_b = session.get(RecommendationGroup, "group-b")
+        assert group_b is not None
+        assert group_b.note == "preserve note B"
+        assert group_b.selected is False
+        assert group_b.rejected is True
+        assert group_b.rejection_reason == "old rejection"
         assert (
             session.query(RecommendationSelectedLot)
             .filter_by(broker_lot_id="lot-a1")
@@ -628,8 +638,11 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
             text("UPDATE optimizer_run SET metrics = :metrics WHERE id = 'legacy-run'"),
             {"metrics": json.dumps(metrics)},
         )
-        session.get(RecommendationGroup, "group-a").selected = False
+        group_a = session.get(RecommendationGroup, "group-a")
+        assert group_a is not None
+        group_a.selected = False
         group_b = session.get(RecommendationGroup, "group-b")
+        assert group_b is not None
         group_b.selected = True
         group_b.rejected = False
     upgrade_database(engine)
@@ -651,8 +664,11 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
         assert explicit_date_run.proposed_trade_date == date(2026, 11, 7)
         assert run.metrics == {"orders_count": 3, "legacy_metric": "preserve me"}
         # Restore original subset state after exercising the forward repair's shared-BUY case.
-        session.get(RecommendationGroup, "group-a").selected = True
+        group_a = session.get(RecommendationGroup, "group-a")
+        assert group_a is not None
+        group_a.selected = True
         group_b = session.get(RecommendationGroup, "group-b")
+        assert group_b is not None
         group_b.selected = False
         group_b.rejected = True
     with engine.connect() as connection:

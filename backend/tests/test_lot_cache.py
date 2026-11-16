@@ -6,8 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from pathlib import Path
-from threading import Barrier
-from typing import Literal, cast
+from threading import Barrier, Event
+from typing import Literal, cast, override
 
 import pytest
 from fastapi import FastAPI
@@ -38,7 +38,7 @@ from app.db.models import (
 )
 from app.db.session import create_database_engine, make_session_factory
 from app.main import create_app
-from app.schemas import LotInput, PositionInput
+from app.schemas import BrokerSnapshot, LotInput, PositionInput
 from app.services.demo_optimizer import _active_policy, _frozen_input
 from app.services.errors import AppError
 from app.services.financial_input_loader import load_financial_inputs
@@ -78,6 +78,21 @@ class _Reader:
         if self.error is not None:
             raise self.error
         return cast(EtradePortfolioWithLots, self.result)
+
+
+class _PausedFakeBroker(FakeBroker):
+    def __init__(self, fetch_started: Event, allow_fetch_return: Event) -> None:
+        super().__init__()
+        self.fetch_started = fetch_started
+        self.allow_fetch_return = allow_fetch_return
+
+    @override
+    def fetch_snapshot(self) -> BrokerSnapshot:
+        snapshot = super().fetch_snapshot()
+        self.fetch_started.set()
+        if not self.allow_fetch_return.wait(timeout=10):
+            raise RuntimeError("test did not release the paused full sync")
+        return snapshot
 
 
 def _position(
@@ -592,6 +607,64 @@ def test_competing_refreshes_publish_one_generation_only(tmp_path: Path) -> None
     finally:
         engine_a.dispose()
         engine_b.dispose()
+
+
+def test_full_sync_started_before_lot_refresh_rejects_stale_publication(tmp_path: Path) -> None:
+    engine, factory = _seed_database(
+        f"sqlite:///{tmp_path / 'full-sync-during-lot-refresh.sqlite3'}"
+    )
+    fetch_started = Event()
+    allow_fetch_return = Event()
+    broker = _PausedFakeBroker(fetch_started, allow_fetch_return)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            stale_sync = pool.submit(
+                sync_portfolio, factory, broker, correlation_id="full-sync-before-lot-refresh"
+            )
+            try:
+                assert fetch_started.wait(timeout=10)
+                refreshed_status = refresh_portfolio_lots(
+                    factory, _Reader(_one_position()), correlation_id="lot-refresh-during-full-sync"
+                )
+                refreshed_state = _financial_snapshot(factory)
+            finally:
+                allow_fetch_return.set()
+
+            with pytest.raises(AppError) as stale:
+                stale_sync.result(timeout=15)
+
+        assert stale.value.code == "stale_sync_publication"
+        assert stale.value.status_code == 409
+        assert stale.value.details == {}
+        assert "cache revision changed" in stale.value.message.lower()
+        assert broker.fetch_count == 1
+
+        after_stale = _financial_snapshot(factory)
+        assert after_stale[0] == refreshed_state[0]
+        assert after_stale[2:] == refreshed_state[2:]
+        after_sync_state = cast(tuple[object, object, object, object, object], after_stale[1])
+        refreshed_sync_state = cast(
+            tuple[object, object, object, object, object], refreshed_state[1]
+        )
+        assert after_sync_state[0] == refreshed_sync_state[0]
+        assert after_sync_state[2:] == refreshed_sync_state[2:]
+        assert after_sync_state[4] is False
+        with factory() as session:
+            cache_status = get_lot_cache_status(session)
+            sync_state = session.get(SyncState, 1)
+            assert sync_state is not None
+            assert sync_state.last_error_code == stale.value.code
+            assert cache_status.freshness == "current"
+            assert cache_status.cache_revision == refreshed_status.cache_revision
+            assert cache_status.source_generation == refreshed_status.source_generation
+            assert cache_status.source_as_of == refreshed_status.source_as_of
+            assert cache_status.cached_at == refreshed_status.cached_at
+            assert cache_status.last_attempted_at == refreshed_status.last_attempted_at
+            assert cache_status.last_error_code is None
+            assert cache_status.last_error_summary is None
+    finally:
+        allow_fetch_return.set()
+        engine.dispose()
 
 
 def test_full_sync_and_manual_quantity_changes_invalidate_or_reject_cache(tmp_path: Path) -> None:

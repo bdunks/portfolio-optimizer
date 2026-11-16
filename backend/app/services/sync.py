@@ -225,8 +225,11 @@ def sync_portfolio(
     correlation_id: str,
     publication_hook: Callable[[], None] | None = None,
 ) -> dict[str, object]:
-    """Fetch/validate outside SQL writes, then atomically publish exactly one generation."""
+    """Capture cache revision before fetching; validate outside SQL writes, then publish only if unchanged."""
     started_at = datetime.now(UTC)
+    with factory() as session:
+        cache_state = session.get(LotCacheState, 1)
+        baseline_cache_revision = cache_state.revision if cache_state is not None else 0
     try:
         raw_snapshot = broker.fetch_snapshot()
         snapshot = BrokerSnapshot.model_validate(raw_snapshot)
@@ -270,6 +273,14 @@ def sync_portfolio(
     try:
         with factory.begin() as session:
             session.connection(execution_options={"sqlite_begin_mode": "IMMEDIATE"})
+            cache_state = session.get(LotCacheState, 1)
+            current_cache_revision = cache_state.revision if cache_state is not None else 0
+            if current_cache_revision != baseline_cache_revision:
+                raise AppError(
+                    "stale_sync_publication",
+                    "Portfolio cache revision changed while broker data was being fetched; sync was not published",
+                    status_code=409,
+                )
             account = session.get(Account, 1)
             if account is not None and account.broker_account_id_key != snapshot.account_id_key:
                 raise AppError(
@@ -434,7 +445,6 @@ def sync_portfolio(
             state.complete = True
             state.last_error_code = None
             state.last_error_summary = None
-            cache_state = session.get(LotCacheState, 1)
             if cache_state is not None:
                 cache_state.revision += 1
                 cache_state.source_generation = None

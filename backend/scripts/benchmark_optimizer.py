@@ -181,7 +181,7 @@ async def run_trial(
             {
                 "independently_validated": True,
                 "status": status,
-                "accepted": bool(
+                "accepted": (
                     status == "ready"
                     and validation.accepted
                     and time.monotonic() < worker_result.overall_deadline

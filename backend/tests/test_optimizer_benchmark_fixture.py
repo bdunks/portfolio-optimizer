@@ -78,14 +78,16 @@ def test_optimizer_benchmark_fixture_is_deterministic_complete_and_full_sized() 
     assert first.policy.settings.get("max_sell_lots_per_batch") == 20
     assert first.policy.settings.get("max_total_orders_per_batch") == 12
     assert any(lot.shares == Decimal("0.01") for lot in first.lots)
-    basis_comparisons: list[bool] = []
+    above_quote: list[bool] = []
+    below_quote: list[bool] = []
     for lot in first.lots:
         quote = first.quote_for(lot.ticker)
         assert quote is not None
         assert quote.last_usd is not None
-        basis_comparisons.append(lot.adjusted_unit_basis_usd > quote.last_usd)
-    assert any(basis_comparisons)
-    assert any(not comparison for comparison in basis_comparisons)
+        above_quote.append(lot.adjusted_unit_basis_usd > quote.last_usd)
+        below_quote.append(lot.adjusted_unit_basis_usd < quote.last_usd)
+    assert any(above_quote)
+    assert any(below_quote)
     assert evaluate_portfolio(first).current.portfolio_total_usd > 1_000_000
 
 

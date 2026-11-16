@@ -5,6 +5,7 @@ import os
 from collections import Counter
 from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from datetime import UTC, datetime
 from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
@@ -55,6 +56,7 @@ from app.schemas import (
     EtradeAuthStatusResponse,
     EtradeAuthVerifyInput,
     HealthResponse,
+    LotCacheStatusResponse,
     LotPageResponse,
     OptimizerExportJSONResponse,
     OptimizerLotReviewIntentInput,
@@ -83,6 +85,11 @@ from app.services.demo_optimizer import (
 )
 from app.services.errors import AppError
 from app.services.financial_input_loader import load_allocation_policy, load_financial_inputs
+from app.services.lot_cache import (
+    PortfolioWithLotsReader,
+    get_lot_cache_status,
+    refresh_portfolio_lots,
+)
 from app.services.optimizer_service import (
     BoundedValidationExecutor,
     annotate_real_group,
@@ -227,6 +234,7 @@ def create_app(
     publication_hook: Callable[[], None] | None = None,
     allowed_origins: list[str] | None = None,
     etrade_oauth: EtradeOAuthService | None = None,
+    portfolio_lot_reader: PortfolioWithLotsReader | None = None,
 ) -> FastAPI:
     """Create an isolated app with optional test OAuth service and explicit transport injection."""
     db_url = database_url or os.getenv("PORTFOLIO_DATABASE_URL", "sqlite:///data/portfolio.sqlite3")
@@ -472,6 +480,35 @@ def create_app(
             "us_transition": us_transition,
         }
 
+    @application.post(
+        "/api/v1/lots/refresh",
+        response_model=LotCacheStatusResponse,
+        responses=API_ERROR_RESPONSES,
+    )
+    def refresh_lots_endpoint(request: Request) -> dict[str, Any]:
+        if portfolio_lot_reader is None:
+            raise AppError(
+                "lot_refresh_unavailable",
+                "Portfolio and lot refresh is unavailable unless a broker reader is explicitly configured",
+                status_code=503,
+                details={"available": False},
+            )
+        status = refresh_portfolio_lots(
+            sessions,
+            portfolio_lot_reader,
+            correlation_id=request.state.correlation_id,
+            publication_hook=publication_hook,
+        )
+        return asdict(status)
+
+    @application.get(
+        "/api/v1/lots/cache",
+        response_model=LotCacheStatusResponse,
+        responses=API_ERROR_RESPONSES,
+    )
+    def lot_cache_status(session: Session = session_dependency) -> dict[str, Any]:
+        return asdict(get_lot_cache_status(session))
+
     @application.get("/api/v1/lots", response_model=LotPageResponse, responses=API_ERROR_RESPONSES)
     def lots(
         session: Session = session_dependency,
@@ -506,6 +543,7 @@ def create_app(
         limit: int = Query(default=100, ge=1, le=500),
     ) -> dict[str, Any]:
         sync_state = session.get(SyncState, 1)
+        cache_status = asdict(get_lot_cache_status(session))
         source_generation = (
             sync_state.current_generation
             if sync_state is not None and sync_state.complete
@@ -522,6 +560,7 @@ def create_app(
                     "offset": offset,
                     "limit": limit,
                     "source_generation": source_generation,
+                    "cache": cache_status,
                 }
             query = query.where(CurrentTaxLot.security_id == security.id)
         rows = session.scalars(query).all()
@@ -628,6 +667,7 @@ def create_app(
             "offset": offset,
             "limit": limit,
             "source_generation": source_generation,
+            "cache": cache_status,
         }
 
     @application.get(

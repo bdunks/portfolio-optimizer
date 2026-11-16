@@ -523,6 +523,22 @@ class LotResponse(StrictModel):
     fractional_cleanup_unsupported: bool
 
 
+class LotCacheStatusResponse(StrictModel):
+    freshness: Literal["unknown", "current", "stale"]
+    current_generation: int | None
+    cache_revision: int | None
+    source_generation: int | None
+    source_as_of: datetime | None
+    cached_at: datetime | None
+    last_attempted_at: datetime | None
+    last_error_code: str | None
+    last_error_summary: str | None
+    position_count: int
+    covered_position_count: int
+    lot_count: int
+    quantity_coverage_complete: bool
+
+
 class LotPageResponse(StrictModel):
     items: list[LotResponse]
     total: int
@@ -531,6 +547,7 @@ class LotPageResponse(StrictModel):
     source_generation: int | None = Field(
         description="Complete current sync generation for the lots in this query, or null when unavailable."
     )
+    cache: LotCacheStatusResponse | None = None
 
 
 class PolicySettingsResponse(StrictModel):

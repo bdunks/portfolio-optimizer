@@ -128,12 +128,29 @@ export type HealthResponse = {
   "order_submission_enabled": false;
 };
 
+export type LotCacheStatusResponse = {
+  "freshness": "unknown" | "current" | "stale";
+  "current_generation": number | null;
+  "cache_revision": number | null;
+  "source_generation": number | null;
+  "source_as_of": string | null;
+  "cached_at": string | null;
+  "last_attempted_at": string | null;
+  "last_error_code": string | null;
+  "last_error_summary": string | null;
+  "position_count": number;
+  "covered_position_count": number;
+  "lot_count": number;
+  "quantity_coverage_complete": boolean;
+};
+
 export type LotPageResponse = {
   "items": Array<LotResponse>;
   "total": number;
   "offset": number;
   "limit": number;
   "source_generation": number | null;
+  "cache"?: LotCacheStatusResponse | null;
 };
 
 export type LotResponse = {
@@ -695,6 +712,36 @@ export interface ApiOperations {
     request: never;
     responses: {
       "200": PortfolioNotSyncedResponse | PortfolioReadyResponse;
+      "403": ErrorEnvelope;
+      "404": ErrorEnvelope;
+      "409": ErrorEnvelope;
+      "422": ErrorEnvelope;
+      "500": ErrorEnvelope;
+      "502": ErrorEnvelope;
+      "503": ErrorEnvelope;
+    };
+  };
+  "POST /api/v1/lots/refresh": {
+    path: Record<never, never>;
+    query: Record<never, never>;
+    request: never;
+    responses: {
+      "200": LotCacheStatusResponse;
+      "403": ErrorEnvelope;
+      "404": ErrorEnvelope;
+      "409": ErrorEnvelope;
+      "422": ErrorEnvelope;
+      "500": ErrorEnvelope;
+      "502": ErrorEnvelope;
+      "503": ErrorEnvelope;
+    };
+  };
+  "GET /api/v1/lots/cache": {
+    path: Record<never, never>;
+    query: Record<never, never>;
+    request: never;
+    responses: {
+      "200": LotCacheStatusResponse;
       "403": ErrorEnvelope;
       "404": ErrorEnvelope;
       "409": ErrorEnvelope;

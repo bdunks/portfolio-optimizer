@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 from fastapi import FastAPI
@@ -20,6 +21,22 @@ from app.main import create_app
 from app.services.financial_input_loader import load_allocation_policy
 
 
+class _SectorBand(TypedDict):
+    sector_key: str
+    target_weight_pct: str
+    band_pct: str
+
+
+class _DraftPayload(TypedDict, total=False):
+    source_revision_id: str
+    settings: dict[str, object]
+    sleeves: list[dict[str, object]]
+    allowed_securities: list[dict[str, object]]
+    overrides: list[dict[str, object]]
+    reassignments: dict[str, str]
+    sector_bands: list[_SectorBand]
+
+
 @pytest.fixture
 def seeded_client(tmp_path: Path) -> Iterator[tuple[FastAPI, TestClient]]:
     app = create_app(database_url=f"sqlite:///{tmp_path / 'seeded.sqlite3'}", seed_demo_data=True)
@@ -27,7 +44,7 @@ def seeded_client(tmp_path: Path) -> Iterator[tuple[FastAPI, TestClient]]:
         yield app, client
 
 
-def _draft_payload(client: TestClient) -> dict[str, object]:
+def _draft_payload(client: TestClient) -> _DraftPayload:
     active = client.get("/api/v1/policy").json()["active"]
     assert active is not None
     return {
@@ -128,6 +145,9 @@ def test_policy_settings_are_typed_lossless_and_nested_api_shape_persists(
     with app.state.session_factory() as session:
         persisted = session.get(PolicyRevision, revision["id"])
         assert persisted is not None
+        assert isinstance(settings["target_retained_net_loss_usd"], str)
+        assert isinstance(settings["st_loss_carryforward_usd"], str)
+        assert isinstance(settings["objective_band_weight"], str)
         assert persisted.target_retained_net_loss_usd == Decimal(
             settings["target_retained_net_loss_usd"]
         )
@@ -473,5 +493,5 @@ def test_exact_sum_rejects_nonfinite_decimal_values(special_value: str) -> None:
 
 
 def test_exact_sum_preserves_empty_and_finite_sum_behavior() -> None:
-    assert exact_sum([]) == Decimal(0)
+    assert exact_sum(list[Decimal]()) == Decimal(0)
     assert exact_sum([Decimal("1.25"), Decimal("2.75")]) == Decimal(4)

@@ -206,7 +206,7 @@ def test_nested_holding_cash_and_trade_rollup_and_reassignment(tmp_path: Path) -
         reassignment["sleeves"] = [
             row for row in reassignment["sleeves"] if row["sleeve_key"] != "stocks"
         ]
-        reassignment["overrides"] = []
+        reassignment["overrides"] = list[dict[str, object]]()
         reassignment["reassignments"] = {"stocks": "direct_indexing"}
         _activate_policy(client, reassignment)
         moved_lot = client.get("/api/v1/lots?ticker=AAPL").json()["items"][0]

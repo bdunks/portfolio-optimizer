@@ -8,7 +8,7 @@ from copy import deepcopy
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 from unittest.mock import Mock
 
 import pytest
@@ -37,6 +37,15 @@ from app.schemas import BrokerSnapshot
 from app.services import demo_optimizer
 from app.services.demo_optimizer import _fingerprint
 from tests.query_test_support import count_selects
+
+
+class _PolicyDraftPayload(TypedDict):
+    source_revision_id: str
+    settings: dict[str, object]
+    sleeves: list[dict[str, object]]
+    allowed_securities: list[dict[str, object]]
+    overrides: list[dict[str, object]]
+    reassignments: dict[str, str]
 
 
 @pytest.fixture
@@ -146,17 +155,16 @@ def _downgrade_to_0006(database_path: Path) -> None:
 
 def _sqlite_table_snapshot(connection: Connection, table: str) -> list[dict[str, object]]:
     rows = connection.execute(text(f"SELECT * FROM {table}")).mappings().all()
-    return sorted(
-        (
-            {
-                key: value
-                for key, value in row.items()
-                if not (table == "optimizer_run" and key == "proposed_trade_date")
-            }
-            for row in rows
-        ),
-        key=repr,
-    )
+    snapshots: list[dict[str, object]] = []
+    for row in rows:
+        snapshot: dict[str, object] = {}
+        for key, value in row.items():
+            if isinstance(key, str) and not (
+                table == "optimizer_run" and key == "proposed_trade_date"
+            ):
+                snapshot[key] = value
+        snapshots.append(snapshot)
+    return sorted(snapshots, key=repr)
 
 
 def _shared_replacement_snapshot(aapl_lot_quantities: tuple[int, ...] = (1, 1)) -> BrokerSnapshot:
@@ -213,7 +221,7 @@ def _configure_batch_policy(client: TestClient, *, minimum_buy: str) -> None:
         "sleeves": active["sleeves"],
         "allowed_securities": active["allowed_securities"],
         "overrides": active["overrides"],
-        "reassignments": {},
+        "reassignments": dict[str, str](),
     }
     payload["settings"].update(
         {
@@ -259,9 +267,14 @@ def _create_run(client: TestClient, proposed_trade_date: str | None = None) -> d
 
 def _assert_historical_progress_unavailable(effects: dict[str, object]) -> None:
     transition = effects["us_transition"]
+    assert isinstance(transition, dict)
+    current = transition["current"]
+    proposed = transition["proposed_basket"]
+    assert isinstance(current, dict)
+    assert isinstance(proposed, dict)
     assert transition["transition_destination_sleeve_key"] is None
-    assert transition["current"]["etf_progress_pct"] is None
-    assert transition["proposed_basket"]["etf_progress_pct"] is None
+    assert current["etf_progress_pct"] is None
+    assert proposed["etf_progress_pct"] is None
 
 
 def test_populated_v1_run_migrates_reopens_and_reselects_without_rewriting_bundle(
@@ -292,8 +305,13 @@ def test_populated_v1_run_migrates_reopens_and_reselects_without_rewriting_bundl
             historical_group_impact["portfolio_effects"],
         ):
             transition = effects["us_transition"]
-            assert transition["current"]["etf_progress_pct"] is not None
-            assert transition["proposed_basket"]["etf_progress_pct"] is not None
+            assert isinstance(transition, dict)
+            current = transition["current"]
+            proposed = transition["proposed_basket"]
+            assert isinstance(current, dict)
+            assert isinstance(proposed, dict)
+            assert current["etf_progress_pct"] is not None
+            assert proposed["etf_progress_pct"] is not None
             transition.pop("transition_destination_sleeve_key")
         expected_metrics = deepcopy(historical_metrics)
         expected_group_impact = deepcopy(historical_group_impact)
@@ -631,7 +649,7 @@ def test_demo_selection_reports_full_position_exit_from_shared_evaluator(tmp_pat
     )
     with TestClient(app, base_url="http://localhost") as client:
         _configure_batch_policy(client, minimum_buy="0")
-        run = client.post("/api/v1/optimizer/runs", json={}).json()
+        run = client.post("/api/v1/optimizer/runs", json=dict[str, object]()).json()
         assert run["positions_exited_count"] == 1
         recs = client.get(f"/api/v1/optimizer/runs/{run['run_id']}/recommendations").json()
         group = recs["groups"][0]
@@ -651,7 +669,7 @@ def test_shared_replacement_buy_pools_proceeds_and_counts_consolidated_orders(
     shared_replacement_app: tuple[FastAPI, TestClient, Path],
 ) -> None:
     app, client, _ = shared_replacement_app
-    response = client.post("/api/v1/optimizer/runs", json={})
+    response = client.post("/api/v1/optimizer/runs", json=dict[str, object]())
     assert response.status_code == 201, response.text
     run = response.json()
     assert run["orders_count"] == 3
@@ -816,7 +834,7 @@ def test_removing_one_sell_lot_resizes_shared_buy_and_keeps_only_funding_depende
 ) -> None:
     _, client, _ = shared_replacement_app
     _configure_batch_policy(client, minimum_buy="300")
-    run = client.post("/api/v1/optimizer/runs", json={}).json()
+    run = client.post("/api/v1/optimizer/runs", json=dict[str, object]()).json()
     recs = client.get(f"/api/v1/optimizer/runs/{run['run_id']}/recommendations").json()
     groups = recs["groups"]
     aapl_group = next(
@@ -864,7 +882,7 @@ def test_rejecting_group_preserves_other_groups_existing_sell_lot_subset(
     )
     with TestClient(app, base_url="http://localhost") as client:
         _configure_batch_policy(client, minimum_buy="0")
-        run = client.post("/api/v1/optimizer/runs", json={}).json()
+        run = client.post("/api/v1/optimizer/runs", json=dict[str, object]()).json()
         recs = client.get(f"/api/v1/optimizer/runs/{run['run_id']}/recommendations").json()
         groups = recs["groups"]
         aapl_group = next(group for group in groups if "AAPL" in group["rationale"])
@@ -1119,7 +1137,7 @@ def test_configured_tax_rates_do_not_fabricate_a_demo_tax_estimate(
         "sleeves": active["sleeves"],
         "allowed_securities": active["allowed_securities"],
         "overrides": active["overrides"],
-        "reassignments": {},
+        "reassignments": dict[str, str](),
     }
     payload["settings"]["short_term_tax_rate"] = "0.35"
     payload["settings"]["long_term_tax_rate"] = "0.15"
@@ -1137,7 +1155,7 @@ def test_configured_tax_rates_do_not_fabricate_a_demo_tax_estimate(
 def test_export_metadata_lot_attribution_notes_activity_and_disabled_future_routes(
     demo_app: tuple[FastAPI, TestClient, FakeBroker, Path],
 ) -> None:
-    _, client, broker, _ = demo_app
+    app, client, broker, _ = demo_app
     run = _create_run(client)
     group = run["groups"][0]
     run_id = run["run_id"]
@@ -1288,7 +1306,7 @@ def test_export_metadata_lot_attribution_notes_activity_and_disabled_future_rout
     assert broker.fetch_count == 1
     assert not hasattr(broker, "preview_order")
     assert not hasattr(broker, "submit_approved_order")
-    tables = set(inspect(client.app.state.engine).get_table_names())
+    tables = set(inspect(app.state.engine).get_table_names())
     assert not {"order_record", "order_fill"} & tables
 
 
@@ -1351,7 +1369,7 @@ def test_annotation_recalculation_failure_rolls_back_annotations_and_basket(
 ) -> None:
     _, client, _ = shared_replacement_app
     _configure_batch_policy(client, minimum_buy="0")
-    run = client.post("/api/v1/optimizer/runs", json={}).json()
+    run = client.post("/api/v1/optimizer/runs", json=dict[str, object]()).json()
     run_id = run["run_id"]
     recs = client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations").json()
     aapl_group = next(group for group in recs["groups"] if "AAPL" in group["rationale"])
@@ -1410,7 +1428,7 @@ def test_frozen_run_display_context_survives_renamed_disabled_and_removed_sleeve
             "sleeves": active["sleeves"],
             "allowed_securities": active["allowed_securities"],
             "overrides": active["overrides"],
-            "reassignments": {},
+            "reassignments": dict[str, str](),
         }
         renamed_payload["settings"]["target_retained_net_loss_usd"] = "9876.54"
         next(row for row in renamed_payload["sleeves"] if row["sleeve_key"] == "us_equities")[
@@ -1428,7 +1446,7 @@ def test_frozen_run_display_context_survives_renamed_disabled_and_removed_sleeve
             "sleeves": active["sleeves"],
             "allowed_securities": active["allowed_securities"],
             "overrides": active["overrides"],
-            "reassignments": {},
+            "reassignments": dict[str, str](),
         }
         disabled_sleeve = next(
             row for row in disabled_payload["sleeves"] if row["sleeve_key"] == "us_etf"
@@ -1456,7 +1474,7 @@ def test_frozen_run_display_context_survives_renamed_disabled_and_removed_sleeve
             "sleeves": [row for row in disabled_active["sleeves"] if row["sleeve_key"] != "us_etf"],
             "allowed_securities": disabled_active["allowed_securities"],
             "overrides": disabled_active["overrides"],
-            "reassignments": {},
+            "reassignments": dict[str, str](),
         }
         removed_draft = client.post("/api/v1/policy/drafts", json=removed_payload)
         assert removed_draft.status_code == 201, removed_draft.text
@@ -1527,18 +1545,19 @@ def test_missing_frozen_policy_context_uses_only_exact_revision_or_reports_unava
         persisted = session.get(OptimizerRun, run_id)
         assert persisted is not None
         unavailable = demo_optimizer.run_summary(persisted)["frozen_display_context"]
+        assert isinstance(unavailable, dict)
     assert unavailable["available"] is False
     assert unavailable["source"] is None
     assert unavailable["sleeves"] is None
 
     active = client.get("/api/v1/policy").json()["active"]
-    payload = {
+    payload: _PolicyDraftPayload = {
         "source_revision_id": active["id"],
         "settings": active["settings"],
         "sleeves": active["sleeves"],
         "allowed_securities": active["allowed_securities"],
         "overrides": active["overrides"],
-        "reassignments": {},
+        "reassignments": dict[str, str](),
     }
     next(row for row in payload["sleeves"] if row["sleeve_key"] == "us_equities")[
         "display_name"
@@ -1551,10 +1570,15 @@ def test_missing_frozen_policy_context_uses_only_exact_revision_or_reports_unava
     reopened = client.get(f"/api/v1/optimizer/runs/{run_id}").json()
     exact_revision_context = reopened["frozen_display_context"]
     assert exact_revision_context["available"] is True
+    assert isinstance(exact_revision_context, dict)
+    context_sleeves = exact_revision_context["sleeves"]
+    assert isinstance(context_sleeves, list)
     assert exact_revision_context["source"] == "policy_revision"
     assert exact_revision_context["policy_revision_id"] == run["policy_revision_id"]
     old_sleeve = next(
-        row for row in exact_revision_context["sleeves"] if row["sleeve_key"] == "us_equities"
+        row
+        for row in context_sleeves
+        if isinstance(row, dict) and row.get("sleeve_key") == "us_equities"
     )
     assert old_sleeve["display_name"] == original_name
     assert old_sleeve["display_name"] != "New active label"

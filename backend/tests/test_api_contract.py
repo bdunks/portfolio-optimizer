@@ -56,6 +56,12 @@ def _response_schema(response: dict[str, object]) -> dict[str, object]:
     return schema
 
 
+def _schema_ref(schema: dict[str, object]) -> str:
+    reference = schema.get("$ref")
+    assert isinstance(reference, str)
+    return reference
+
+
 def test_openapi_has_named_phase_one_success_and_error_models() -> None:
     specification = default_app.openapi()
     schemas = specification["components"]["schemas"]
@@ -69,7 +75,7 @@ def test_openapi_has_named_phase_one_success_and_error_models() -> None:
                 if int(status_code) < 400:
                     continue
                 schema = _response_schema(response)
-                assert schema.get("$ref", "").endswith("/ErrorEnvelope"), (
+                assert _schema_ref(schema).endswith("/ErrorEnvelope"), (
                     path,
                     status_code,
                     schema,
@@ -77,7 +83,7 @@ def test_openapi_has_named_phase_one_success_and_error_models() -> None:
             if path == "/api/v1/optimizer/runs/{run_id}/export":
                 export_response = operation["responses"]["200"]
                 assert set(export_response["content"]) == {"application/json", "text/csv"}
-                assert _response_schema(export_response)["$ref"].endswith(
+                assert _schema_ref(_response_schema(export_response)).endswith(
                     "/OptimizerExportJSONResponse"
                 )
                 assert export_response["content"]["text/csv"]["schema"]["type"] == "string"
@@ -88,11 +94,11 @@ def test_openapi_has_named_phase_one_success_and_error_models() -> None:
             if success_status is None:
                 continue
             success_schema = _response_schema(operation["responses"][success_status])
+            branches = success_schema.get("anyOf", success_schema.get("oneOf", [success_schema]))
+            assert isinstance(branches, list)
             references = [
-                branch.get("$ref", "").rsplit("/", 1)[-1]
-                for branch in success_schema.get(
-                    "anyOf", success_schema.get("oneOf", [success_schema])
-                )
+                _schema_ref(branch).rsplit("/", 1)[-1]
+                for branch in branches
                 if isinstance(branch, dict)
             ]
             assert references, (path, success_schema)
@@ -124,7 +130,7 @@ def test_openapi_has_named_phase_one_success_and_error_models() -> None:
     assert lot_parameters["sort_direction"]["schema"]["enum"] == ["asc", "desc"]
     lot_intent = specification["paths"]["/api/v1/optimizer/runs/{run_id}/lot-review-intent"]["post"]
     intent_schema = lot_intent["requestBody"]["content"]["application/json"]["schema"]
-    assert intent_schema["$ref"].endswith("/OptimizerLotReviewIntentInput")
+    assert _schema_ref(intent_schema).endswith("/OptimizerLotReviewIntentInput")
     assert "does not approve or place orders" in lot_intent["description"]
     parsed_intent = OptimizerLotReviewIntentInput.model_validate(
         {"source_generation": 1, "broker_lot_ids": ["LOT-1"]}
@@ -140,14 +146,14 @@ def test_openapi_has_named_phase_one_success_and_error_models() -> None:
         )
     with pytest.raises(ValidationError):
         OptimizerLotReviewIntentInput.model_validate(
-            {"source_generation": True, "broker_lot_ids": []}
+            {"source_generation": True, "broker_lot_ids": list[str]()}
         )
 
     disabled = specification["paths"]["/api/v1/orders/{leg_id}/preview"]["post"]["responses"]
     assert "503" in disabled
     assert "200" not in disabled
     disabled_schema = _response_schema(disabled["503"])
-    assert disabled_schema["$ref"].endswith("/ErrorEnvelope")
+    assert _schema_ref(disabled_schema).endswith("/ErrorEnvelope")
     exact_decimal = schemas["PolicySettingsInput"]["properties"]["target_retained_net_loss_usd"]
     assert exact_decimal["type"] == "string"
 
@@ -214,7 +220,7 @@ def test_unseeded_and_seeded_response_dtos_validate(
     WashSalesResponse.model_validate(client.get("/api/v1/wash-sales").json())
     ActivityPageResponse.model_validate(client.get("/api/v1/activity").json())
 
-    run_response = client.post("/api/v1/optimizer/runs", json={})
+    run_response = client.post("/api/v1/optimizer/runs", json=dict[str, object]())
     run = OptimizerRecommendationsResponse.model_validate(run_response.json())
     assert run.demo is True
     assert run.actionable is False
@@ -226,7 +232,9 @@ def test_unseeded_and_seeded_response_dtos_validate(
     for group in typed_recommendations.groups:
         assert set(group.leg_ids) <= known_legs
     OptimizerRunResponse.model_validate(client.get(f"/api/v1/optimizer/runs/{run.run_id}").json())
-    selection = client.post(f"/api/v1/optimizer/runs/{run.run_id}/selection", json={})
+    selection = client.post(
+        f"/api/v1/optimizer/runs/{run.run_id}/selection", json=dict[str, object]()
+    )
     OptimizerRecommendationsResponse.model_validate(selection.json())
     exported = client.get(f"/api/v1/optimizer/runs/{run.run_id}/export?format=json")
     OptimizerExportJSONResponse.model_validate(exported.json())
@@ -243,7 +251,7 @@ def test_unseeded_and_seeded_response_dtos_validate(
         "sleeves": active["sleeves"],
         "allowed_securities": active["allowed_securities"],
         "overrides": active["overrides"],
-        "reassignments": {},
+        "reassignments": dict[str, str](),
     }
     draft = client.post("/api/v1/policy/drafts", json=draft_payload)
     PolicyRevisionResponse.model_validate(draft.json())
@@ -258,7 +266,7 @@ def test_exact_decimal_openapi_input_and_runtime_float_rejection() -> None:
     )
     with pytest.raises(ValidationError, match="exact strings or integers"):
         PolicySettingsInput(target_retained_net_loss_usd=12.5)
-    assert OptimizerRunInput.model_validate({}).mode == "recommendations_only"
+    assert OptimizerRunInput.model_validate(dict[str, object]()).mode == "recommendations_only"
 
 
 def test_errors_are_consistently_serialized_and_future_routes_fail_closed(

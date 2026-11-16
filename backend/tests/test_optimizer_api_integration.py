@@ -478,8 +478,8 @@ def test_real_optimizer_http_hang_persists_timeout_and_reaps_spawned_worker(
             original_run(
                 worker_input,
                 worker,
-                timeout_seconds=timeout_seconds,
-                validation_reserve_seconds=validation_reserve_seconds,
+                timeout_seconds=3.0,
+                validation_reserve_seconds=0.2,
             )
         )
         for _ in range(200):

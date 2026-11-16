@@ -5,7 +5,7 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import TypedDict, override
+from typing import TypedDict, Unpack, override
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -204,7 +204,7 @@ def _portfolio(
     positions: list[dict[str, object]] | dict[str, object],
     *,
     account_key: str | None = None,
-    **markers: object,
+    **markers: Unpack[_PaginationMarkers],
 ) -> dict[str, object]:
     wrapper: dict[str, object] = {"Position": positions, **markers}
     if account_key is not None:
@@ -453,7 +453,7 @@ def test_portfolio_pagination_marker_contradictions_are_rejected(
     reader, _, transport, _ = _adapter(
         [
             _response(_accounts(_account("one"))),
-            _response(_portfolio([], **markers)),
+            _response(_portfolio([], account_key=None, **markers)),
         ]
     )
 

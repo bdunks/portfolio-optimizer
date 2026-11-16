@@ -698,10 +698,9 @@ def _acquired_date(row: Mapping[str, object]) -> tuple[date, Decimal | int | str
         if not isinstance(raw, str):
             _fail("etrade_read_acquired_date_invalid", "E*TRADE acquisition date is invalid.")
         try:
-            acquired = date.fromisoformat(raw)
+            sources.append((date.fromisoformat(raw), raw))
         except ValueError:
             _fail("etrade_read_acquired_date_invalid", "E*TRADE acquisition date is invalid.")
-        sources.append((acquired, raw))
     if not sources:
         _fail("etrade_read_field_missing", "E*TRADE lot acquisition date is missing.")
     if any(source_date != sources[0][0] for source_date, _ in sources[1:]):

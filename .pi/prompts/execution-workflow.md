@@ -23,8 +23,8 @@ The parent is the architect and orchestrator, delegating directly to implementat
 - Run only one subagent at a time, including implementation workers and reviewers. Validate and commit each coherent increment before fresh review; review its complete diff against the task base, not each intermediate commit. Finish review and fixes before starting the next task.
 - Validate complete caller and user paths, persistence round trips, and compatibility—not only isolated helpers or components. Add regressions for reported failures before declaring fixes complete.
 - A fresh subagent reviews each bounded change, connected code, integration, and test evidence:
-  - Broad and complex change: `gpt-6.1-sol` with `thinking: max`
-  - Simple change or narrow fix review: `gpt-6-luna` with `thinking: medium`
+  - Broad and complex change: `gpt-6.1-sol` with `thinking: medium`
+  - Simple change or narrow fix review: `gpt-6-luna` with `thinking: max`
 - Delegate fixes back to implementation workers in coherent increments. Integrate tested changes and rerun relevant integration checks before proceeding; do not equate passing tests with review acceptance.
 - Treat failing tests, lint and typechecks as implementation feedback, not worker failures. Allow up to three local fix/check cycles within the assigned scope; run strict typing early, including tests, and explicitly type heterogeneous fixtures/empty containers and narrow optional values. Never relax checks or add suppressions to hide failures. Stop and report ambiguous semantics, scope/security/environment blockers, repeated failures without progress, or exhausted cycles. On an actual worker/runtime failure, report it, inspect preserved changes and checkpoints, and use only an authorized, bounded recovery; restart a maximum of two times.
 - Minimize redundant context, handoffs, repeated reviews, and repeated validation of unchanged revisions. Preserve exact revisions, actual check outcomes, remaining risks, and the next action in durable checkpoints.

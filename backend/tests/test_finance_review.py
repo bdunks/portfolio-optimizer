@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from decimal import Decimal, localcontext
 from pathlib import Path
@@ -39,7 +39,7 @@ def _activate_policy(client: TestClient, payload: dict[str, Any]) -> str:
 @contextmanager
 def _open_app(
     tmp_path: Path, name: str, snapshot: BrokerSnapshot | None = None
-) -> Iterator[tuple[FastAPI, TestClient]]:
+) -> Generator[tuple[FastAPI, TestClient]]:
     app = create_app(
         database_url=f"sqlite:///{tmp_path / name}",
         broker=FakeBroker(snapshot),

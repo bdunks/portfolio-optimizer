@@ -606,7 +606,7 @@ def _check_run_current(session: Session, run: OptimizerRun) -> None:
         live_quote = session.scalar(
             select(CurrentQuote).where(CurrentQuote.security_id == security_id)
         )
-        return bool(
+        return (
             frozen_quote is not None
             and live_quote is not None
             and live_quote.sync_generation == run.source_generation

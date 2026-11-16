@@ -26,6 +26,7 @@ dev = [
     "pytest-asyncio>=1.5.0",
     "pytest-cov>=7.1.0",
     "ruff>=0.17.5",
+    "types-requests-oauthlib>=2.0.0.20261006",
 ]
 
 [tool.pyrefly]

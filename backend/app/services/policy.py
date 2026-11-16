@@ -154,7 +154,7 @@ def create_policy_draft(session: Session, payload: PolicyDraftInput) -> PolicyRe
                     old_resolution.assignment.sleeve_key,
                     old_resolution.assignment.sub_sleeve_key,
                 )
-    revision_number = int(session.scalar(select(func.max(PolicyRevision.revision_number))) or 0) + 1
+    revision_number = (session.scalar(select(func.max(PolicyRevision.revision_number))) or 0) + 1
     revision_id = str(uuid4())
     revision = PolicyRevision(
         id=revision_id,

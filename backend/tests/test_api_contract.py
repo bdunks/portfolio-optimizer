@@ -221,9 +221,10 @@ def test_unseeded_and_seeded_response_dtos_validate(
     ActivityPageResponse.model_validate(client.get("/api/v1/activity").json())
 
     run_response = client.post("/api/v1/optimizer/runs", json=dict[str, object]())
-    run = OptimizerRecommendationsResponse.model_validate(run_response.json())
+    run_payload = run_response.json()
+    assert run_payload["actionable"] is False
+    run = OptimizerRecommendationsResponse.model_validate(run_payload)
     assert run.demo is True
-    assert run.actionable is False
     recommendations = client.get(f"/api/v1/optimizer/runs/{run.run_id}/recommendations").json()
     typed_recommendations = OptimizerRecommendationsResponse.model_validate(recommendations)
     leg_ids = [leg.leg_id for leg in typed_recommendations.consolidated_legs]

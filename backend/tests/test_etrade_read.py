@@ -5,7 +5,7 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import override
+from typing import TypedDict, override
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -216,6 +216,13 @@ def _detail(*lots: dict[str, object]) -> dict[str, object]:
     return {"PositionLotsResponse": {"PositionLot": list(lots)}}
 
 
+class _PaginationMarkers(TypedDict, total=False):
+    next: str
+    nextPageNo: int
+    totalNoOfPages: int
+    totalPages: int
+
+
 def _api_calls(transport: StubAdapter) -> list[requests.PreparedRequest]:
     return transport.calls[2:]
 
@@ -347,9 +354,10 @@ def test_unique_brokerage_account_supports_singleton_wrappers_and_empty_holdings
             "Accounts": {"Account": _account("unique-brokerage")},
         }
     }
+    empty_positions: list[dict[str, object]] = []
     portfolio_payload = {
         "PortfolioResponse": {
-            "AccountPortfolio": {"Position": [], "totalNoOfPages": 1},
+            "AccountPortfolio": {"Position": empty_positions, "totalNoOfPages": 1},
         }
     }
     reader, _, transport, _ = _adapter([_response(account_payload), _response(portfolio_payload)])
@@ -440,7 +448,7 @@ def test_missing_configured_account_does_not_select_another_eligible_account() -
     ],
 )
 def test_portfolio_pagination_marker_contradictions_are_rejected(
-    markers: dict[str, object], expected_code: str
+    markers: _PaginationMarkers, expected_code: str
 ) -> None:
     reader, _, transport, _ = _adapter(
         [
@@ -621,7 +629,7 @@ def test_upstream_redirect_is_not_followed_and_response_body_is_not_exposed() ->
 
 
 def test_inline_missing_exact_fields_uses_detail_but_never_invents_availability() -> None:
-    inline = {
+    inline: dict[str, object] = {
         "positionLotId": "legacy-inline",
         "positionLotQuantity": Decimal(1),
         "pricePaid": Decimal(8),
@@ -642,4 +650,6 @@ def test_inline_missing_exact_fields_uses_detail_but_never_invents_availability(
     _raise_code(lambda: reader.fetch_portfolio_with_lots(), "etrade_read_field_missing")
 
     assert len(_api_calls(transport)) == 3
-    assert _api_calls(transport)[2].url.endswith("/portfolio/101")
+    request_url = _api_calls(transport)[2].url
+    assert request_url is not None
+    assert request_url.endswith("/portfolio/101")

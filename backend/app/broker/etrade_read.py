@@ -685,6 +685,7 @@ def _acquired_date(row: Mapping[str, object]) -> tuple[date, Decimal | int | str
         milliseconds = _decimal(raw, "acquired date")
         if milliseconds != milliseconds.to_integral_value():
             _fail("etrade_read_acquired_date_invalid", "E*TRADE acquisition timestamp is invalid.")
+        acquired: date = date.min
         try:
             acquired = (
                 (_UTC_EPOCH + timedelta(milliseconds=int(milliseconds))).astimezone(_EASTERN).date()

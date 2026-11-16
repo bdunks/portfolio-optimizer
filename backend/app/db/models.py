@@ -134,6 +134,9 @@ class CurrentPosition(Base):
     sync_generation: Mapped[int] = mapped_column(Integer, nullable=False)
     as_of: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
+    broker_position_id: Mapped[str | None] = mapped_column(String(128))
+    broker_product_id: Mapped[str | None] = mapped_column(Text)
+
 
 class CurrentTaxLot(Base):
     __tablename__ = "current_tax_lot"
@@ -163,6 +166,11 @@ class CurrentTaxLot(Base):
         Boolean, nullable=False, default=False
     )
     sync_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    broker_total_cost_usd: Mapped[Decimal | None] = mapped_column(DecimalText())
+    broker_total_cost_source_usd: Mapped[Decimal | None] = mapped_column(DecimalText())
+    reserved_shares: Mapped[Decimal | None] = mapped_column(DecimalText())
+    broker_acquired_date_source: Mapped[str | None] = mapped_column(Text)
 
 
 class CurrentQuote(Base):
@@ -234,6 +242,20 @@ class SyncState(Base):
     completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     coverage: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     complete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    last_error_code: Mapped[str | None] = mapped_column(String(64))
+    last_error_summary: Mapped[str | None] = mapped_column(String(500))
+
+
+class LotCacheState(Base):
+    __tablename__ = "lot_cache_state"
+    __table_args__ = (CheckConstraint("id = 1", name="ck_lot_cache_state_singleton"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    source_generation: Mapped[int | None] = mapped_column(Integer)
+    source_as_of: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    cached_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_attempted_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     last_error_code: Mapped[str | None] = mapped_column(String(64))
     last_error_summary: Mapped[str | None] = mapped_column(String(500))
 

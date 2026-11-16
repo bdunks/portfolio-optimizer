@@ -19,6 +19,7 @@ from app.db.models import (
     CurrentPosition,
     CurrentQuote,
     CurrentTaxLot,
+    LotCacheState,
     Security,
     SecurityExposure,
     SyncState,
@@ -433,6 +434,12 @@ def sync_portfolio(
             state.complete = True
             state.last_error_code = None
             state.last_error_summary = None
+            cache_state = session.get(LotCacheState, 1)
+            if cache_state is not None:
+                cache_state.revision += 1
+                cache_state.source_generation = None
+                cache_state.source_as_of = None
+                cache_state.cached_at = None
             session.add(
                 ActivityEvent(
                     id=str(uuid4()),

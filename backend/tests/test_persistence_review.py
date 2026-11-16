@@ -719,7 +719,7 @@ def test_alembic_cli_uses_private_protected_engine_and_environment_url(tmp_path:
             assert connection.scalar(text("PRAGMA journal_mode")).lower() == "wal"
             assert connection.scalar(text("PRAGMA busy_timeout")) == 5000
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-                "0011_sector_bands"
+                "0012_portfolio_lot_cache"
             )
     finally:
         engine.dispose()

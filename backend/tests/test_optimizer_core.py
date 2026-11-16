@@ -2393,9 +2393,17 @@ def test_worker_sells_full_recent_wash_clearance_quantity(
     buys = [leg for leg in result.legs if leg.side == "BUY"]
     assert len(sells) == 1
     assert len(buys) == 1
-    assert len(result.legs) <= inputs.policy.settings.get("max_total_orders_per_batch")
-    assert len(sells) <= inputs.policy.settings.get("max_sell_tickers_per_batch")
-    assert len(sells[0].selected_lots) <= inputs.policy.settings.get("max_sell_lots_per_batch")
+    max_orders = inputs.policy.settings.get("max_total_orders_per_batch")
+    max_tickers = inputs.policy.settings.get("max_sell_tickers_per_batch")
+    max_lots = inputs.policy.settings.get("max_sell_lots_per_batch")
+    cash_reserve = inputs.policy.settings.get("cash_reserve_usd")
+    assert isinstance(max_orders, int)
+    assert isinstance(max_tickers, int)
+    assert isinstance(max_lots, int)
+    assert isinstance(cash_reserve, Decimal)
+    assert len(result.legs) <= max_orders
+    assert len(sells) <= max_tickers
+    assert len(sells[0].selected_lots) <= max_lots
     sold_lots = {
         allocation.broker_lot_id: allocation.shares for allocation in sells[0].selected_lots
     }
@@ -2411,7 +2419,7 @@ def test_worker_sells_full_recent_wash_clearance_quantity(
     assert validation.evaluation is not None
     assert validation.estimated_trading_cost_usd == Decimal(2)
     assert validation.evaluation.proposed.cash_usd == Decimal(198)
-    assert validation.evaluation.proposed.cash_usd >= inputs.policy.settings.get("cash_reserve_usd")
+    assert validation.evaluation.proposed.cash_usd >= cash_reserve
     assert {effect.term for effect in validation.evaluation.lot_effects} == {"ST", "LT"}
 
 

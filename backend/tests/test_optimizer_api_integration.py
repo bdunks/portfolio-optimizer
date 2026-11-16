@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from decimal import Decimal, localcontext
+from multiprocessing.process import BaseProcess
 from pathlib import Path
+from typing import TypeVar
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,7 +17,7 @@ from app.broker.fake import FakeBroker
 from app.db.models import OptimizerRun, RecommendationGroup, RecommendationLeg
 from app.main import create_app
 from app.optimizer.core import OptimizerRequest
-from app.optimizer.runtime import ProcessSupervisor
+from app.optimizer.runtime import ProcessSupervisor, WorkerResult
 from app.optimizer.validation import validate_candidate
 from app.schemas import BrokerSnapshot, ExposureInput
 from app.services import optimizer_service
@@ -24,6 +27,9 @@ TRADE_DATE = date(2026, 11, 15)
 SOURCE_AS_OF = datetime(2026, 11, 15, 20, 0, tzinfo=UTC)
 OLD_LOT_ID = "AAPL-OLD-001"
 RECENT_LOT_ID = "AAPL-RECENT-001"
+
+InputT = TypeVar("InputT")
+ResultT = TypeVar("ResultT")
 
 
 def hanging_optimizer_worker(request: OptimizerRequest, deadline: float) -> object:
@@ -461,13 +467,19 @@ def test_real_optimizer_http_hang_persists_timeout_and_reaps_spawned_worker(
     original_run = supervisor.run
     observed_processes: list[object] = []
 
-    async def bounded_real_run(worker_input: object, worker: object, **kwargs: object) -> object:
+    async def bounded_real_run(
+        worker_input: InputT,
+        worker: Callable[[InputT, float], ResultT],
+        *,
+        timeout_seconds: float = 3.0,
+        validation_reserve_seconds: float = 0.2,
+    ) -> WorkerResult[ResultT]:
         task = asyncio.create_task(
             original_run(
                 worker_input,
                 worker,
-                timeout_seconds=3.0,
-                validation_reserve_seconds=0.2,
+                timeout_seconds=timeout_seconds,
+                validation_reserve_seconds=validation_reserve_seconds,
             )
         )
         for _ in range(200):
@@ -485,9 +497,9 @@ def test_real_optimizer_http_hang_persists_timeout_and_reaps_spawned_worker(
     reaped: list[tuple[bool, int | None]] = []
     original_stop_and_reap = ProcessSupervisor._stop_and_reap
 
-    def record_reap(process: object) -> None:
-        original_stop_and_reap(process)  # type: ignore[arg-type]
-        reaped.append((process.is_alive(), process.exitcode))  # type: ignore[attr-defined]
+    def record_reap(process: BaseProcess) -> None:
+        original_stop_and_reap(process)
+        reaped.append((process.is_alive(), process.exitcode))
 
     monkeypatch.setattr(ProcessSupervisor, "_stop_and_reap", staticmethod(record_reap))
 

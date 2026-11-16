@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import cast
 
+from app.optimizer.runtime import ProcessSupervisor
 from scripts.compare_optimizer_quality import (
     _build_summaries,
     _compare_case,
@@ -104,9 +106,10 @@ def test_production_worker_failures_count_against_complete_reference() -> None:
 
     for error in (TimeoutError("supervisor deadline"), RuntimeError("worker failed")):
         row = asyncio.run(
+            # Intentional test doubles exercise failure/malformed worker boundaries.
             _compare_case(
                 case,
-                FailingSupervisor(error),
+                cast(ProcessSupervisor, FailingSupervisor(error)),
                 max_assignments=64,
                 reference_time_limit_seconds=2,
                 production_timeout_seconds=1,
@@ -138,7 +141,7 @@ def test_owner_validation_deadline_failure_counts_as_missed_feasibility() -> Non
     row = asyncio.run(
         _compare_case(
             case,
-            LateResultSupervisor(),
+            cast(ProcessSupervisor, LateResultSupervisor()),
             max_assignments=64,
             reference_time_limit_seconds=2,
             production_timeout_seconds=1,
@@ -166,7 +169,7 @@ def test_malformed_worker_output_is_production_failure_and_reference_still_runs(
     row = asyncio.run(
         _compare_case(
             case,
-            ReturningSupervisor(),
+            cast(ProcessSupervisor, ReturningSupervisor()),
             max_assignments=64,
             reference_time_limit_seconds=2,
             production_timeout_seconds=1,
@@ -185,6 +188,8 @@ def test_malformed_worker_output_is_production_failure_and_reference_still_runs(
 
 def test_checksum_mismatch_and_actual_out_of_domain_output_remain_excluded() -> None:
     case = build_small_quality_case("fee-consolidation", 20261113)
+    checksum = case.inputs.source_checksum
+    assert isinstance(checksum, str)
 
     def result(legs: tuple[object, ...], checksum: str) -> object:
         metadata = SimpleNamespace(source_checksum=checksum)
@@ -210,12 +215,12 @@ def test_checksum_mismatch_and_actual_out_of_domain_output_remain_excluded() -> 
     )
     for worker_result in (
         result((), "different-checksum"),
-        result((oversized_leg,), case.inputs.source_checksum),
+        result((oversized_leg,), checksum),
     ):
         row = asyncio.run(
             _compare_case(
                 case,
-                FixedSupervisor(worker_result),
+                cast(ProcessSupervisor, FixedSupervisor(worker_result)),
                 max_assignments=64,
                 reference_time_limit_seconds=2,
                 production_timeout_seconds=1,

@@ -185,7 +185,7 @@ def _lot(
     shares: Decimal,
     *,
     available: Decimal | None = None,
-    total_cost: Decimal = Decimal("20"),
+    total_cost: Decimal = Decimal(20),
     acquired_ms: int = 0,
     **extra: object,
 ) -> dict[str, object]:
@@ -231,17 +231,17 @@ def test_configured_account_paginates_exact_inline_and_detail_lots() -> None:
     clock = FixedClock(datetime(2026, 11, 5, 16, 0, tzinfo=UTC))
     inline = _lot(
         "lot-exact-40",
-        Decimal("40"),
-        available=Decimal("0"),
+        Decimal(40),
+        available=Decimal(0),
         total_cost=Decimal("255.87"),
         acquired_ms=1772168400000,
         price=Decimal("6.3967"),
         totalCostForGainPct=Decimal("255.868"),
-        adjPrice=Decimal("0"),
+        adjPrice=Decimal(0),
         orderNo=0,
     )
     page_one = _portfolio(
-        [_position("AAA", "101", Decimal("40"), inline_lots=[inline])],
+        [_position("AAA", "101", Decimal(40), inline_lots=[inline])],
         account_key="chosen-account",
         totalNoOfPages=2,
         nextPageNo=2,
@@ -258,6 +258,7 @@ def test_configured_account_paginates_exact_inline_and_detail_lots() -> None:
             available=Decimal("0.25"),
             total_cost=Decimal("1.2345"),
         )
+    )
     reader, oauth, transport, clock = _adapter(
         [
             _response(
@@ -289,16 +290,16 @@ def test_configured_account_paginates_exact_inline_and_detail_lots() -> None:
     assert result.positions[1].position.shares == Decimal("0.5")
     assert [lot.broker_lot_id for lot in result.lots] == ["lot-exact-40", "lot-fractional"]
     first, second = result.lots
-    assert first.remaining_shares == Decimal("40")
-    assert first.available_shares == Decimal("0")
-    assert first.reserved_shares == Decimal("40")
+    assert first.remaining_shares == Decimal(40)
+    assert first.available_shares == Decimal(0)
+    assert first.reserved_shares == Decimal(40)
     assert first.total_cost_usd == first.total_cost_source == Decimal("255.87")
     assert first.lot.adjusted_unit_basis_usd == Decimal("6.39675")
     assert first.lot.adjusted_unit_basis_usd * first.lot.shares != Decimal("255.87") * Decimal(
         "6.3967"
     )
     assert first.lot.acquired_date.isoformat() == "2026-02-27"
-    assert first.acquired_date_source == Decimal("1772168400000")
+    assert first.acquired_date_source == Decimal(1772168400000)
     assert second.remaining_shares == Decimal("0.5")
     assert second.available_shares == Decimal("0.25")
     assert second.reserved_shares == Decimal("0.25")
@@ -353,13 +354,13 @@ def test_unique_brokerage_account_supports_singleton_wrappers_and_empty_holdings
 
 def test_previous_binding_selects_one_account_and_preserves_product_id_casing() -> None:
     accounts = _accounts(_account("first"), _account("previous"))
-    position = _position("AAA", "123", Decimal("1"), product_id={"symbol": "AAA", "typeCode": "1"})
+    position = _position("AAA", "123", Decimal(1), product_id={"symbol": "AAA", "typeCode": "1"})
     position["Product"] = {
         "ProductId": {"symbol": "AAA", "typeCode": "1"},
         "securityTypeDisplay": "Equity",
     }
     portfolio = _portfolio([position], account_key="previous")
-    detail = _detail(_lot("lot-123", Decimal("1"), total_cost=Decimal("7.25")))
+    detail = _detail(_lot("lot-123", Decimal(1), total_cost=Decimal("7.25")))
     reader, _, transport, _ = _adapter(
         [_response(accounts), _response(portfolio), _response(detail)]
     )
@@ -457,7 +458,7 @@ def test_repeated_continuation_on_later_page_is_rejected() -> None:
 
 def test_partial_portfolio_fetch_failure_returns_no_partial_result() -> None:
     first = _portfolio(
-        [_position("AAA", "101", Decimal("1"), inline_lots=[_lot("lot-a", Decimal("1"))])],
+        [_position("AAA", "101", Decimal(1), inline_lots=[_lot("lot-a", Decimal(1))])],
         nextPageNo=2,
     )
     failure = _response({"private": "synthetic-upstream-body"}, status=503)
@@ -473,7 +474,9 @@ def test_partial_portfolio_fetch_failure_returns_no_partial_result() -> None:
 
 def test_detail_lot_values_preserve_zero_availability_and_fractional_shares() -> None:
     position = _position("AAA", "101", Decimal("0.125"), inline_lots=[])
-    lot = _lot("fractional-lot", Decimal("0.125"), available=Decimal("0"), total_cost=Decimal("0.3125"))
+    lot = _lot(
+        "fractional-lot", Decimal("0.125"), available=Decimal(0), total_cost=Decimal("0.3125")
+    )
     reader, _, _, _ = _adapter(
         [
             _response(_accounts(_account("one"))),
@@ -485,19 +488,19 @@ def test_detail_lot_values_preserve_zero_availability_and_fractional_shares() ->
     result = reader.fetch_portfolio_with_lots()
 
     assert result.lots[0].remaining_shares == Decimal("0.125")
-    assert result.lots[0].available_shares == Decimal("0")
+    assert result.lots[0].available_shares == Decimal(0)
     assert result.lots[0].reserved_shares == Decimal("0.125")
-    assert result.lots[0].lot.available_shares == Decimal("0")
+    assert result.lots[0].lot.available_shares == Decimal(0)
     assert result.lots[0].lot.adjusted_unit_basis_usd == Decimal("2.5")
 
 
 def test_unrepresentable_basis_conversion_fails_without_rounding() -> None:
-    position = _position("AAA", "101", Decimal("3"), inline_lots=[])
+    position = _position("AAA", "101", Decimal(3), inline_lots=[])
     reader, _, _, _ = _adapter(
         [
             _response(_accounts(_account("one"))),
             _response(_portfolio(position)),
-            _response(_detail(_lot("thirds", Decimal("3"), total_cost=Decimal("1")))),
+            _response(_detail(_lot("thirds", Decimal(3), total_cost=Decimal(1)))),
         ]
     )
 
@@ -505,8 +508,8 @@ def test_unrepresentable_basis_conversion_fails_without_rounding() -> None:
 
 
 def test_missing_lot_fields_or_empty_detail_fail_closed() -> None:
-    position = _position("AAA", "101", Decimal("1"), inline_lots=[])
-    missing_available = _lot("missing-available", Decimal("1"))
+    position = _position("AAA", "101", Decimal(1), inline_lots=[])
+    missing_available = _lot("missing-available", Decimal(1))
     del missing_available["availableQty"]
     reader, _, _, _ = _adapter(
         [
@@ -529,10 +532,10 @@ def test_missing_lot_fields_or_empty_detail_fail_closed() -> None:
 
 
 def test_duplicate_lot_and_position_ids_are_rejected() -> None:
-    position = _position("AAA", "101", Decimal("2"), inline_lots=[])
+    position = _position("AAA", "101", Decimal(2), inline_lots=[])
     duplicate_lots = _detail(
-        _lot("same-lot", Decimal("1"), total_cost=Decimal("5")),
-        _lot("same-lot", Decimal("1"), total_cost=Decimal("5")),
+        _lot("same-lot", Decimal(1), total_cost=Decimal(5)),
+        _lot("same-lot", Decimal(1), total_cost=Decimal(5)),
     )
     reader, _, _, _ = _adapter(
         [
@@ -544,11 +547,11 @@ def test_duplicate_lot_and_position_ids_are_rejected() -> None:
     _raise_code(lambda: reader.fetch_portfolio_with_lots(), "etrade_read_duplicate_lot")
 
     first = _portfolio(
-        [_position("AAA", "101", Decimal("1"), inline_lots=[_lot("lot-1", Decimal("1"))])],
+        [_position("AAA", "101", Decimal(1), inline_lots=[_lot("lot-1", Decimal(1))])],
         nextPageNo=2,
     )
     second = _portfolio(
-        [_position("BBB", "101", Decimal("1"), inline_lots=[_lot("lot-2", Decimal("1"))])]
+        [_position("BBB", "101", Decimal(1), inline_lots=[_lot("lot-2", Decimal(1))])]
     )
     duplicate_positions, _, _, _ = _adapter(
         [
@@ -566,7 +569,7 @@ def test_duplicate_lot_and_position_ids_are_rejected() -> None:
 def test_malformed_and_nonfinite_numeric_responses_are_sanitized(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    position = _position("AAA", "101", Decimal("1"), inline_lots=[])
+    position = _position("AAA", "101", Decimal(1), inline_lots=[])
     nonfinite = _response(
         raw_body='{"PositionLotsResponse":{"PositionLot":{"positionLotId":"lot","remainingQty":NaN}}}'
     )
@@ -588,7 +591,7 @@ def test_malformed_and_nonfinite_numeric_responses_are_sanitized(
         [
             _response(_accounts(_account("one"))),
             _response(_portfolio(position)),
-            _response(_detail(_lot("bad-quantity", Decimal("1"), available=Decimal("2")))),
+            _response(_detail(_lot("bad-quantity", Decimal(1), available=Decimal(2)))),
         ]
     )
     _raise_code(lambda: malformed.fetch_portfolio_with_lots(), "etrade_read_lot_invalid")
@@ -610,13 +613,13 @@ def test_upstream_redirect_is_not_followed_and_response_body_is_not_exposed() ->
 def test_inline_missing_exact_fields_uses_detail_but_never_invents_availability() -> None:
     inline = {
         "positionLotId": "legacy-inline",
-        "positionLotQuantity": Decimal("1"),
-        "pricePaid": Decimal("8"),
+        "positionLotQuantity": Decimal(1),
+        "pricePaid": Decimal(8),
         "dateAcquired": "2024-01-02",
         "orderNo": 0,
     }
-    position = _position("AAA", "101", Decimal("1"), inline_lots=[inline])
-    missing_availability = _lot("detail-lot", Decimal("1"), total_cost=Decimal("8"))
+    position = _position("AAA", "101", Decimal(1), inline_lots=[inline])
+    missing_availability = _lot("detail-lot", Decimal(1), total_cost=Decimal(8))
     del missing_availability["availableQty"]
     reader, _, transport, _ = _adapter(
         [

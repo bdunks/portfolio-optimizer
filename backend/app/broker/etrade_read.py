@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from fractions import Fraction
-from typing import Literal, NoReturn, TypeAlias, cast
+from typing import Literal, NoReturn, cast
 from urllib.parse import parse_qs, urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
@@ -22,8 +22,8 @@ from app.services.errors import AppError
 
 logger = logging.getLogger(__name__)
 
-EtradeEnvironment: TypeAlias = Literal["sandbox", "production"]
-BrokerProductId: TypeAlias = str | int | Decimal | Mapping[str, object]
+type EtradeEnvironment = Literal["sandbox", "production"]
+type BrokerProductId = str | int | Decimal | Mapping[str, object]
 
 _DATA_BASES: dict[EtradeEnvironment, str] = {
     "sandbox": "https://apisb.etrade.com/v1",
@@ -608,7 +608,7 @@ def _identifier(value: object, field: str, *, maximum: int) -> str:
 
 
 def _decimal(value: object, field: str) -> Decimal:
-    if isinstance(value, bool) or isinstance(value, float):
+    if isinstance(value, (bool, float)):
         _fail("etrade_read_quantity_invalid", f"E*TRADE {field} is invalid.")
     if not isinstance(value, (Decimal, int, str)):
         _fail("etrade_read_field_missing", f"E*TRADE {field} is missing or invalid.")
@@ -754,7 +754,10 @@ def _page_markers(row: Mapping[str, object], current_page: int) -> _PageMarkers:
         _fail("etrade_read_pagination_conflict", "E*TRADE portfolio continuation markers conflict.")
     next_page = explicit[0] if explicit else None
     if next_page is not None and next_page <= current_page:
-        _fail("etrade_read_pagination_repeated", "E*TRADE portfolio continuation marker repeated a page.")
+        _fail(
+            "etrade_read_pagination_repeated",
+            "E*TRADE portfolio continuation marker repeated a page.",
+        )
     if next_page is not None and next_page != current_page + 1:
         _fail("etrade_read_pagination_invalid", "E*TRADE portfolio pagination is inconsistent.")
     if total_pages is not None:
@@ -780,9 +783,9 @@ def _page_integer(value: object, field: str) -> int:
         _fail("etrade_read_pagination_invalid", f"E*TRADE {field} is invalid.")
     if isinstance(value, int):
         result = value
-    elif isinstance(value, Decimal) and value.is_finite() and value == value.to_integral_value():
-        result = int(value)
-    elif isinstance(value, str) and value.isascii() and value.isdecimal():
+    elif (
+        isinstance(value, Decimal) and value.is_finite() and value == value.to_integral_value()
+    ) or (isinstance(value, str) and value.isascii() and value.isdecimal()):
         result = int(value)
     else:
         _fail("etrade_read_pagination_invalid", f"E*TRADE {field} is invalid.")

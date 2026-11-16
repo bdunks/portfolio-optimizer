@@ -159,9 +159,8 @@ def _sqlite_table_snapshot(connection: Connection, table: str) -> list[dict[str,
     for row in rows:
         snapshot: dict[str, object] = {}
         for key, value in row.items():
-            if isinstance(key, str) and not (
-                table == "optimizer_run" and key == "proposed_trade_date"
-            ):
+            assert isinstance(key, str)
+            if not (table == "optimizer_run" and key == "proposed_trade_date"):
                 snapshot[key] = value
         snapshots.append(snapshot)
     return sorted(snapshots, key=repr)

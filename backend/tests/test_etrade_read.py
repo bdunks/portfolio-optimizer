@@ -5,6 +5,7 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
+from itertools import pairwise
 from typing import TypedDict, Unpack, override
 from urllib.parse import parse_qs, urlsplit
 
@@ -25,10 +26,36 @@ class FixedClock:
         return self.now
 
 
+class FakePacingClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.advance(seconds)
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
 class StubAdapter(BaseAdapter):
-    def __init__(self, responses: Sequence[requests.Response | Exception]) -> None:
+    def __init__(
+        self,
+        responses: Sequence[requests.Response | Exception],
+        *,
+        pacing_clock: FakePacingClock | None = None,
+        api_request_durations: Sequence[float] = (),
+    ) -> None:
         self.responses = list(responses)
         self.calls: list[requests.PreparedRequest] = []
+        self.pacing_clock = pacing_clock
+        self.api_request_durations = list(api_request_durations)
+        self.api_request_starts: list[tuple[str, float]] = []
+        self._api_request_index = 0
 
     @override
     def send(
@@ -41,6 +68,12 @@ class StubAdapter(BaseAdapter):
         proxies: Mapping[str, str] | None = None,
     ) -> requests.Response:
         self.calls.append(request)
+        if request.url is not None and urlsplit(request.url).path.startswith("/v1/accounts/"):
+            if self.pacing_clock is not None:
+                self.api_request_starts.append((request.url, self.pacing_clock.now))
+                if self._api_request_index < len(self.api_request_durations):
+                    self.pacing_clock.advance(self.api_request_durations[self._api_request_index])
+            self._api_request_index += 1
         if not self.responses:
             raise AssertionError("Unexpected HTTP request; fake transport has no live fallback")
         result = self.responses.pop(0)
@@ -100,13 +133,18 @@ def _token_response(token: str, secret: str) -> requests.Response:
 def _service(
     responses: Sequence[requests.Response | Exception],
     clock: FixedClock,
+    *,
+    pacing_clock: FakePacingClock | None = None,
+    api_request_durations: Sequence[float] = (),
 ) -> tuple[EtradeOAuthService, StubAdapter]:
     transport = StubAdapter(
         [
             _token_response("request-token-test", "request-secret-test"),
             _token_response("access-token-test", "access-secret-test"),
             *responses,
-        ]
+        ],
+        pacing_clock=pacing_clock,
+        api_request_durations=api_request_durations,
     )
     oauth = EtradeOAuthService(
         "consumer-key-test",
@@ -124,14 +162,24 @@ def _adapter(
     *,
     configured: str | None = None,
     clock: FixedClock | None = None,
+    pacing_clock: FakePacingClock | None = None,
+    api_request_durations: Sequence[float] = (),
 ) -> tuple[EtradeReadAdapter, EtradeOAuthService, StubAdapter, FixedClock]:
     fixed_clock = clock or FixedClock(datetime(2026, 11, 5, 16, 0, tzinfo=UTC))
-    oauth, transport = _service(responses, fixed_clock)
+    fake_pacing_clock = pacing_clock or FakePacingClock()
+    oauth, transport = _service(
+        responses,
+        fixed_clock,
+        pacing_clock=fake_pacing_clock,
+        api_request_durations=api_request_durations,
+    )
     reader = EtradeReadAdapter(
         oauth,
         environment="sandbox",
         configured_account_id_key=configured,
         clock=fixed_clock,
+        monotonic_clock=fake_pacing_clock.monotonic,
+        sleep=fake_pacing_clock.sleep,
     )
     return reader, oauth, transport, fixed_clock
 
@@ -160,20 +208,24 @@ def _position(
     *,
     inline_lots: list[dict[str, object]] | dict[str, object] | None = None,
     asset_type: str = "EQUITY",
-    product_id: object = "synthetic-product-1",
+    product_id: object | None = None,
 ) -> dict[str, object]:
+    product: dict[str, object] = {
+        "securityType": "EQ",
+        "cusip": "123456789" if ticker == "AAA" else None,
+        "isin": "US1234567890" if ticker == "AAA" else None,
+    }
+    if asset_type == "ETF":
+        product["securitySubType"] = "ETF"
+    product["productId"] = (
+        product_id if product_id is not None else {"symbol": ticker, "typeCode": "EQUITY"}
+    )
     position: dict[str, object] = {
         "symbol": ticker,
         "positionId": position_id,
         "quantity": shares,
         "marketValue": Decimal("100.25"),
-        "Product": {
-            "productId": product_id,
-            "securityTypeDisplay": asset_type,
-            "securityType": "EQ" if asset_type == "EQUITY" else "ETF",
-            "cusip": "123456789" if ticker == "AAA" else None,
-            "isin": "US1234567890" if ticker == "AAA" else None,
-        },
+        "Product": product,
     }
     if inline_lots is not None:
         position["positionLot"] = inline_lots
@@ -242,7 +294,7 @@ def _raise_code(call: Callable[[], object], code: str) -> AppError:
     return captured.value
 
 
-def test_configured_account_paginates_exact_inline_and_detail_lots() -> None:
+def test_configured_account_paginates_and_always_fetches_detail_lots() -> None:
     clock = FixedClock(datetime(2026, 11, 5, 16, 0, tzinfo=UTC))
     inline = _lot(
         "lot-exact-40",
@@ -266,7 +318,8 @@ def test_configured_account_paginates_exact_inline_and_detail_lots() -> None:
         account_key="chosen-account",
         totalNoOfPages=2,
     )
-    detail = _detail(
+    detail_one = _detail(inline)
+    detail_two = _detail(
         _lot(
             "lot-fractional",
             Decimal("0.5"),
@@ -284,8 +337,9 @@ def test_configured_account_paginates_exact_inline_and_detail_lots() -> None:
                 )
             ),
             _response(page_one),
+            _response(detail_one),
             _response(page_two),
-            _response(detail),
+            _response(detail_two),
         ],
         configured="chosen-account",
         clock=clock,
@@ -298,10 +352,12 @@ def test_configured_account_paginates_exact_inline_and_detail_lots() -> None:
     assert result.account.display_name == "Synthetic chosen-account"
     assert [position.position.ticker for position in result.positions] == ["AAA", "BBB"]
     assert result.positions[0].broker_position_id == "101"
-    assert result.positions[0].broker_product_id == "synthetic-product-1"
+    assert result.positions[0].broker_product_id == {"symbol": "AAA", "typeCode": "EQUITY"}
+    assert result.positions[0].position.asset_type == "EQUITY"
     assert result.positions[0].position.cusip == "123456789"
     assert result.positions[0].position.isin == "US1234567890"
     assert result.positions[1].position.asset_type == "ETF"
+    assert result.positions[1].broker_product_id == {"symbol": "BBB", "typeCode": "EQUITY"}
     assert result.positions[1].position.shares == Decimal("0.5")
     assert [lot.broker_lot_id for lot in result.lots] == ["lot-exact-40", "lot-fractional"]
     first, second = result.lots
@@ -327,7 +383,7 @@ def test_configured_account_paginates_exact_inline_and_detail_lots() -> None:
     assert oauth.status()["last_activity_at"] == datetime(2026, 11, 5, 16, 1, tzinfo=UTC)
 
     calls = _api_calls(transport)
-    assert len(calls) == 4
+    assert len(calls) == 5
     assert calls[0].url == "https://apisb.etrade.com/v1/accounts/list"
     portfolio_urls = [str(call.url) for call in calls if "/portfolio?" in str(call.url)]
     assert len(portfolio_urls) == 2
@@ -336,10 +392,10 @@ def test_configured_account_paginates_exact_inline_and_detail_lots() -> None:
         "sortOrder": ["ASC"],
         "count": ["200"],
         "pageNumber": ["1"],
-        "lotsRequired": ["true"],
     }
     assert parse_qs(urlsplit(portfolio_urls[1]).query)["pageNumber"] == ["2"]
-    assert calls[3].url == "https://apisb.etrade.com/v1/accounts/chosen-account/portfolio/102"
+    assert calls[2].url == "https://apisb.etrade.com/v1/accounts/chosen-account/portfolio/101"
+    assert calls[4].url == "https://apisb.etrade.com/v1/accounts/chosen-account/portfolio/102"
     assert all(call.method == "GET" for call in calls)
     assert all(_header_text(call.headers.get("Accept")) == "application/json" for call in calls)
     assert all(
@@ -370,14 +426,20 @@ def test_unique_brokerage_account_supports_singleton_wrappers_and_empty_holdings
     assert len(_api_calls(transport)) == 2
 
 
-def test_previous_binding_selects_one_account_and_preserves_product_id_casing() -> None:
+def test_previous_binding_selects_one_account_and_accepts_documented_key_casing() -> None:
     accounts = _accounts(_account("first"), _account("previous"))
-    position = _position("AAA", "123", Decimal(1), product_id={"symbol": "AAA", "typeCode": "1"})
-    position["Product"] = {
-        "ProductId": {"symbol": "AAA", "typeCode": "1"},
-        "securityTypeDisplay": "Equity",
+    position = _position(
+        "AAA", "123", Decimal(1), product_id={"symbol": "AAA", "typeCode": "EQUITY"}
+    )
+    position["product"] = position.pop("Product")
+    portfolio = {
+        "PortfolioResponse": {
+            "accountPortfolio": {
+                "position": position,
+                "accountIdKey": "previous",
+            }
+        }
     }
-    portfolio = _portfolio([position], account_key="previous")
     detail = _detail(_lot("lot-123", Decimal(1), total_cost=Decimal("7.25")))
     reader, _, transport, _ = _adapter(
         [_response(accounts), _response(portfolio), _response(detail)]
@@ -386,11 +448,60 @@ def test_previous_binding_selects_one_account_and_preserves_product_id_casing() 
     result = reader.fetch_portfolio_with_lots(previously_bound_account_id_key="previous")
 
     assert result.account.account_id_key == "previous"
-    assert result.positions[0].broker_product_id == {"symbol": "AAA", "typeCode": "1"}
+    assert result.positions[0].broker_product_id == {"symbol": "AAA", "typeCode": "EQUITY"}
     assert (
         _api_calls(transport)[2].url
         == "https://apisb.etrade.com/v1/accounts/previous/portfolio/123"
     )
+
+
+@pytest.mark.parametrize(
+    "classification",
+    [
+        {"securityType": "BOND"},
+        {"securityType": "EQ", "securitySubType": "BOND"},
+        {"securityType": "EQ", "securitySubType": None},
+        {"securityType": "ETF"},
+        {"SecurityType": "EQ"},
+        {"assetType": "EQUITY", "securityTypeDisplay": "Equity"},
+        {},
+    ],
+)
+def test_unsupported_product_classification_fails_closed(
+    classification: dict[str, object],
+) -> None:
+    position = _position("AAA", "123", Decimal(1))
+    product = position["Product"]
+    assert isinstance(product, dict)
+    product.pop("securityType", None)
+    product.pop("securitySubType", None)
+    product.update(classification)
+    reader, _, _, _ = _adapter(
+        [
+            _response(_accounts(_account("one"))),
+            _response(_portfolio(position)),
+        ]
+    )
+
+    _raise_code(lambda: reader.fetch_portfolio_with_lots(), "etrade_read_security_type_unsupported")
+
+
+def test_product_identity_remains_optional_and_undocumented_casing_is_ignored() -> None:
+    position = _position("AAA", "123", Decimal(1))
+    product = position["Product"]
+    assert isinstance(product, dict)
+    product["ProductId"] = product.pop("productId")
+    reader, _, _, _ = _adapter(
+        [
+            _response(_accounts(_account("one"))),
+            _response(_portfolio(position)),
+            _response(_detail(_lot("lot-123", Decimal(1)))),
+        ]
+    )
+
+    result = reader.fetch_portfolio_with_lots()
+
+    assert result.positions[0].broker_product_id is None
 
 
 @pytest.mark.parametrize(
@@ -479,15 +590,21 @@ def test_partial_portfolio_fetch_failure_returns_no_partial_result() -> None:
         [_position("AAA", "101", Decimal(1), inline_lots=[_lot("lot-a", Decimal(1))])],
         nextPageNo=2,
     )
+    first_detail = _detail(_lot("lot-a", Decimal(1)))
     failure = _response({"private": "synthetic-upstream-body"}, status=503)
     reader, _, transport, _ = _adapter(
-        [_response(_accounts(_account("one"))), _response(first), failure]
+        [
+            _response(_accounts(_account("one"))),
+            _response(first),
+            _response(first_detail),
+            failure,
+        ]
     )
 
     error = _raise_code(lambda: reader.fetch_portfolio_with_lots(), "etrade_read_http_error")
 
     assert "synthetic-upstream-body" not in str(error)
-    assert len(_api_calls(transport)) == 3
+    assert len(_api_calls(transport)) == 4
 
 
 def test_detail_lot_values_preserve_zero_availability_and_fractional_shares() -> None:
@@ -575,6 +692,7 @@ def test_duplicate_lot_and_position_ids_are_rejected() -> None:
         [
             _response(_accounts(_account("one"))),
             _response(first),
+            _response(_detail(_lot("lot-1", Decimal(1)))),
             _response(second),
         ]
     )
@@ -628,7 +746,7 @@ def test_upstream_redirect_is_not_followed_and_response_body_is_not_exposed() ->
     assert "unexpected.example" not in str(_api_calls(transport)[0].url)
 
 
-def test_inline_missing_exact_fields_uses_detail_but_never_invents_availability() -> None:
+def test_malformed_inline_lots_still_request_detail_and_never_invent_availability() -> None:
     inline: dict[str, object] = {
         "positionLotId": "legacy-inline",
         "positionLotQuantity": Decimal(1),
@@ -653,3 +771,123 @@ def test_inline_missing_exact_fields_uses_detail_but_never_invents_availability(
     request_url = _api_calls(transport)[2].url
     assert request_url is not None
     assert request_url.endswith("/portfolio/101")
+
+
+def test_poc_wrapper_cannot_supply_the_position_lot_http_response() -> None:
+    position = _position("AAA", "101", Decimal(1), inline_lots=[_lot("inline-lot", Decimal(1))])
+    wrapped_lots = _detail(_lot("wrapped-lot", Decimal(1)))
+    poc_wrapper = {"data": wrapped_lots, "empty": False}
+    reader, _, transport, _ = _adapter(
+        [
+            _response(_accounts(_account("one"))),
+            _response(_portfolio(position)),
+            _response(poc_wrapper),
+        ]
+    )
+
+    error = _raise_code(
+        lambda: reader.fetch_portfolio_with_lots(), "etrade_read_response_malformed"
+    )
+
+    assert "wrapped-lot" not in str(error)
+    calls = _api_calls(transport)
+    assert len(calls) == 3
+    assert calls[2].url == "https://apisb.etrade.com/v1/accounts/one/portfolio/101"
+
+
+def test_date_acquired_alias_cannot_replace_canonical_acquired_date() -> None:
+    position = _position("AAA", "101", Decimal(1), inline_lots=[])
+    lot = _lot("date-alias", Decimal(1))
+    del lot["acquiredDate"]
+    lot["dateAcquired"] = "2024-01-02"
+    reader, _, _, _ = _adapter(
+        [
+            _response(_accounts(_account("one"))),
+            _response(_portfolio(position)),
+            _response(_detail(lot)),
+        ]
+    )
+
+    _raise_code(lambda: reader.fetch_portfolio_with_lots(), "etrade_read_field_missing")
+
+
+@pytest.mark.parametrize(
+    ("lot_payload", "expected_code"),
+    [
+        (
+            {"PositionLotsResponse": {"positionLot": _lot("wrong-wrapper-case", Decimal(1))}},
+            "etrade_read_lots_missing",
+        ),
+        (
+            _detail(
+                {
+                    **{
+                        key: value
+                        for key, value in _lot("wrong-field-case", Decimal(1)).items()
+                        if key != "positionLotId"
+                    },
+                    "PositionLotId": "wrong-field-case",
+                }
+            ),
+            "etrade_read_identifier_invalid",
+        ),
+    ],
+)
+def test_undocumented_position_lot_casing_aliases_fail_closed(
+    lot_payload: dict[str, object], expected_code: str
+) -> None:
+    position = _position("AAA", "101", Decimal(1), inline_lots=[])
+    reader, _, _, _ = _adapter(
+        [
+            _response(_accounts(_account("one"))),
+            _response(_portfolio(position)),
+            _response(lot_payload),
+        ]
+    )
+
+    _raise_code(lambda: reader.fetch_portfolio_with_lots(), expected_code)
+
+
+def test_detail_pacing_spans_pages_and_repeated_refreshes_with_request_duration() -> None:
+    pacing = FakePacingClock()
+    first_page = _portfolio(
+        [_position("AAA", "101", Decimal(1), inline_lots=[_lot("ignored-inline", Decimal(1))])],
+        nextPageNo=2,
+    )
+    second_page = _portfolio([_position("BBB", "102", Decimal(1))])
+    refresh_one = _portfolio([_position("CCC", "103", Decimal(1))])
+    refresh_two = _portfolio([_position("DDD", "104", Decimal(1))])
+    responses = [
+        _response(_accounts(_account("one"))),
+        _response(first_page),
+        _response(_detail(_lot("lot-a", Decimal(1)))),
+        _response(second_page),
+        _response(_detail(_lot("lot-b", Decimal(1)))),
+        _response(_accounts(_account("one"))),
+        _response(refresh_one),
+        _response(_detail(_lot("lot-c", Decimal(1)))),
+        _response(_accounts(_account("one"))),
+        _response(refresh_two),
+        _response(_detail(_lot("lot-d", Decimal(1)))),
+    ]
+    reader, _, transport, _ = _adapter(
+        responses,
+        pacing_clock=pacing,
+        api_request_durations=(0, 0, 0.2, 0, 0.6, 0, 0, 0.2, 0, 0, 0.6),
+    )
+
+    first_result = reader.fetch_portfolio_with_lots()
+    second_result = reader.fetch_portfolio_with_lots()
+    third_result = reader.fetch_portfolio_with_lots()
+
+    assert [lot.broker_lot_id for lot in first_result.lots] == ["lot-a", "lot-b"]
+    assert [lot.broker_lot_id for lot in second_result.lots] == ["lot-c"]
+    assert [lot.broker_lot_id for lot in third_result.lots] == ["lot-d"]
+    detail_starts = [
+        started_at
+        for url, started_at in transport.api_request_starts
+        if "/portfolio/" in urlsplit(url).path
+    ]
+    assert detail_starts == pytest.approx([0.0, 0.5, 1.1, 1.6])
+    assert all(later - earlier >= 0.5 for earlier, later in pairwise(detail_starts))
+    assert pacing.sleeps == pytest.approx([0.3, 0.3])

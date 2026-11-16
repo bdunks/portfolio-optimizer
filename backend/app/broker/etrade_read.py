@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -102,6 +103,8 @@ class EtradeReadAdapter:
         environment: EtradeEnvironment,
         configured_account_id_key: str | None = None,
         clock: Callable[[], datetime] | None = None,
+        monotonic_clock: Callable[[], float] | None = None,
+        sleep: Callable[[float], None] | None = None,
     ) -> None:
         if environment not in _DATA_BASES:
             raise ValueError("Unsupported E*TRADE environment")
@@ -113,6 +116,9 @@ class EtradeReadAdapter:
             else None
         )
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._monotonic_clock = monotonic_clock or time.monotonic
+        self._sleep = sleep or time.sleep
+        self._last_position_detail_start: float | None = None
 
     def list_accounts(self) -> tuple[EtradeAccountCandidate, ...]:
         """Return validated accounts without selecting or persisting a managed account."""
@@ -199,21 +205,6 @@ class EtradeReadAdapter:
                     )
                 positions.append(position)
 
-                inline = _inline_lot_rows(row)
-                exact_inline = (
-                    inline is not None
-                    and bool(inline)
-                    and all(_has_exact_lot_fields(lot_row) for lot_row in inline)
-                )
-                if exact_inline:
-                    inline_lots = [self._decode_lot(lot_row, position, as_of) for lot_row in inline]
-                    if (
-                        exact_sum(lot.remaining_shares for lot in inline_lots)
-                        == position.position.shares
-                    ):
-                        lots.extend(inline_lots)
-                        continue
-
                 detail_payload = self._get_json(
                     "position-lots",
                     self._position_detail_path(
@@ -296,6 +287,8 @@ class EtradeReadAdapter:
     def _get_json(self, operation: str, path: str) -> object | None:
         session = self._oauth.auth_for_read()
         try:
+            if operation == "position-lots":
+                self._pace_position_detail_request()
             response = session.get(
                 f"{self._base_url}{path}",
                 headers={"Accept": "application/json"},
@@ -340,6 +333,16 @@ class EtradeReadAdapter:
         self._oauth.record_activity()
         return payload
 
+    def _pace_position_detail_request(self) -> None:
+        if self._last_position_detail_start is not None:
+            while True:
+                elapsed = self._monotonic_clock() - self._last_position_detail_start
+                remaining = 0.5 - elapsed
+                if remaining <= 0:
+                    break
+                self._sleep(remaining)
+        self._last_position_detail_start = self._monotonic_clock()
+
     def _portfolio_path(self, account_key: str, page_number: int) -> str:
         query = urlencode(
             (
@@ -347,7 +350,6 @@ class EtradeReadAdapter:
                 ("sortOrder", "ASC"),
                 ("count", str(_PAGE_SIZE)),
                 ("pageNumber", str(page_number)),
-                ("lotsRequired", "true"),
             )
         )
         return f"/accounts/{account_key}/portfolio?{query}"
@@ -366,7 +368,9 @@ class EtradeReadAdapter:
     ) -> tuple[list[dict[str, object]], _PageMarkers]:
         root = _as_mapping(payload, "portfolio response")
         response = _as_mapping(root.get("PortfolioResponse"), "portfolio response")
-        account_portfolio = response.get("AccountPortfolio")
+        account_portfolio = _first_alias(
+            response, ("AccountPortfolio", "accountPortfolio"), "account portfolio"
+        )
         wrappers = _as_rows(account_portfolio, "account portfolio")
         if len(wrappers) != 1:
             _fail(
@@ -415,9 +419,9 @@ class EtradeReadAdapter:
         if not isinstance(symbol_values[0], str) or not symbol_values[0].strip():
             _fail("etrade_read_field_missing", "E*TRADE position symbol is missing or invalid.")
         ticker = symbol_values[0].strip().upper()
-        asset_type = _asset_type(row, product)
-        cusip = _first_optional_text(row, product, ("cusip", "Cusip"), "CUSIP")
-        isin = _first_optional_text(row, product, ("isin", "Isin"), "ISIN")
+        asset_type = _asset_type(product)
+        cusip = _first_optional_text(row, product, ("cusip",), "CUSIP")
+        isin = _first_optional_text(row, product, ("isin",), "ISIN")
         product_id = _product_id(product)
         try:
             position_input = PositionInput(
@@ -621,30 +625,28 @@ def _decimal(value: object, field: str) -> Decimal:
     return result
 
 
-def _asset_type(
-    position: Mapping[str, object], product: Mapping[str, object]
-) -> Literal["EQUITY", "ETF"]:
-    for source in (position, product):
-        for key in ("assetType", "assetCategory", "securityTypeDisplay", "securityType"):
-            value = source.get(key)
-            if not isinstance(value, str):
-                continue
-            normalized = value.strip().upper().replace(" ", "_")
-            if normalized in {"EQUITY", "EQUITIES", "STOCK", "EQ"}:
-                return "EQUITY"
-            if normalized in {"ETF", "EXCHANGE_TRADED_FUND"}:
-                return "ETF"
-    _fail("etrade_read_security_type_unsupported", "E*TRADE position security type is unsupported.")
+def _asset_type(product: Mapping[str, object]) -> Literal["EQUITY", "ETF"]:
+    security_type = product.get("securityType")
+    if not isinstance(security_type, str) or security_type.strip().upper() != "EQ":
+        _fail(
+            "etrade_read_security_type_unsupported",
+            "E*TRADE position security type is unsupported.",
+        )
+    if "securitySubType" not in product:
+        return "EQUITY"
+    security_subtype = product["securitySubType"]
+    if not isinstance(security_subtype, str) or security_subtype.strip().upper() != "ETF":
+        _fail(
+            "etrade_read_security_type_unsupported",
+            "E*TRADE position security type is unsupported.",
+        )
+    return "ETF"
 
 
 def _product_id(product: Mapping[str, object]) -> BrokerProductId | None:
-    keys = ("productId", "ProductId")
-    values = [product[key] for key in keys if key in product and product[key] is not None]
-    if not values:
+    value = product.get("productId")
+    if value is None:
         return None
-    if len(values) > 1 and any(value != values[0] for value in values[1:]):
-        _fail("etrade_read_field_conflict", "E*TRADE product identity fields conflict.")
-    value = values[0]
     if isinstance(value, bool) or not isinstance(value, (str, int, Decimal, dict)):
         _fail("etrade_read_product_id_invalid", "E*TRADE product identity is invalid.")
     if isinstance(value, str) and not value.strip():
@@ -652,60 +654,22 @@ def _product_id(product: Mapping[str, object]) -> BrokerProductId | None:
     return value
 
 
-def _inline_lot_rows(position: Mapping[str, object]) -> list[dict[str, object]] | None:
-    keys = ("positionLot", "PositionLot", "positionLots", "PositionLots")
-    present = [position[key] for key in keys if key in position]
-    if not present:
-        return None
-    if len(present) > 1 and any(value != present[0] for value in present[1:]):
-        _fail("etrade_read_lot_fields_conflict", "E*TRADE inline lot fields conflict.")
-    value = present[0]
-    if isinstance(value, dict):
-        wrapped = [value[key] for key in ("PositionLot", "positionLot") if key in value]
-        if wrapped:
-            if len(wrapped) > 1 and wrapped[0] != wrapped[1]:
-                _fail("etrade_read_lot_fields_conflict", "E*TRADE inline lot fields conflict.")
-            value = wrapped[0]
-    return _as_rows(value, "inline position lot")
-
-
-def _has_exact_lot_fields(row: Mapping[str, object]) -> bool:
-    return all(
-        key in row and row[key] is not None
-        for key in ("positionLotId", "remainingQty", "availableQty", "totalCost")
-    ) and ("acquiredDate" in row or "dateAcquired" in row)
-
-
 def _acquired_date(row: Mapping[str, object]) -> tuple[date, Decimal | int | str]:
-    sources: list[tuple[date, Decimal | int | str]] = []
-    if "acquiredDate" in row:
-        raw = row["acquiredDate"]
-        if not isinstance(raw, (Decimal, int, str)) or isinstance(raw, bool):
-            _fail("etrade_read_acquired_date_invalid", "E*TRADE acquisition timestamp is invalid.")
-        milliseconds = _decimal(raw, "acquired date")
-        if milliseconds != milliseconds.to_integral_value():
-            _fail("etrade_read_acquired_date_invalid", "E*TRADE acquisition timestamp is invalid.")
-        acquired: date = date.min
-        try:
-            acquired = (
-                (_UTC_EPOCH + timedelta(milliseconds=int(milliseconds))).astimezone(_EASTERN).date()
-            )
-        except OverflowError, ValueError:
-            _fail("etrade_read_acquired_date_invalid", "E*TRADE acquisition timestamp is invalid.")
-        sources.append((acquired, raw))
-    if "dateAcquired" in row:
-        raw = row["dateAcquired"]
-        if not isinstance(raw, str):
-            _fail("etrade_read_acquired_date_invalid", "E*TRADE acquisition date is invalid.")
-        try:
-            sources.append((date.fromisoformat(raw), raw))
-        except ValueError:
-            _fail("etrade_read_acquired_date_invalid", "E*TRADE acquisition date is invalid.")
-    if not sources:
+    raw = row.get("acquiredDate")
+    if raw is None:
         _fail("etrade_read_field_missing", "E*TRADE lot acquisition date is missing.")
-    if any(source_date != sources[0][0] for source_date, _ in sources[1:]):
-        _fail("etrade_read_field_conflict", "E*TRADE acquisition date fields conflict.")
-    return sources[0]
+    if not isinstance(raw, (Decimal, int, str)) or isinstance(raw, bool):
+        _fail("etrade_read_acquired_date_invalid", "E*TRADE acquisition timestamp is invalid.")
+    milliseconds = _decimal(raw, "acquired date")
+    if milliseconds != milliseconds.to_integral_value():
+        _fail("etrade_read_acquired_date_invalid", "E*TRADE acquisition timestamp is invalid.")
+    try:
+        acquired = (
+            (_UTC_EPOCH + timedelta(milliseconds=int(milliseconds))).astimezone(_EASTERN).date()
+        )
+    except OverflowError, ValueError:
+        _fail("etrade_read_acquired_date_invalid", "E*TRADE acquisition timestamp is invalid.")
+    return acquired, raw
 
 
 def _exact_unit_basis(total_cost: Decimal, remaining: Decimal) -> Decimal:

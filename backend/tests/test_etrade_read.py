@@ -220,13 +220,13 @@ def _api_calls(transport: StubAdapter) -> list[requests.PreparedRequest]:
     return transport.calls[2:]
 
 
-
 def _header_text(value: object) -> str:
     if isinstance(value, bytes):
         return value.decode("ascii")
     if isinstance(value, str):
         return value
     raise AssertionError("Prepared request header was not text or ASCII bytes")
+
 
 def _raise_code(call: Callable[[], object], code: str) -> AppError:
     with pytest.raises(AppError) as captured:
@@ -335,7 +335,9 @@ def test_configured_account_paginates_exact_inline_and_detail_lots() -> None:
     assert calls[3].url == "https://apisb.etrade.com/v1/accounts/chosen-account/portfolio/102"
     assert all(call.method == "GET" for call in calls)
     assert all(_header_text(call.headers.get("Accept")) == "application/json" for call in calls)
-    assert all(_header_text(call.headers.get("Authorization")).startswith("OAuth ") for call in calls)
+    assert all(
+        _header_text(call.headers.get("Authorization")).startswith("OAuth ") for call in calls
+    )
     assert all("access-secret-test" not in str(call.headers) for call in calls)
 
 

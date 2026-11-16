@@ -167,7 +167,10 @@ class EtradeReadAdapter:
 
         for _ in range(_MAX_PAGES):
             if current_page in visited_pages:
-                _fail("etrade_read_pagination_repeated", "E*TRADE portfolio pagination repeated a page.")
+                _fail(
+                    "etrade_read_pagination_repeated",
+                    "E*TRADE portfolio pagination repeated a page.",
+                )
             visited_pages.add(current_page)
             page_data = self._get_json(
                 "portfolio",
@@ -176,27 +179,38 @@ class EtradeReadAdapter:
             if page_data is None:
                 if current_page == 1:
                     return EtradePortfolioWithLots(account, as_of, (), ())
-                _fail("etrade_read_portfolio_incomplete", "E*TRADE portfolio pagination ended unexpectedly.")
+                _fail(
+                    "etrade_read_portfolio_incomplete",
+                    "E*TRADE portfolio pagination ended unexpectedly.",
+                )
 
             page_rows, markers = self._portfolio_page(page_data, account, current_page)
             for row in page_rows:
                 position = self._decode_position(row)
                 if position.broker_position_id in seen_position_ids:
-                    _fail("etrade_read_duplicate_position", "E*TRADE returned duplicate position IDs.")
+                    _fail(
+                        "etrade_read_duplicate_position", "E*TRADE returned duplicate position IDs."
+                    )
                 seen_position_ids.add(position.broker_position_id)
                 if any(item.position.ticker == position.position.ticker for item in positions):
-                    _fail("etrade_read_duplicate_position", "E*TRADE returned duplicate security positions.")
+                    _fail(
+                        "etrade_read_duplicate_position",
+                        "E*TRADE returned duplicate security positions.",
+                    )
                 positions.append(position)
 
                 inline = _inline_lot_rows(row)
-                exact_inline = inline is not None and bool(inline) and all(
-                    _has_exact_lot_fields(lot_row) for lot_row in inline
+                exact_inline = (
+                    inline is not None
+                    and bool(inline)
+                    and all(_has_exact_lot_fields(lot_row) for lot_row in inline)
                 )
                 if exact_inline:
-                    inline_lots = [
-                        self._decode_lot(lot_row, position, as_of) for lot_row in inline
-                    ]
-                    if exact_sum(lot.remaining_shares for lot in inline_lots) == position.position.shares:
+                    inline_lots = [self._decode_lot(lot_row, position, as_of) for lot_row in inline]
+                    if (
+                        exact_sum(lot.remaining_shares for lot in inline_lots)
+                        == position.position.shares
+                    ):
                         lots.extend(inline_lots)
                         continue
 
@@ -214,7 +228,10 @@ class EtradeReadAdapter:
             if next_page is None:
                 break
             if next_page != current_page + 1:
-                _fail("etrade_read_pagination_invalid", "E*TRADE portfolio pagination is inconsistent.")
+                _fail(
+                    "etrade_read_pagination_invalid",
+                    "E*TRADE portfolio pagination is inconsistent.",
+                )
             current_page = next_page
         else:
             _fail("etrade_read_page_limit", "E*TRADE portfolio exceeded the page limit.")
@@ -233,23 +250,47 @@ class EtradeReadAdapter:
             else None
         )
         configured_key = self._configured_account_id_key
-        if configured_key is not None and previous_key is not None and configured_key != previous_key:
-            _fail("etrade_read_account_binding_mismatch", "Configured and bound E*TRADE accounts differ.", 409)
+        if (
+            configured_key is not None
+            and previous_key is not None
+            and configured_key != previous_key
+        ):
+            _fail(
+                "etrade_read_account_binding_mismatch",
+                "Configured and bound E*TRADE accounts differ.",
+                409,
+            )
         requested_key = configured_key or previous_key
         eligible = [account for account in accounts if account.is_brokerage]
 
         if requested_key is not None:
             matches = [account for account in accounts if account.account_id_key == requested_key]
             if len(matches) != 1:
-                _fail("etrade_read_account_not_found", "The configured E*TRADE brokerage account was not found.", 409)
+                _fail(
+                    "etrade_read_account_not_found",
+                    "The configured E*TRADE brokerage account was not found.",
+                    409,
+                )
             account = matches[0]
             if not account.is_brokerage:
-                _fail("etrade_read_account_not_brokerage", "The configured E*TRADE account is not a brokerage account.", 409)
+                _fail(
+                    "etrade_read_account_not_brokerage",
+                    "The configured E*TRADE account is not a brokerage account.",
+                    409,
+                )
             return account
         if not eligible:
-            _fail("etrade_read_no_brokerage_account", "No eligible E*TRADE brokerage account was found.", 409)
+            _fail(
+                "etrade_read_no_brokerage_account",
+                "No eligible E*TRADE brokerage account was found.",
+                409,
+            )
         if len(eligible) != 1:
-            _fail("etrade_read_account_ambiguous", "Multiple E*TRADE brokerage accounts require explicit binding.", 409)
+            _fail(
+                "etrade_read_account_ambiguous",
+                "Multiple E*TRADE brokerage accounts require explicit binding.",
+                409,
+            )
         return eligible[0]
 
     def _get_json(self, operation: str, path: str) -> object | None:
@@ -263,7 +304,11 @@ class EtradeReadAdapter:
             )
         except requests.RequestException:
             logger.warning("E*TRADE read %s request failed (transport error)", operation)
-            _fail("etrade_read_transport_error", "E*TRADE could not complete the read request.", 502)
+            _fail(
+                "etrade_read_transport_error",
+                "E*TRADE could not complete the read request.",
+                502,
+            )
         finally:
             session.close()
 
@@ -277,7 +322,9 @@ class EtradeReadAdapter:
                 f"E*TRADE {operation} read failed (HTTP {response.status_code}).",
                 502,
             )
-        content_type = response.headers.get("Content-Type", "").split(";", maxsplit=1)[0].strip().lower()
+        content_type = (
+            response.headers.get("Content-Type", "").split(";", maxsplit=1)[0].strip().lower()
+        )
         if content_type != "application/json" and not content_type.endswith("+json"):
             logger.warning("E*TRADE read %s returned a non-JSON response", operation)
             _fail("etrade_read_invalid_json", "E*TRADE returned a non-JSON response.", 502)
@@ -287,7 +334,7 @@ class EtradeReadAdapter:
                 parse_float=Decimal,
                 parse_constant=_reject_json_constant,
             )
-        except (UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError):
+        except UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError:
             logger.warning("E*TRADE read %s returned malformed JSON", operation)
             _fail("etrade_read_invalid_json", "E*TRADE returned malformed JSON.", 502)
         self._oauth.record_activity()
@@ -322,11 +369,17 @@ class EtradeReadAdapter:
         account_portfolio = response.get("AccountPortfolio")
         wrappers = _as_rows(account_portfolio, "account portfolio")
         if len(wrappers) != 1:
-            _fail("etrade_read_portfolio_malformed", "E*TRADE returned an ambiguous portfolio wrapper.")
+            _fail(
+                "etrade_read_portfolio_malformed",
+                "E*TRADE returned an ambiguous portfolio wrapper.",
+            )
         wrapper = wrappers[0]
         returned_key = wrapper.get("accountIdKey")
         if returned_key is not None and returned_key != account.account_id_key:
-            _fail("etrade_read_portfolio_account_mismatch", "E*TRADE returned a different account portfolio.")
+            _fail(
+                "etrade_read_portfolio_account_mismatch",
+                "E*TRADE returned a different account portfolio.",
+            )
         position_value = _first_alias(wrapper, ("Position", "position"), "portfolio positions")
         rows = _as_rows(position_value, "position")
         markers = _page_markers(wrapper, page_number)
@@ -349,10 +402,14 @@ class EtradeReadAdapter:
         if _POSITION_ID.fullmatch(position_id) is None:
             _fail("etrade_read_position_id_invalid", "E*TRADE returned an invalid position ID.")
         product_values = [row[key] for key in ("Product", "product") if key in row]
-        if len(product_values) > 1 and any(value != product_values[0] for value in product_values[1:]):
+        if len(product_values) > 1 and any(
+            value != product_values[0] for value in product_values[1:]
+        ):
             _fail("etrade_read_field_conflict", "E*TRADE product fields conflict.")
         product = _optional_mapping(product_values[0] if product_values else None)
-        symbol_values = [value for value in (row.get("symbol"), product.get("symbol")) if value is not None]
+        symbol_values = [
+            value for value in (row.get("symbol"), product.get("symbol")) if value is not None
+        ]
         if not symbol_values or any(value != symbol_values[0] for value in symbol_values[1:]):
             _fail("etrade_read_field_conflict", "E*TRADE position symbols are missing or conflict.")
         if not isinstance(symbol_values[0], str) or not symbol_values[0].strip():
@@ -371,10 +428,13 @@ class EtradeReadAdapter:
                 cusip=cusip,
                 isin=isin,
             )
-        except (ValidationError, ValueError):
+        except ValidationError, ValueError:
             _fail("etrade_read_position_invalid", "E*TRADE returned an invalid position.")
         if position_input.shares <= 0 or position_input.market_value_usd < 0:
-            _fail("etrade_read_position_invalid", "E*TRADE returned an invalid position quantity or value.")
+            _fail(
+                "etrade_read_position_invalid",
+                "E*TRADE returned an invalid position quantity or value.",
+            )
         return EtradePositionRecord(position_id, product_id, position_input)
 
     def _decode_lot(
@@ -404,7 +464,7 @@ class EtradeReadAdapter:
                 source="ETRADE",
                 as_of=as_of,
             )
-        except (ValidationError, ValueError):
+        except ValidationError, ValueError:
             _fail("etrade_read_lot_invalid", "E*TRADE returned an invalid exact lot.")
         return EtradeLotRecord(
             broker_position_id=position.broker_position_id,
@@ -434,12 +494,17 @@ class EtradeReadAdapter:
         for position in positions:
             reported_lots = lots_by_position.get(position.broker_position_id, [])
             if exact_sum(reported_lots) != position.position.shares:
-                _fail("etrade_read_incomplete_lots", "E*TRADE position lots do not exactly cover the position.")
+                _fail(
+                    "etrade_read_incomplete_lots",
+                    "E*TRADE position lots do not exactly cover the position.",
+                )
 
     def _now(self) -> datetime:
         value = self._clock()
         if value.tzinfo is None or value.utcoffset() is None:
-            _fail("etrade_read_clock_invalid", "The E*TRADE read clock must be timezone-aware.", 500)
+            _fail(
+                "etrade_read_clock_invalid", "The E*TRADE read clock must be timezone-aware.", 500
+            )
         return value.astimezone(UTC)
 
 
@@ -470,9 +535,7 @@ def _as_rows(value: object, field: str) -> list[dict[str, object]]:
     _fail("etrade_read_response_malformed", f"E*TRADE {field} list is missing or malformed.")
 
 
-def _first_alias(
-    row: Mapping[str, object], keys: tuple[str, ...], field: str
-) -> object:
+def _first_alias(row: Mapping[str, object], keys: tuple[str, ...], field: str) -> object:
     present = [row[key] for key in keys if key in row]
     if not present:
         _fail("etrade_read_field_missing", f"E*TRADE {field} is missing.")
@@ -551,7 +614,7 @@ def _decimal(value: object, field: str) -> Decimal:
         _fail("etrade_read_field_missing", f"E*TRADE {field} is missing or invalid.")
     try:
         result = Decimal(value)
-    except (ValueError, TypeError, ArithmeticError):
+    except ValueError, TypeError, ArithmeticError:
         _fail("etrade_read_quantity_invalid", f"E*TRADE {field} is invalid.")
     if not result.is_finite():
         _fail("etrade_read_quantity_invalid", f"E*TRADE {field} must be finite.")
@@ -623,8 +686,10 @@ def _acquired_date(row: Mapping[str, object]) -> tuple[date, Decimal | int | str
         if milliseconds != milliseconds.to_integral_value():
             _fail("etrade_read_acquired_date_invalid", "E*TRADE acquisition timestamp is invalid.")
         try:
-            acquired = (_UTC_EPOCH + timedelta(milliseconds=int(milliseconds))).astimezone(_EASTERN).date()
-        except (OverflowError, ValueError):
+            acquired = (
+                (_UTC_EPOCH + timedelta(milliseconds=int(milliseconds))).astimezone(_EASTERN).date()
+            )
+        except OverflowError, ValueError:
             _fail("etrade_read_acquired_date_invalid", "E*TRADE acquisition timestamp is invalid.")
         sources.append((acquired, raw))
     if "dateAcquired" in row:

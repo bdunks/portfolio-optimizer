@@ -61,7 +61,11 @@ def _json_text(value: object) -> str:
     if isinstance(value, Decimal):
         return str(value)
     if isinstance(value, dict):
-        return "{" + ",".join(f"{json.dumps(key)}:{_json_text(item)}" for key, item in value.items()) + "}"
+        return (
+            "{"
+            + ",".join(f"{json.dumps(key)}:{_json_text(item)}" for key, item in value.items())
+            + "}"
+        )
     if isinstance(value, list):
         return "[" + ",".join(_json_text(item) for item in value) + "]"
     return json.dumps(value, separators=(",", ":"))
@@ -85,7 +89,9 @@ def _response(
 def _token_response(token: str, secret: str) -> requests.Response:
     response = requests.Response()
     response.status_code = 200
-    response._content = f"oauth_token={token}&oauth_token_secret={secret}&oauth_callback_confirmed=true".encode()
+    response._content = (
+        f"oauth_token={token}&oauth_token_secret={secret}&oauth_callback_confirmed=true".encode()
+    )
     response.encoding = "utf-8"
     response.headers["Content-Type"] = "application/x-www-form-urlencoded"
     return response
@@ -246,11 +252,21 @@ def test_configured_account_paginates_exact_inline_and_detail_lots() -> None:
         totalNoOfPages=2,
     )
     detail = _detail(
-        _lot("lot-fractional", Decimal("0.5"), available=Decimal("0.25"), total_cost=Decimal("1.2345"))
-    )
+        _lot(
+            "lot-fractional",
+            Decimal("0.5"),
+            available=Decimal("0.25"),
+            total_cost=Decimal("1.2345"),
+        )
     reader, oauth, transport, clock = _adapter(
         [
-            _response(_accounts(_account("other-account"), _account("chosen-account"), _account("retirement", account_type="IRA"))),
+            _response(
+                _accounts(
+                    _account("other-account"),
+                    _account("chosen-account"),
+                    _account("retirement", account_type="IRA"),
+                )
+            ),
             _response(page_one),
             _response(page_two),
             _response(detail),
@@ -278,14 +294,18 @@ def test_configured_account_paginates_exact_inline_and_detail_lots() -> None:
     assert first.reserved_shares == Decimal("40")
     assert first.total_cost_usd == first.total_cost_source == Decimal("255.87")
     assert first.lot.adjusted_unit_basis_usd == Decimal("6.39675")
-    assert first.lot.adjusted_unit_basis_usd * first.lot.shares != Decimal("255.87") * Decimal("6.3967")
+    assert first.lot.adjusted_unit_basis_usd * first.lot.shares != Decimal("255.87") * Decimal(
+        "6.3967"
+    )
     assert first.lot.acquired_date.isoformat() == "2026-02-27"
     assert first.acquired_date_source == Decimal("1772168400000")
     assert second.remaining_shares == Decimal("0.5")
     assert second.available_shares == Decimal("0.25")
     assert second.reserved_shares == Decimal("0.25")
     assert second.lot.adjusted_unit_basis_usd == Decimal("2.469")
-    assert all(isinstance(item.position, type(result.positions[0].position)) for item in result.positions)
+    assert all(
+        isinstance(item.position, type(result.positions[0].position)) for item in result.positions
+    )
     assert all(lot.lot.broker_lot_id == lot.broker_lot_id for lot in result.lots)
     assert result.as_of == datetime(2026, 11, 5, 16, 1, tzinfo=UTC)
     assert oauth.status()["last_activity_at"] == datetime(2026, 11, 5, 16, 1, tzinfo=UTC)
@@ -334,16 +354,24 @@ def test_unique_brokerage_account_supports_singleton_wrappers_and_empty_holdings
 def test_previous_binding_selects_one_account_and_preserves_product_id_casing() -> None:
     accounts = _accounts(_account("first"), _account("previous"))
     position = _position("AAA", "123", Decimal("1"), product_id={"symbol": "AAA", "typeCode": "1"})
-    position["Product"] = {"ProductId": {"symbol": "AAA", "typeCode": "1"}, "securityTypeDisplay": "Equity"}
+    position["Product"] = {
+        "ProductId": {"symbol": "AAA", "typeCode": "1"},
+        "securityTypeDisplay": "Equity",
+    }
     portfolio = _portfolio([position], account_key="previous")
     detail = _detail(_lot("lot-123", Decimal("1"), total_cost=Decimal("7.25")))
-    reader, _, transport, _ = _adapter([_response(accounts), _response(portfolio), _response(detail)])
+    reader, _, transport, _ = _adapter(
+        [_response(accounts), _response(portfolio), _response(detail)]
+    )
 
     result = reader.fetch_portfolio_with_lots(previously_bound_account_id_key="previous")
 
     assert result.account.account_id_key == "previous"
     assert result.positions[0].broker_product_id == {"symbol": "AAA", "typeCode": "1"}
-    assert _api_calls(transport)[2].url == "https://apisb.etrade.com/v1/accounts/previous/portfolio/123"
+    assert (
+        _api_calls(transport)[2].url
+        == "https://apisb.etrade.com/v1/accounts/previous/portfolio/123"
+    )
 
 
 @pytest.mark.parametrize(
@@ -364,7 +392,10 @@ def test_account_resolution_fails_closed(
 ) -> None:
     reader, _, transport, _ = _adapter([_response(_accounts(*accounts))], configured=configured)
 
-    _raise_code(lambda: reader.fetch_portfolio_with_lots(previously_bound_account_id_key=previous), expected_code)
+    _raise_code(
+        lambda: reader.fetch_portfolio_with_lots(previously_bound_account_id_key=previous),
+        expected_code,
+    )
 
     assert len(_api_calls(transport)) == 1
     assert str(_api_calls(transport)[0].url).endswith("/accounts/list")
@@ -386,7 +417,13 @@ def test_missing_configured_account_does_not_select_another_eligible_account() -
     [
         ({"totalNoOfPages": 2, "totalPages": 3}, "etrade_read_pagination_conflict"),
         ({"nextPageNo": 1}, "etrade_read_pagination_repeated"),
-        ({"next": "https://api.etrade.com/v1/accounts/not-this/portfolio?pageNumber=2", "nextPageNo": 3}, "etrade_read_pagination_conflict"),
+        (
+            {
+                "next": "https://api.etrade.com/v1/accounts/not-this/portfolio?pageNumber=2",
+                "nextPageNo": 3,
+            },
+            "etrade_read_pagination_conflict",
+        ),
         ({"nextPageNo": 3}, "etrade_read_pagination_invalid"),
         ({"totalNoOfPages": 1, "nextPageNo": 2}, "etrade_read_pagination_conflict"),
     ],
@@ -498,21 +535,41 @@ def test_duplicate_lot_and_position_ids_are_rejected() -> None:
         _lot("same-lot", Decimal("1"), total_cost=Decimal("5")),
     )
     reader, _, _, _ = _adapter(
-        [_response(_accounts(_account("one"))), _response(_portfolio(position)), _response(duplicate_lots)]
+        [
+            _response(_accounts(_account("one"))),
+            _response(_portfolio(position)),
+            _response(duplicate_lots),
+        ]
     )
     _raise_code(lambda: reader.fetch_portfolio_with_lots(), "etrade_read_duplicate_lot")
 
-    first = _portfolio([_position("AAA", "101", Decimal("1"), inline_lots=[_lot("lot-1", Decimal("1"))])], nextPageNo=2)
-    second = _portfolio([_position("BBB", "101", Decimal("1"), inline_lots=[_lot("lot-2", Decimal("1"))])])
-    duplicate_positions, _, _, _ = _adapter(
-        [_response(_accounts(_account("one"))), _response(first), _response(second)]
+    first = _portfolio(
+        [_position("AAA", "101", Decimal("1"), inline_lots=[_lot("lot-1", Decimal("1"))])],
+        nextPageNo=2,
     )
-    _raise_code(lambda: duplicate_positions.fetch_portfolio_with_lots(), "etrade_read_duplicate_position")
+    second = _portfolio(
+        [_position("BBB", "101", Decimal("1"), inline_lots=[_lot("lot-2", Decimal("1"))])]
+    )
+    duplicate_positions, _, _, _ = _adapter(
+        [
+            _response(_accounts(_account("one"))),
+            _response(first),
+            _response(second),
+        ]
+    )
+    _raise_code(
+        lambda: duplicate_positions.fetch_portfolio_with_lots(),
+        "etrade_read_duplicate_position",
+    )
 
 
-def test_malformed_and_nonfinite_numeric_responses_are_sanitized(caplog: pytest.LogCaptureFixture) -> None:
+def test_malformed_and_nonfinite_numeric_responses_are_sanitized(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     position = _position("AAA", "101", Decimal("1"), inline_lots=[])
-    nonfinite = _response(raw_body='{"PositionLotsResponse":{"PositionLot":{"positionLotId":"lot","remainingQty":NaN}}}')
+    nonfinite = _response(
+        raw_body='{"PositionLotsResponse":{"PositionLot":{"positionLotId":"lot","remainingQty":NaN}}}'
+    )
     reader, _, _, _ = _adapter(
         [
             _response(_accounts(_account("one"))),

@@ -609,6 +609,58 @@ def test_competing_refreshes_publish_one_generation_only(tmp_path: Path) -> None
         engine_b.dispose()
 
 
+def test_overlapping_full_syncs_after_explicit_refresh_keep_distinct_generations(
+    tmp_path: Path,
+) -> None:
+    database_url = f"sqlite:///{tmp_path / 'full-sync-after-lot-cache.sqlite3'}"
+    engine_a, factory_a = _seed_database(database_url)
+    engine_b = create_database_engine(database_url)
+    factory_b = make_session_factory(engine_b)
+    barrier = Barrier(2)
+
+    class BarrierBroker(FakeBroker):
+        @override
+        def fetch_snapshot(self) -> BrokerSnapshot:
+            snapshot = super().fetch_snapshot()
+            barrier.wait(timeout=10)
+            return snapshot
+
+    try:
+        refreshed = refresh_portfolio_lots(
+            factory_a, _Reader(_one_position()), correlation_id="seed-explicit-cache"
+        )
+        assert refreshed.cache_revision == 1
+        with factory_a() as session:
+            before = get_lot_cache_status(session)
+            assert before.source_generation is not None
+            assert before.source_as_of is not None
+            assert before.cached_at is not None
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(
+                sync_portfolio, factory_a, BarrierBroker(), correlation_id="full-one"
+            )
+            second = pool.submit(
+                sync_portfolio, factory_b, BarrierBroker(), correlation_id="full-two"
+            )
+            outcomes = [first.result(timeout=15), second.result(timeout=15)]
+
+        assert sorted(cast(int, outcome["generation"]) for outcome in outcomes) == [3, 4]
+        with factory_a() as session:
+            state = session.get(SyncState, 1)
+            status = get_lot_cache_status(session)
+            assert state is not None
+            assert state.current_generation == 4
+            assert status.cache_revision == refreshed.cache_revision
+            assert status.freshness == "unknown"
+            assert status.source_generation is None
+            assert status.source_as_of is None
+            assert status.cached_at is None
+    finally:
+        engine_a.dispose()
+        engine_b.dispose()
+
+
 def test_full_sync_started_before_lot_refresh_rejects_stale_publication(tmp_path: Path) -> None:
     engine, factory = _seed_database(
         f"sqlite:///{tmp_path / 'full-sync-during-lot-refresh.sqlite3'}"

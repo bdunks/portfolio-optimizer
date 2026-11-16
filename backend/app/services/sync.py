@@ -446,7 +446,6 @@ def sync_portfolio(
             state.last_error_code = None
             state.last_error_summary = None
             if cache_state is not None:
-                cache_state.revision += 1
                 cache_state.source_generation = None
                 cache_state.source_as_of = None
                 cache_state.cached_at = None

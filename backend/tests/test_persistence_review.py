@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Column, Integer, Table, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.broker.fake import FakeBroker
 from app.db.migrate import upgrade_database
@@ -409,7 +409,7 @@ def test_consolidation_migration_preserves_legacy_subset_notes_and_frozen_inputs
                 "bundle": json.dumps({"proposed_trade_date": "2026-11-07"}),
             },
         )
-        legacy_impact = {
+        legacy_impact: dict[str, object] = {
             "demo": True,
             "wash_status": "not_validated_demo",
             "selected_sell_lots_count": 1,
@@ -728,7 +728,7 @@ def test_alembic_cli_uses_private_protected_engine_and_environment_url(tmp_path:
 def test_orm_persistence_rejects_invalid_decimal_and_enum_values(tmp_path: Path) -> None:
     engine = create_database_engine(f"sqlite:///{tmp_path / 'checks.sqlite3'}")
     upgrade_database(engine)
-    factory: sessionmaker = make_session_factory(engine)
+    factory: sessionmaker[Session] = make_session_factory(engine)
     timestamp = datetime(2026, 11, 5, 20, tzinfo=UTC)
     with factory.begin() as session:
         session.add(
@@ -907,4 +907,6 @@ def test_offset_timestamps_survive_sync_restart_and_frozen_run(tmp_path: Path) -
                 session.get(OptimizerRun, run_id).frozen_input_bundle["account"]["as_of"]
                 == expected.isoformat()
             )
-    assert UTCDateTime().process_bind_param(datetime(2026, 1, 1), None).tzinfo is UTC
+    bound_timestamp = UTCDateTime().process_bind_param(datetime(2026, 1, 1), None)
+    assert bound_timestamp is not None
+    assert bound_timestamp.tzinfo is UTC

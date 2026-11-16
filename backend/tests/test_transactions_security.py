@@ -5,6 +5,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from threading import Barrier, Event
+from typing import override
 
 import pytest
 from fastapi.testclient import TestClient
@@ -203,6 +204,7 @@ class _BarrierBroker(FakeBroker):
         super().__init__(snapshot)
         self._barrier = barrier
 
+    @override
     def fetch_snapshot(self) -> BrokerSnapshot:
         snapshot = super().fetch_snapshot()
         self._barrier.wait(timeout=10)
@@ -240,8 +242,12 @@ def test_concurrent_syncs_on_separate_engines_allocate_distinct_generations(
             first_result = first.result(timeout=15)
             second_result = second.result(timeout=15)
 
-        first_generation = int(first_result["generation"])
-        second_generation = int(second_result["generation"])
+        first_generation_value = first_result["generation"]
+        second_generation_value = second_result["generation"]
+        assert isinstance(first_generation_value, int)
+        assert isinstance(second_generation_value, int)
+        first_generation = first_generation_value
+        second_generation = second_generation_value
         assert sorted((first_generation, second_generation)) == [2, 3]
         expected_by_generation = {
             first_generation: (first_snapshot.cash_usd, Decimal("2100.00")),

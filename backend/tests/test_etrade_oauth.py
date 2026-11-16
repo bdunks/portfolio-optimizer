@@ -4,9 +4,10 @@ import base64
 import hashlib
 import hmac
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import override
 from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
@@ -53,17 +54,28 @@ class StubAdapter(BaseAdapter):
         self.remaining = list(responses)
         self.calls: list[requests.PreparedRequest] = []
 
-    def send(self, request: requests.PreparedRequest, **kwargs: object) -> requests.Response:
+    @override
+    def send(
+        self,
+        request: requests.PreparedRequest,
+        stream: bool = False,
+        timeout: float | tuple[float, float] | tuple[float, None] | None = None,
+        verify: bool | str = True,
+        cert: bytes | str | tuple[bytes | str, bytes | str] | None = None,
+        proxies: Mapping[str, str] | None = None,
+    ) -> requests.Response:
         self.calls.append(request)
         if not self.remaining:
             raise AssertionError(f"Unexpected fake HTTP request: {request.method} {request.url}")
         result = self.remaining.pop(0)
         if isinstance(result, Exception):
             raise result
+        assert request.url is not None
         result.request = request
         result.url = request.url
         return result
 
+    @override
     def close(self) -> None:
         pass
 
@@ -107,6 +119,7 @@ def _expected_signature(
     )
     normalized = "&".join(f"{key}={value}" for key, value in normalized_parameters)
     base_url = parts._replace(query="", fragment="").geturl()
+    assert request.method is not None
     base_string = "&".join(
         (request.method.upper(), quote(base_url, safe="~"), quote(normalized, safe="~"))
     )

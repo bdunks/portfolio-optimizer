@@ -25,11 +25,9 @@ The parent is the architect and orchestrator, delegating directly to implementat
   - Broad and complex change: `gpt-6.1-sol` with `thinking: max`
   - Simple change or narrow fix review: `gpt-6-luna` with `thinking: medium`
 - Delegate fixes back to implementation workers in coherent increments. Integrate tested changes and rerun relevant integration checks before proceeding; do not equate passing tests with review acceptance.
-- Prepare performance tooling independently when useful, but defer final representative benchmarks until correctness fixes are integrated. Keep provisional measurements separate from acceptance evidence.
-- On worker failure, report it, inspect preserved changes and checkpoints, and use only an authorized, bounded recovery. Stop after a failed recovery rather than silently relaunching or changing models.
+- On worker failure, report it, inspect preserved changes and checkpoints, and use only an authorized, bounded recovery. Restart a maximum of two times after failure.
 - Minimize redundant context, handoffs, repeated reviews, and repeated validation of unchanged revisions. Preserve exact revisions, actual check outcomes, remaining risks, and the next action in durable checkpoints.
 - Continue through full implementation and verification, not just planning or scaffolding. Do not mark work complete while required checks or review findings remain unresolved.
-- If the required model or thinking level is unavailable, stop and report the blocker rather than silently substituting.
 
 ### Task
 $ARGUMENTS

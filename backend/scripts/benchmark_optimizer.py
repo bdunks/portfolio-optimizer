@@ -71,7 +71,9 @@ def _cpu_model() -> str | None:
     return None
 
 
-def _measured_worker(request: OptimizerRequest, deadline: float) -> tuple[OptimizerResult, int | None]:
+def _measured_worker(
+    request: OptimizerRequest, deadline: float
+) -> tuple[OptimizerResult, int | None]:
     """Return optimizer payload and child-process peak RSS in bytes where supported."""
     result = optimize_worker(request, deadline)
     try:

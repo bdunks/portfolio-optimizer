@@ -17,6 +17,7 @@ def _required_precision(values: tuple[Decimal, ...]) -> int:
     max_adjusted = max(value.adjusted() if value else 0 for value in values)
     return max(28, max_adjusted - min_exponent + len(str(len(values))) + 4)
 
+
 def exact_sum(values: Iterable[Decimal]) -> Decimal:
     items = tuple(values)
     with localcontext() as context:

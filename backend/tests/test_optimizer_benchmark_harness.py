@@ -20,6 +20,7 @@ def test_percentile_is_nearest_rank_for_small_samples() -> None:
     assert percentile([1.0, 2.0, 3.0, 4.0], 0.50) == 2.0
     assert percentile([1.0, 2.0, 3.0, 4.0, 5.0], 0.60) == 3.0
 
+
 def test_trial_timeout_is_recorded_instead_of_aborting_benchmark(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -40,6 +41,7 @@ def test_trial_timeout_is_recorded_instead_of_aborting_benchmark(
     assert row["error_type"] == "WorkerTimeoutError"
     assert row["error"] == "optimizer computation deadline exceeded"
     assert row["accepted"] is False
+
 
 def test_trial_defaults_to_baseline_and_forwards_scenario(
     monkeypatch: pytest.MonkeyPatch,
@@ -115,6 +117,7 @@ def test_trial_defaults_to_baseline_and_forwards_scenario(
         scenario_row["repair_all_validation_rank_seconds"]
         >= scenario_row["repair_validate_rank_seconds"]
     )
+
 
 def test_path_coverage_requires_sell_dependent_buy_and_exact_recent_clearance() -> None:
     from scripts.benchmark_optimizer import _assess, _path_coverage

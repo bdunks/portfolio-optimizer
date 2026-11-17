@@ -10,7 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from fractions import Fraction
 from typing import Literal, NoReturn, cast
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
 import requests
@@ -18,7 +18,7 @@ from pydantic import ValidationError
 
 from app.broker.etrade_oauth import EtradeOAuthService
 from app.domain.decimal_math import exact_sum
-from app.schemas import LotInput, PositionInput
+from app.schemas import CoverageInput, LotInput, PositionInput, TransactionInput
 from app.services.errors import AppError
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,7 @@ _EASTERN = ZoneInfo("America/New_York")
 _UTC_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _PAGE_SIZE = 200
 _MAX_PAGES = 100
+_TRANSACTION_PAGE_SIZE = 50
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +47,7 @@ class EtradeAccountCandidate:
     display_name: str
     account_type: str
     tax_treatment: str | None
+    account_id: str | None = None
 
     @property
     def is_brokerage(self) -> bool:
@@ -85,6 +87,59 @@ class EtradePortfolioWithLots:
     as_of: datetime
     positions: tuple[EtradePositionRecord, ...]
     lots: tuple[EtradeLotRecord, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class EtradeTransactionRecord:
+    """Source transaction fields plus an optional wash-domain value."""
+
+    transaction_id: str
+    account_id: str
+    transaction_type_source: object | None
+    normalized_transaction_type: str | None
+    transaction_date_source: object
+    transaction_time: datetime
+    trade_date: date
+    post_date_source: object | None
+    settlement_date_source: object | None
+    amount_source: object | None
+    quantity_source: object | None
+    order_no_source: object | None
+    transaction: TransactionInput | None
+    wash_relevant: bool
+    source_fields: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class EtradeTransactionHistory:
+    """Bounded history read with requested coverage distinct from row extrema."""
+
+    account: EtradeAccountCandidate
+    requested_start_date: date
+    requested_end_date: date
+    actual_start_date: date | None
+    actual_end_date: date | None
+    records: tuple[EtradeTransactionRecord, ...]
+    coverage: CoverageInput
+    diagnostics: tuple[str, ...]
+    page_count: int
+
+    @property
+    def transactions(self) -> tuple[TransactionInput, ...]:
+        return tuple(
+            record.transaction for record in self.records if record.transaction is not None
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _TransactionPage:
+    rows: list[dict[str, object]]
+    transaction_count: int
+    total_count: int | None
+    next_url: object | None
+    marker: object | None
+    page_markers: object | None
+    more_transactions: bool | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,12 +200,18 @@ class EtradeReadAdapter:
             display_name = _required_text(row, "accountName", "account")
             account_type = _required_text(row, "accountType", "account")
             tax_treatment = _optional_text(row.get("taxTreatment"), "account tax treatment")
+            account_id = (
+                _identifier(row["accountId"], "user account ID", maximum=128)
+                if row.get("accountId") is not None
+                else None
+            )
             parsed.append(
                 EtradeAccountCandidate(
                     account_id_key=account_key,
                     display_name=display_name,
                     account_type=account_type,
                     tax_treatment=tax_treatment,
+                    account_id=account_id,
                 )
             )
         return tuple(parsed)
@@ -229,6 +290,130 @@ class EtradeReadAdapter:
 
         self._validate_lot_coverage(positions, lots)
         return EtradePortfolioWithLots(account, as_of, tuple(positions), tuple(lots))
+
+    def fetch_transactions(
+        self,
+        start_date: date,
+        end_date: date,
+        *,
+        previously_bound_account_id_key: str | None = None,
+    ) -> EtradeTransactionHistory:
+        """Read complete bounded transaction history for the one resolved account."""
+        if type(start_date) is not date or type(end_date) is not date or start_date > end_date:
+            _fail(
+                "etrade_read_transactions_query_invalid",
+                "E*TRADE transaction history requires a valid bounded date interval.",
+            )
+
+        accounts = self.list_accounts()
+        account = self._resolve_account(accounts, previously_bound_account_id_key)
+        if account.account_id is None:
+            _fail(
+                "etrade_read_transaction_account_identity_missing",
+                "E*TRADE account identity is unavailable for transaction validation.",
+            )
+
+        records: list[EtradeTransactionRecord] = []
+        seen_transaction_ids: set[str] = set()
+        seen_markers: set[str] = set()
+        actual_dates: list[date] = []
+        diagnostic_codes: set[str] = set()
+        history_complete = True
+        marker: str | None = None
+        pages_read = 0
+
+        for _ in range(_MAX_PAGES):
+            payload = self._get_json(
+                "transactions",
+                self._transactions_path(account.account_id_key, start_date, end_date, marker),
+            )
+            if payload is None:
+                _fail(
+                    "etrade_read_transactions_incomplete",
+                    "E*TRADE transaction history ended without an authoritative page.",
+                )
+            page = _transaction_page(payload)
+            pages_read += 1
+            if (
+                page.transaction_count != len(page.rows)
+                or page.transaction_count > _TRANSACTION_PAGE_SIZE
+                or (page.total_count is not None and page.total_count < page.transaction_count)
+            ):
+                _fail(
+                    "etrade_read_transactions_count_mismatch",
+                    "E*TRADE transaction page counts are inconsistent.",
+                )
+
+            for row in page.rows:
+                record, row_complete, row_diagnostics = _decode_transaction_record(
+                    row,
+                    account,
+                    start_date,
+                    end_date,
+                )
+                if record.transaction_id in seen_transaction_ids:
+                    _fail(
+                        "etrade_read_transactions_duplicate",
+                        "E*TRADE returned duplicate transaction IDs.",
+                    )
+                seen_transaction_ids.add(record.transaction_id)
+                records.append(record)
+                actual_dates.append(record.trade_date)
+                history_complete = history_complete and row_complete
+                diagnostic_codes.update(row_diagnostics)
+
+            next_marker = _transaction_continuation(
+                page,
+                base_url=self._base_url,
+                account_key=account.account_id_key,
+            )
+            if next_marker is not None:
+                if next_marker in seen_markers:
+                    _fail(
+                        "etrade_read_transactions_pagination_repeated",
+                        "E*TRADE transaction pagination repeated a continuation marker.",
+                    )
+                seen_markers.add(next_marker)
+                marker = next_marker
+                continue
+
+            if page.more_transactions is True or page.transaction_count >= _TRANSACTION_PAGE_SIZE:
+                _fail(
+                    "etrade_read_transactions_incomplete",
+                    "E*TRADE transaction history has no consistent exhaustion evidence.",
+                )
+            break
+        else:
+            _fail(
+                "etrade_read_transactions_page_limit",
+                "E*TRADE transaction history exceeded the page limit.",
+            )
+
+        if diagnostic_codes:
+            logger.warning(
+                "E*TRADE transaction history contains unsupported or unrepresentable rows; "
+                "coverage is incomplete"
+            )
+        coverage = CoverageInput(
+            positions=False,
+            lots=False,
+            transactions=history_complete,
+            balances=False,
+            quotes=False,
+            transaction_history_start_date=start_date,
+            transaction_history_end_date=end_date,
+        )
+        return EtradeTransactionHistory(
+            account=account,
+            requested_start_date=start_date,
+            requested_end_date=end_date,
+            actual_start_date=min(actual_dates) if actual_dates else None,
+            actual_end_date=max(actual_dates) if actual_dates else None,
+            records=tuple(records),
+            coverage=coverage,
+            diagnostics=tuple(sorted(diagnostic_codes)),
+            page_count=pages_read,
+        )
 
     def _resolve_account(
         self,
@@ -342,6 +527,22 @@ class EtradeReadAdapter:
                     break
                 self._sleep(remaining)
         self._last_position_detail_start = self._monotonic_clock()
+
+    def _transactions_path(
+        self,
+        account_key: str,
+        start_date: date,
+        end_date: date,
+        marker: str | None,
+    ) -> str:
+        query: list[tuple[str, str]] = [
+            ("startDate", start_date.strftime("%m%d%Y")),
+            ("endDate", end_date.strftime("%m%d%Y")),
+            ("count", str(_TRANSACTION_PAGE_SIZE)),
+        ]
+        if marker is not None:
+            query.append(("marker", marker))
+        return f"/accounts/{account_key}/transactions?{urlencode(query)}"
 
     def _portfolio_path(self, account_key: str, page_number: int) -> str:
         query = urlencode(
@@ -537,6 +738,358 @@ def _as_rows(value: object, field: str) -> list[dict[str, object]]:
     if isinstance(value, dict):
         return [_as_mapping(value, field)]
     _fail("etrade_read_response_malformed", f"E*TRADE {field} list is missing or malformed.")
+
+
+def _transaction_page(payload: object) -> _TransactionPage:
+    root = _as_mapping(payload, "transaction response")
+    if "TransactionListResponse" not in root:
+        _fail("etrade_read_transactions_malformed", "E*TRADE transaction response is malformed.")
+    response = _as_mapping(root["TransactionListResponse"], "transaction response")
+    has_direct_rows = "Transaction" in response
+    has_wrapped_rows = "Transactions" in response
+    if has_direct_rows == has_wrapped_rows:
+        _fail("etrade_read_transactions_malformed", "E*TRADE transaction rows are ambiguous.")
+    if has_direct_rows:
+        rows = _as_rows(response["Transaction"], "transactions")
+    else:
+        wrapped = _as_mapping(response["Transactions"], "transactions")
+        if "Transaction" not in wrapped:
+            _fail("etrade_read_transactions_malformed", "E*TRADE transaction rows are missing.")
+        rows = _as_rows(wrapped["Transaction"], "transactions")
+
+    if "transactionCount" not in response:
+        _fail("etrade_read_transactions_malformed", "E*TRADE transaction page count is missing.")
+    transaction_count = _page_integer(response["transactionCount"], "transaction count")
+    total_count = (
+        _page_integer(response["totalCount"], "total transaction count")
+        if response.get("totalCount") is not None
+        else None
+    )
+    more_transactions_value = response.get("moreTransactions")
+    if more_transactions_value is not None and not isinstance(more_transactions_value, bool):
+        _fail("etrade_read_transactions_malformed", "E*TRADE transaction continuation is invalid.")
+
+    return _TransactionPage(
+        rows=rows,
+        transaction_count=transaction_count,
+        total_count=total_count,
+        next_url=response.get("next"),
+        marker=response.get("marker"),
+        page_markers=response.get("pageMarkers"),
+        more_transactions=more_transactions_value,
+    )
+
+
+def _transaction_continuation(
+    page: _TransactionPage,
+    *,
+    base_url: str,
+    account_key: str,
+) -> str | None:
+    if page.page_markers is not None and not isinstance(page.page_markers, str):
+        _fail(
+            "etrade_read_transactions_pagination_invalid",
+            "E*TRADE transaction markers are invalid.",
+        )
+    has_next = page.next_url is not None
+    has_marker = page.marker is not None
+    if not has_next and not has_marker:
+        if page.page_markers not in (None, ""):
+            _fail(
+                "etrade_read_transactions_incomplete",
+                "E*TRADE returned an opaque continuation without a validated next marker.",
+            )
+        return None
+    if not has_next or not has_marker:
+        _fail(
+            "etrade_read_transactions_pagination_invalid",
+            "E*TRADE transaction continuation fields are inconsistent.",
+        )
+    if not isinstance(page.next_url, str) or not isinstance(page.marker, str) or not page.marker:
+        _fail(
+            "etrade_read_transactions_pagination_invalid",
+            "E*TRADE transaction marker is invalid.",
+        )
+    if len(page.marker) > 8192:
+        _fail(
+            "etrade_read_transactions_pagination_invalid",
+            "E*TRADE transaction marker is too large.",
+        )
+
+    try:
+        next_parts = urlsplit(page.next_url)
+        base_parts = urlsplit(base_url)
+        query = parse_qsl(next_parts.query, keep_blank_values=True, strict_parsing=True)
+    except ValueError:
+        _fail(
+            "etrade_read_transactions_pagination_invalid",
+            "E*TRADE transaction next URL is invalid.",
+        )
+    expected_path = f"{base_parts.path}/accounts/{account_key}/transactions"
+    if (
+        next_parts.scheme != "https"
+        or next_parts.netloc.lower() != base_parts.netloc.lower()
+        or next_parts.path != expected_path
+        or next_parts.username is not None
+        or next_parts.password is not None
+        or next_parts.fragment
+    ):
+        _fail(
+            "etrade_read_transactions_pagination_foreign",
+            "E*TRADE returned a continuation outside the bound transaction endpoint.",
+        )
+    if query != [("marker", page.marker)]:
+        _fail(
+            "etrade_read_transactions_pagination_invalid",
+            "E*TRADE transaction continuation query does not match its marker.",
+        )
+    return page.marker
+
+
+def _transaction_time(value: object) -> datetime:
+    milliseconds = _decimal(value, "transaction date")
+    if milliseconds != milliseconds.to_integral_value():
+        _fail("etrade_read_transaction_date_invalid", "E*TRADE transaction date is invalid.")
+    try:
+        return _UTC_EPOCH + timedelta(milliseconds=int(milliseconds))
+    except OverflowError, ValueError:
+        _fail("etrade_read_transaction_date_invalid", "E*TRADE transaction date is out of range.")
+
+
+def _optional_transaction_decimal(value: object | None, field: str) -> Decimal | None:
+    if value is None:
+        return None
+    try:
+        return _decimal(value, field)
+    except AppError:
+        return None
+
+
+def _transaction_currency_is_usd(brokerage: Mapping[str, object]) -> bool:
+    currencies: list[str] = []
+    for field in ("settlementCurrency", "paymentCurrency"):
+        value = brokerage.get(field)
+        if not isinstance(value, str) or not value.strip():
+            return False
+        currencies.append(value.strip().upper())
+    return all(currency == "USD" for currency in currencies)
+
+
+def _make_transaction_input(
+    *,
+    transaction_id: str,
+    ticker: str,
+    transaction_kind: Literal["BUY", "SELL", "DIVIDEND", "OTHER"],
+    transaction_time: datetime,
+    trade_date: date,
+    shares: Decimal,
+    amount_usd: Decimal,
+    is_acquisition: bool,
+) -> TransactionInput | None:
+    try:
+        return TransactionInput(
+            broker_transaction_key=transaction_id,
+            ticker=ticker,
+            transaction_kind=transaction_kind,
+            transaction_time=transaction_time,
+            trade_date=trade_date,
+            shares=shares,
+            amount_usd=amount_usd,
+            realized_pl_usd=None,
+            is_acquisition=is_acquisition,
+            broker_lot_id=None,
+            source="ETRADE",
+        )
+    except ValidationError, ValueError:
+        return None
+
+
+def _decode_transaction_record(
+    row: dict[str, object],
+    account: EtradeAccountCandidate,
+    requested_start_date: date,
+    requested_end_date: date,
+) -> tuple[EtradeTransactionRecord, bool, set[str]]:
+    transaction_id = _identifier(row.get("transactionId"), "transaction ID", maximum=128)
+    source_account_id = row.get("accountId")
+    if source_account_id is None:
+        _fail(
+            "etrade_read_transaction_account_identity_missing",
+            "E*TRADE transaction account identity is missing.",
+        )
+    account_id = _identifier(source_account_id, "transaction account ID", maximum=128)
+    if account.account_id is None or account_id != account.account_id:
+        _fail(
+            "etrade_read_transaction_account_mismatch",
+            "E*TRADE returned a transaction for a different account.",
+        )
+
+    transaction_date_source = row.get("transactionDate")
+    if transaction_date_source is None:
+        _fail("etrade_read_transaction_date_missing", "E*TRADE transaction date is missing.")
+    transaction_time = _transaction_time(transaction_date_source)
+    trade_date = transaction_time.date()
+    transaction_type_source = row.get("transactionType")
+    normalized_type = (
+        transaction_type_source.strip().lower()
+        if isinstance(transaction_type_source, str)
+        else None
+    )
+    brokerage_value = row.get("brokerage")
+    brokerage: Mapping[str, object] = (
+        cast(Mapping[str, object], brokerage_value)
+        if isinstance(brokerage_value, dict)
+        and all(isinstance(key, str) for key in brokerage_value)
+        else {}
+    )
+    product_value = brokerage.get("product")
+    product: Mapping[str, object] = (
+        cast(Mapping[str, object], product_value)
+        if isinstance(product_value, dict) and all(isinstance(key, str) for key in product_value)
+        else {}
+    )
+    symbol_value = product.get("symbol")
+    ticker = (
+        symbol_value.strip().upper()
+        if isinstance(symbol_value, str) and symbol_value.strip()
+        else None
+    )
+    amount_source = row.get("amount")
+    quantity_source = brokerage.get("quantity")
+    diagnostics: set[str] = set()
+    row_complete = True
+    if not requested_start_date <= trade_date <= requested_end_date:
+        row_complete = False
+        diagnostics.add("transaction_outside_requested_interval")
+
+    transaction_kind: Literal["BUY", "SELL", "DIVIDEND", "OTHER"] | None = None
+    is_acquisition = False
+    wash_relevant = False
+    supported_trade_type = normalized_type in {
+        "bought",
+        "sold",
+        "reinvestment",
+        "dividend reinvestment",
+    }
+    dividend_type = normalized_type in {
+        "dividend",
+        "qualified dividend",
+        "non-qualified dividend",
+        "short term cap gain",
+        "long term cap gain",
+    }
+    safe_other_type = normalized_type in {"funds received", "transfer", "ach deposit"}
+    if supported_trade_type:
+        wash_relevant = True
+        transaction_kind = "SELL" if normalized_type == "sold" else "BUY"
+        is_acquisition = transaction_kind == "BUY"
+    elif dividend_type:
+        transaction_kind = "DIVIDEND"
+    elif safe_other_type:
+        transaction_kind = "OTHER"
+    else:
+        row_complete = False
+        wash_relevant = True
+        diagnostics.add("unsupported_transaction_type")
+
+    transaction: TransactionInput | None = None
+    if transaction_kind in {"BUY", "SELL"}:
+        asset_supported = False
+        if product:
+            try:
+                _asset_type(product)
+                asset_supported = True
+            except AppError:
+                pass
+        quantity = _optional_transaction_decimal(quantity_source, "transaction quantity")
+        amount = _optional_transaction_decimal(amount_source, "transaction amount")
+        expected_cash_sign = -1 if transaction_kind == "BUY" else 1
+        kind_consistent = (
+            quantity is not None
+            and quantity > 0
+            and amount is not None
+            and ((amount < 0) if expected_cash_sign < 0 else (amount > 0))
+        )
+        if not kind_consistent:
+            row_complete = False
+            diagnostics.add("transaction_kind_inconsistent")
+        if (
+            ticker is None
+            or not asset_supported
+            or not _transaction_currency_is_usd(brokerage)
+            or not kind_consistent
+        ):
+            row_complete = False
+            diagnostics.add("wash_transaction_unrepresentable")
+        else:
+            transaction = _make_transaction_input(
+                transaction_id=transaction_id,
+                ticker=ticker,
+                transaction_kind=transaction_kind,
+                transaction_time=transaction_time,
+                trade_date=trade_date,
+                shares=quantity,
+                amount_usd=amount,
+                is_acquisition=is_acquisition,
+            )
+            if transaction is None:
+                row_complete = False
+                diagnostics.add("wash_transaction_unrepresentable")
+    elif transaction_kind == "DIVIDEND":
+        quantity = _optional_transaction_decimal(quantity_source, "transaction quantity")
+        amount = _optional_transaction_decimal(amount_source, "transaction amount")
+        if amount is not None and amount <= 0:
+            row_complete = False
+            diagnostics.add("transaction_kind_inconsistent")
+        elif (
+            ticker is not None
+            and quantity is not None
+            and amount is not None
+            and _transaction_currency_is_usd(brokerage)
+        ):
+            transaction = _make_transaction_input(
+                transaction_id=transaction_id,
+                ticker=ticker,
+                transaction_kind="DIVIDEND",
+                transaction_time=transaction_time,
+                trade_date=trade_date,
+                shares=quantity,
+                amount_usd=amount,
+                is_acquisition=False,
+            )
+    elif transaction_kind == "OTHER" and ticker is not None:
+        quantity = _optional_transaction_decimal(quantity_source, "transaction quantity")
+        amount = _optional_transaction_decimal(amount_source, "transaction amount")
+        if quantity is not None and amount is not None and _transaction_currency_is_usd(brokerage):
+            transaction = _make_transaction_input(
+                transaction_id=transaction_id,
+                ticker=ticker,
+                transaction_kind="OTHER",
+                transaction_time=transaction_time,
+                trade_date=trade_date,
+                shares=quantity,
+                amount_usd=amount,
+                is_acquisition=False,
+            )
+
+    record = EtradeTransactionRecord(
+        transaction_id=transaction_id,
+        account_id=account_id,
+        transaction_type_source=transaction_type_source,
+        normalized_transaction_type=normalized_type,
+        transaction_date_source=transaction_date_source,
+        transaction_time=transaction_time,
+        trade_date=trade_date,
+        post_date_source=row.get("postDate"),
+        settlement_date_source=brokerage.get("settlementDate"),
+        amount_source=amount_source,
+        quantity_source=quantity_source,
+        order_no_source=brokerage.get("orderNo"),
+        transaction=transaction,
+        wash_relevant=wash_relevant,
+        source_fields=dict(row),
+    )
+    return record, row_complete, diagnostics
 
 
 def _first_alias(row: Mapping[str, object], keys: tuple[str, ...], field: str) -> object:

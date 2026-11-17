@@ -5,7 +5,7 @@ import logging
 import re
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from fractions import Fraction
@@ -574,10 +574,12 @@ class EtradeReadAdapter:
         """Read the deduplicated held/enabled-candidate union in bounded signed batches."""
         requested: list[str] = []
         seen_symbols: set[str] = set()
+        held_symbols: set[str] = set()
         for security in held_securities:
             if not isinstance(security, PositionInput):
                 _fail("etrade_read_quote_query_invalid", "Held quote securities are invalid.")
             symbol = _normalize_symbol(security.ticker, "held security")
+            held_symbols.add(symbol)
             if symbol not in seen_symbols:
                 requested.append(symbol)
                 seen_symbols.add(symbol)
@@ -618,7 +620,7 @@ class EtradeReadAdapter:
             rows = _as_rows(response["QuoteData"], "quote data")
             batch_symbols = set(batch)
             for row in rows:
-                record = self._decode_quote_record(row, received_at)
+                record = self._decode_quote_record(row, received_at, held_symbols)
                 if record.ticker not in batch_symbols:
                     _fail(
                         "etrade_read_quote_symbol_foreign",
@@ -631,6 +633,22 @@ class EtradeReadAdapter:
                     )
                 records_by_symbol[record.ticker] = record
 
+        completed_at = self._now()
+        records_by_symbol = {
+            ticker: replace(
+                record,
+                quality=self._quote_quality(
+                    record.as_of,
+                    record.quote_status_source,
+                    record.bid_usd,
+                    record.ask_usd,
+                    record.last_usd,
+                    completed_at,
+                    ticker in held_symbols,
+                ),
+            )
+            for ticker, record in records_by_symbol.items()
+        }
         missing = tuple(symbol for symbol in requested if symbol not in records_by_symbol)
         ordered_records = tuple(
             records_by_symbol[symbol] for symbol in requested if symbol in records_by_symbol
@@ -645,11 +663,11 @@ class EtradeReadAdapter:
             missing_symbols=missing,
             stale_symbols=stale,
             unusable_symbols=unusable,
-            completed_at=self._now(),
+            completed_at=completed_at,
         )
 
     def _decode_quote_record(
-        self, row: Mapping[str, object], received_at: datetime
+        self, row: Mapping[str, object], received_at: datetime, held_symbols: set[str]
     ) -> EtradeQuoteRecord:
         if "Product" not in row:
             _fail("etrade_read_quotes_malformed", "E*TRADE quote product is missing.")
@@ -667,24 +685,9 @@ class EtradeReadAdapter:
         status_source = row.get("quoteStatus")
         timestamp_source = row.get("dateTimeUTC")
         as_of = _quote_time(timestamp_source)
-
-        stale = False
-        if as_of is None:
-            quality: Literal["good", "stale", "unusable"] = "unusable"
-        else:
-            age = received_at - as_of
-            stale = age < timedelta(0) or age > self._quote_max_age
-            usable_prices = (
-                all(price is None or price > 0 for price in (bid, ask, last))
-                and not (bid is not None and ask is not None and bid > ask)
-                and any(price is not None for price in (bid, ask, last))
-            )
-            if stale:
-                quality = "stale"
-            elif status_source == "REALTIME" and usable_prices:
-                quality = "good"
-            else:
-                quality = "unusable"
+        quality = self._quote_quality(
+            as_of, status_source, bid, ask, last, received_at, ticker in held_symbols
+        )
 
         return EtradeQuoteRecord(
             ticker=ticker,
@@ -697,6 +700,31 @@ class EtradeReadAdapter:
             quality=quality,
             received_at=received_at,
         )
+
+    def _quote_quality(
+        self,
+        as_of: datetime | None,
+        status_source: object | None,
+        bid: Decimal | None,
+        ask: Decimal | None,
+        last: Decimal | None,
+        reference_time: datetime,
+        require_last: bool,
+    ) -> Literal["good", "stale", "unusable"]:
+        if as_of is None:
+            return "unusable"
+        age = reference_time - as_of
+        if age < timedelta(0) or age > self._quote_max_age:
+            return "stale"
+        prices_positive = all(price is None or price > 0 for price in (bid, ask, last))
+        spread_usable = bid is not None and ask is not None and bid <= ask
+        last_usable = last is not None and last > 0
+        usable_prices = (
+            prices_positive
+            and not (bid is not None and ask is not None and bid > ask)
+            and (last_usable if require_last else (last_usable or spread_usable))
+        )
+        return "good" if status_source == "REALTIME" and usable_prices else "unusable"
 
     def _resolve_account(
         self,

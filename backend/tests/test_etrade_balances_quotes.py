@@ -40,9 +40,15 @@ class FixedClock:
 
 
 class StubAdapter(BaseAdapter):
-    def __init__(self, responses: Sequence[requests.Response | Exception]) -> None:
+    def __init__(
+        self,
+        responses: Sequence[requests.Response | Exception],
+        *,
+        before_send: Callable[[requests.PreparedRequest], None] | None = None,
+    ) -> None:
         self.responses = list(responses)
         self.calls: list[requests.PreparedRequest] = []
+        self.before_send = before_send
 
     @override
     def send(
@@ -54,6 +60,8 @@ class StubAdapter(BaseAdapter):
         cert: bytes | str | tuple[bytes | str, bytes | str] | None = None,
         proxies: Mapping[str, str] | None = None,
     ) -> requests.Response:
+        if self.before_send is not None:
+            self.before_send(request)
         self.calls.append(request)
         if not self.responses:
             raise AssertionError("Unexpected HTTP request; fake transport has no live fallback")
@@ -118,6 +126,7 @@ def _adapter(
     clock: FixedClock | None = None,
     quote_max_age: timedelta = timedelta(minutes=15),
     configured_account_id_key: str | None = ACCOUNT_KEY,
+    before_send: Callable[[requests.PreparedRequest], None] | None = None,
 ) -> tuple[EtradeReadAdapter, EtradeOAuthService, StubAdapter]:
     fixed_clock = clock or FixedClock()
     transport = StubAdapter(
@@ -125,7 +134,8 @@ def _adapter(
             _token_response("request-token-test", "request-secret-test"),
             _token_response("access-token-test", "access-secret-test"),
             *responses,
-        ]
+        ],
+        before_send=before_send,
     )
     oauth = EtradeOAuthService(
         "consumer-key-test",
@@ -579,3 +589,109 @@ def test_later_quote_batch_failure_returns_no_partial_coverage_or_retry(
     }[failure_kind]
     _raise_code(lambda: reader.get_quotes(held, []), expected_code)
     assert len(_api_calls(transport)) == 2
+
+
+def test_quote_aging_during_later_batch_downgrades_earlier_batch_at_completion() -> None:
+    clock = FixedClock()
+    quote_requests = 0
+
+    def advance_during_second_batch(request: requests.PreparedRequest) -> None:
+        nonlocal quote_requests
+        if request.url is not None and "/market/quote/" in request.url:
+            quote_requests += 1
+            if quote_requests == 2:
+                clock.now += timedelta(seconds=1)
+
+    first_batch = [
+        _quote(f"B{index:02d}", date_time_utc=_epoch_seconds(NOW - timedelta(minutes=15)))
+        for index in range(25)
+    ]
+    reader, _, _ = _adapter(
+        [_response(_quote_payload(*first_batch)), _response(_quote_payload(_quote("LAST")))],
+        clock=clock,
+        before_send=advance_during_second_batch,
+    )
+    held = [_position(f"B{index:02d}") for index in range(25)] + [_position("LAST")]
+
+    coverage = reader.get_quotes(held, [])
+
+    first_quote = coverage.records[0]
+    assert first_quote.received_at == NOW
+    assert coverage.completed_at == NOW + timedelta(seconds=1)
+    assert first_quote.quality == "stale"
+    assert coverage.stale_symbols == tuple(f"B{index:02d}" for index in range(25))
+    assert not coverage.complete
+    quote_input = first_quote.as_quote_input(sync_generation=1)
+    assert quote_input is not None
+    quality_case = build_small_quality_case("fee-consolidation", 20261113).inputs
+    optimizer_inputs = replace(
+        quality_case,
+        account=replace(quality_case.account, as_of=coverage.completed_at),
+        quotes=(quote_input,),
+    )
+    assert not _quote_is_current(optimizer_inputs, quote_input)
+
+
+def test_held_quote_requires_last_while_candidate_shapes_match_optimizer_marks() -> None:
+    reader, _, _ = _adapter(
+        [
+            _response(
+                _quote_payload(
+                    _quote("HELD", last=None),
+                    _quote("OVERLAP", last=None),
+                    _quote("SPREAD", last=None),
+                    _quote("LAST", bid=None, ask=None),
+                    _quote("BID_ONLY", ask=None, last=None),
+                    _quote("ASK_ONLY", bid=None, last=None),
+                )
+            )
+        ]
+    )
+    coverage = reader.get_quotes(
+        [_position("HELD"), _position("OVERLAP")],
+        [
+            _candidate("OVERLAP"),
+            _candidate("SPREAD"),
+            _candidate("LAST"),
+            _candidate("BID_ONLY"),
+            _candidate("ASK_ONLY"),
+        ],
+    )
+
+    assert coverage.requested_symbols == (
+        "HELD",
+        "OVERLAP",
+        "SPREAD",
+        "LAST",
+        "BID_ONLY",
+        "ASK_ONLY",
+    )
+    assert coverage.complete is False
+    assert coverage.unusable_symbols == ("HELD", "OVERLAP", "BID_ONLY", "ASK_ONLY")
+    records = {record.ticker: record for record in coverage.records}
+    assert records["HELD"].quality == "unusable"
+    assert records["OVERLAP"].quality == "unusable"
+    assert records["SPREAD"].quality == "good"
+    assert records["LAST"].quality == "good"
+    assert records["BID_ONLY"].quality == "unusable"
+    assert records["ASK_ONLY"].quality == "unusable"
+
+    quality_case = build_small_quality_case("fee-consolidation", 20261113).inputs
+    quote_inputs = coverage.as_quote_inputs(quality_case.source_generation)
+    optimizer_inputs = replace(
+        quality_case,
+        account=replace(quality_case.account, as_of=coverage.completed_at),
+        quotes=quote_inputs,
+    )
+    current_by_ticker = {
+        ticker: _quote_is_current(optimizer_inputs, quote_input)
+        for ticker, quote_input in ((quote.ticker, quote) for quote in quote_inputs)
+    }
+    assert current_by_ticker == {
+        "HELD": False,
+        "OVERLAP": False,
+        "SPREAD": True,
+        "LAST": True,
+        "BID_ONLY": False,
+        "ASK_ONLY": False,
+    }

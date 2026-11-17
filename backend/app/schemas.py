@@ -129,6 +129,27 @@ class ExposureInput(StrictModel):
         return value.upper()
 
 
+class BrokerPositionMetadata(StrictModel):
+    """Broker-only position provenance retained for current-state persistence."""
+
+    ticker: str = Field(min_length=1, max_length=32)
+    broker_position_id: str = Field(min_length=1, max_length=128)
+    broker_product_id: StrictStr | StrictInt | Decimal | dict[str, object] | None = None
+    as_of: datetime
+
+
+class BrokerLotMetadata(StrictModel):
+    """Broker-only exact lot source values retained for current-state persistence."""
+
+    ticker: str = Field(min_length=1, max_length=32)
+    broker_position_id: str = Field(min_length=1, max_length=128)
+    broker_lot_id: str = Field(min_length=1, max_length=128)
+    total_cost_usd: ExactDecimal
+    total_cost_source: ExactDecimal
+    reserved_shares: ExactDecimal
+    acquired_date_source: StrictStr | StrictInt | Decimal
+
+
 class BrokerSnapshot(StrictModel):
     account_id_key: str = Field(min_length=1, max_length=128)
     display_name: str = Field(min_length=1, max_length=200)
@@ -144,6 +165,10 @@ class BrokerSnapshot(StrictModel):
     quotes: list[QuoteInput]
     transactions: list[TransactionInput]
     exposures: list[ExposureInput] = Field(default_factory=list)
+    balance_as_of_source_ms: StrictInt | None = None
+    balance_received_at: datetime | None = None
+    broker_position_metadata: list[BrokerPositionMetadata] = Field(default_factory=list)
+    broker_lot_metadata: list[BrokerLotMetadata] = Field(default_factory=list)
 
 
 class SleeveInput(StrictModel):

@@ -593,6 +593,24 @@ def test_returned_buy_and_loss_sell_keep_unknown_attribution_fail_closed() -> No
     assert buy_assessment.conflicting_transaction_keys == ("recent-sell",)
 
 
+@pytest.mark.parametrize(
+    ("rows", "total_count"),
+    [([], 1), ([_transaction("terminal-row")], 2)],
+    ids=("empty-with-nonzero-total", "short-page-with-excess-total"),
+)
+def test_terminal_total_count_must_match_terminal_page_rows(
+    rows: list[dict[str, object]], total_count: int
+) -> None:
+    reader, _ = _adapter(
+        [_response(_account_payload()), _response(_page(rows, total_count=total_count))]
+    )
+
+    _raise_code(
+        lambda: reader.fetch_transactions(TRADE_DATE, TRADE_DATE),
+        "etrade_read_transactions_count_mismatch",
+    )
+
+
 def test_complete_empty_and_singleton_wrapped_pages_are_distinct_from_unavailable() -> None:
     empty_page = _page([], more_transactions=False, total_count=0)
     reader, _ = _adapter([_response(_account_payload()), _response(empty_page)])
@@ -724,6 +742,7 @@ def test_pagination_counts_markers_and_duplicates_fail_closed() -> None:
                 _page(
                     [_transaction(f"full-{index}") for index in range(50)],
                     more_transactions=False,
+                    total_count=409,
                 )
             ),
         ]

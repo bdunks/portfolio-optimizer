@@ -377,6 +377,16 @@ class EtradeReadAdapter:
                 marker = next_marker
                 continue
 
+            if (
+                page.total_count is not None
+                and page.more_transactions is not True
+                and page.transaction_count < _TRANSACTION_PAGE_SIZE
+                and page.total_count != page.transaction_count
+            ):
+                _fail(
+                    "etrade_read_transactions_count_mismatch",
+                    "E*TRADE transaction page counts are inconsistent.",
+                )
             if page.more_transactions is True or page.transaction_count >= _TRANSACTION_PAGE_SIZE:
                 _fail(
                     "etrade_read_transactions_incomplete",

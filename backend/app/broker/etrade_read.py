@@ -718,11 +718,15 @@ class EtradeReadAdapter:
             return "stale"
         prices_positive = all(price is None or price > 0 for price in (bid, ask, last))
         spread_usable = bid is not None and ask is not None and bid <= ask
+        bid_usable = bid is not None and bid > 0
+        ask_usable = ask is not None and ask > 0
+        bid_or_ask_usable = bid_usable or ask_usable
         last_usable = last is not None and last > 0
+        candidate_price_usable = last_usable or spread_usable or bid_or_ask_usable
         usable_prices = (
             prices_positive
             and not (bid is not None and ask is not None and bid > ask)
-            and (last_usable if require_last else (last_usable or spread_usable))
+            and (last_usable if require_last else candidate_price_usable)
         )
         return "good" if status_source == "REALTIME" and usable_prices else "unusable"
 

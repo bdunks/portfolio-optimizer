@@ -667,14 +667,14 @@ def test_held_quote_requires_last_while_candidate_shapes_match_optimizer_marks()
         "ASK_ONLY",
     )
     assert coverage.complete is False
-    assert coverage.unusable_symbols == ("HELD", "OVERLAP", "BID_ONLY", "ASK_ONLY")
+    assert coverage.unusable_symbols == ("HELD", "OVERLAP")
     records = {record.ticker: record for record in coverage.records}
     assert records["HELD"].quality == "unusable"
     assert records["OVERLAP"].quality == "unusable"
     assert records["SPREAD"].quality == "good"
     assert records["LAST"].quality == "good"
-    assert records["BID_ONLY"].quality == "unusable"
-    assert records["ASK_ONLY"].quality == "unusable"
+    assert records["BID_ONLY"].quality == "good"
+    assert records["ASK_ONLY"].quality == "good"
 
     quality_case = build_small_quality_case("fee-consolidation", 20261113).inputs
     quote_inputs = coverage.as_quote_inputs(quality_case.source_generation)
@@ -692,6 +692,6 @@ def test_held_quote_requires_last_while_candidate_shapes_match_optimizer_marks()
         "OVERLAP": False,
         "SPREAD": True,
         "LAST": True,
-        "BID_ONLY": False,
-        "ASK_ONLY": False,
+        "BID_ONLY": True,
+        "ASK_ONLY": True,
     }

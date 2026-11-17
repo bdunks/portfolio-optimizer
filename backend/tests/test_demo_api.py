@@ -1061,8 +1061,14 @@ def test_infeasible_lot_review_intent_preserves_the_confirmed_basket(
 def test_selection_rejects_unknown_or_empty_lot_subsets_and_stale_runs(
     demo_app: tuple[FastAPI, TestClient, FakeBroker, Path],
 ) -> None:
-    _, client, _, _ = demo_app
+    app, client, _, _ = demo_app
     run = _create_run(client)
+    run_id = run["run_id"]
+    before_recommendations = client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations").json()
+    with app.state.session_factory() as session:
+        persisted = session.get(OptimizerRun, run_id)
+        assert persisted is not None
+        frozen_inputs_before = deepcopy(persisted.frozen_input_bundle)
     group_id = run["groups"][0]["group_id"]
 
     invalid = client.post(
@@ -1084,13 +1090,23 @@ def test_selection_rejects_unknown_or_empty_lot_subsets_and_stale_runs(
     assert unknown_group.status_code == 422
     assert unknown_group.json()["code"] == "invalid_group_selection"
 
-    assert client.post("/api/v1/portfolio/sync").status_code == 200
+    published = client.post("/api/v1/portfolio/sync")
+    assert published.status_code == 200, published.text
+    assert published.json()["generation"] == run["source_generation"] + 1
     stale = client.post(
         f"/api/v1/optimizer/runs/{run['run_id']}/selection",
         json={"selected_group_ids": [group_id]},
     )
     assert stale.status_code == 409
     assert stale.json()["code"] == "stale_run_source"
+    assert client.get(f"/api/v1/optimizer/runs/{run_id}/recommendations").json() == (
+        before_recommendations
+    )
+    with app.state.session_factory() as session:
+        persisted = session.get(OptimizerRun, run_id)
+        assert persisted is not None
+        assert persisted.source_generation == run["source_generation"]
+        assert persisted.frozen_input_bundle == frozen_inputs_before
 
 
 def test_selection_blocks_same_generation_quote_and_lot_changes(

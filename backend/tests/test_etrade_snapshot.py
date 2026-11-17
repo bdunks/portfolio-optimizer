@@ -253,14 +253,16 @@ def _balance(
     *,
     account_id: int = ACCOUNT_ID,
     as_of: object = BALANCE_AS_OF_MS,
+    cash_usd: Decimal = Decimal("1234.567890123456789"),
+    settled_cash_usd: Decimal = Decimal("987.654321098765432"),
 ) -> dict[str, object]:
     return {
         "BalanceResponse": {
             "accountId": account_id,
             "asOfDate": as_of,
             "Computed": {
-                "cashBalance": Decimal("1234.567890123456789"),
-                "settledCashForInvestment": Decimal("987.654321098765432"),
+                "cashBalance": cash_usd,
+                "settledCashForInvestment": settled_cash_usd,
                 "cashAvailableForInvestment": Decimal("9999.99"),
                 "marginBalance": Decimal("8888.88"),
             },
@@ -300,6 +302,8 @@ def _http_responses(
     lot_rows: Sequence[dict[str, object]] | None = None,
     transaction_rows: Sequence[dict[str, object]] = (),
     balance_source: object = BALANCE_AS_OF_MS,
+    balance_cash_usd: Decimal = Decimal("1234.567890123456789"),
+    balance_settled_cash_usd: Decimal = Decimal("987.654321098765432"),
     quote_rows: Sequence[dict[str, object]] = (),
     include_quote_response: bool = True,
     portfolio_account_key: str = ACCOUNT_KEY,
@@ -333,7 +337,14 @@ def _http_responses(
             _response(_accounts(*account_sets[1])),
             _response(_history(*transaction_rows)),
             _response(_accounts(*account_sets[2])),
-            _response(_balance(account_id=balance_account_id, as_of=balance_source)),
+            _response(
+                _balance(
+                    account_id=balance_account_id,
+                    as_of=balance_source,
+                    cash_usd=balance_cash_usd,
+                    settled_cash_usd=balance_settled_cash_usd,
+                )
+            ),
         )
     )
     if include_quote_response:

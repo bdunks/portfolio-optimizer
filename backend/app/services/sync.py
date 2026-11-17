@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
@@ -24,14 +25,127 @@ from app.db.models import (
     SecurityExposure,
     SyncState,
 )
-from app.domain.decimal_math import exact_sum
+from app.domain.decimal_math import exact_product, exact_sum
 from app.schemas import BrokerSnapshot
 from app.services.errors import AppError
 
 REQUIRED_COVERAGE = ("positions", "lots", "transactions", "balances", "quotes")
 
 
-def validate_snapshot(snapshot: BrokerSnapshot) -> None:
+@dataclass(frozen=True, slots=True)
+class _PositionProvenance:
+    broker_position_id: str
+    broker_product_id: str | None
+    as_of: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class _LotProvenance:
+    broker_total_cost_usd: Decimal
+    broker_total_cost_source_usd: Decimal
+    reserved_shares: Decimal
+    broker_acquired_date_source: str
+
+
+@dataclass(frozen=True, slots=True)
+class _SnapshotProvenance:
+    positions: dict[str, _PositionProvenance]
+    lots: dict[str, _LotProvenance]
+
+
+def _invalid_snapshot_metadata() -> AppError:
+    return AppError(
+        "invalid_sync_metadata",
+        "Broker provenance does not match the reported positions and lots",
+        status_code=422,
+    )
+
+
+def _validate_snapshot_metadata(snapshot: BrokerSnapshot) -> _SnapshotProvenance:
+    """Validate and encode optional broker provenance before publication starts."""
+    if not snapshot.broker_position_metadata and not snapshot.broker_lot_metadata:
+        return _SnapshotProvenance(positions={}, lots={})
+    if len(snapshot.broker_position_metadata) != len(snapshot.positions) or len(
+        snapshot.broker_lot_metadata
+    ) != len(snapshot.lots):
+        raise _invalid_snapshot_metadata()
+
+    # Reuse the explicit-refresh path's strict product/date encodings and source-date decoding.
+    from app.services.lot_cache import (
+        _acquired_date_from_source,
+        _encode_acquired_date_source,
+        _encode_product_id,
+    )
+
+    position_inputs = {position.ticker: position for position in snapshot.positions}
+    positions: dict[str, _PositionProvenance] = {}
+    seen_position_ids: set[str] = set()
+    for metadata in snapshot.broker_position_metadata:
+        if (
+            metadata.ticker not in position_inputs
+            or metadata.ticker in positions
+            or not metadata.broker_position_id.strip()
+            or metadata.broker_position_id in seen_position_ids
+            or metadata.as_of.tzinfo is None
+            or metadata.as_of.utcoffset() is None
+        ):
+            raise _invalid_snapshot_metadata()
+        try:
+            product_id = _encode_product_id(metadata.broker_product_id)
+        except (AppError, ArithmeticError, TypeError, ValueError) as exc:
+            raise _invalid_snapshot_metadata() from exc
+        positions[metadata.ticker] = _PositionProvenance(
+            broker_position_id=metadata.broker_position_id,
+            broker_product_id=product_id,
+            as_of=metadata.as_of.astimezone(UTC),
+        )
+        seen_position_ids.add(metadata.broker_position_id)
+    if set(positions) != set(position_inputs):
+        raise _invalid_snapshot_metadata()
+
+    lot_inputs = {lot.broker_lot_id: lot for lot in snapshot.lots}
+    lots: dict[str, _LotProvenance] = {}
+    for metadata in snapshot.broker_lot_metadata:
+        lot = lot_inputs.get(metadata.broker_lot_id)
+        position = positions.get(metadata.ticker)
+        if (
+            lot is None
+            or metadata.broker_lot_id in lots
+            or metadata.ticker != lot.ticker
+            or position is None
+            or metadata.broker_position_id != position.broker_position_id
+        ):
+            raise _invalid_snapshot_metadata()
+        try:
+            expected_cost = exact_product(lot.shares, lot.adjusted_unit_basis_usd)
+            expected_reserved = exact_sum((lot.shares, -lot.available_shares))
+            acquired_date_source = _encode_acquired_date_source(metadata.acquired_date_source)
+            acquired_date = _acquired_date_from_source(metadata.acquired_date_source)
+        except (AppError, ArithmeticError, TypeError, ValueError) as exc:
+            raise _invalid_snapshot_metadata() from exc
+        if (
+            not metadata.total_cost_usd.is_finite()
+            or not metadata.total_cost_source.is_finite()
+            or not metadata.reserved_shares.is_finite()
+            or metadata.total_cost_usd < 0
+            or metadata.total_cost_source != metadata.total_cost_usd
+            or metadata.total_cost_usd != expected_cost
+            or metadata.reserved_shares != expected_reserved
+            or acquired_date != lot.acquired_date
+        ):
+            raise _invalid_snapshot_metadata()
+        lots[metadata.broker_lot_id] = _LotProvenance(
+            broker_total_cost_usd=metadata.total_cost_usd,
+            broker_total_cost_source_usd=metadata.total_cost_source,
+            reserved_shares=metadata.reserved_shares,
+            broker_acquired_date_source=acquired_date_source,
+        )
+    if set(lots) != set(lot_inputs):
+        raise _invalid_snapshot_metadata()
+    return _SnapshotProvenance(positions=positions, lots=lots)
+
+
+def validate_snapshot(snapshot: BrokerSnapshot) -> _SnapshotProvenance:
     """Validate a complete single-account payload before opening a publication transaction."""
     if not all(getattr(snapshot.coverage, key) for key in REQUIRED_COVERAGE):
         missing = [key for key in REQUIRED_COVERAGE if not getattr(snapshot.coverage, key)]
@@ -152,6 +266,7 @@ def validate_snapshot(snapshot: BrokerSnapshot) -> None:
         raise AppError(
             "invalid_exposure", "Look-through weights cannot be negative", status_code=422
         )
+    return _validate_snapshot_metadata(snapshot)
 
 
 def _security_for_ticker(
@@ -233,7 +348,7 @@ def sync_portfolio(
     try:
         raw_snapshot = broker.fetch_snapshot()
         snapshot = BrokerSnapshot.model_validate(raw_snapshot)
-        validate_snapshot(snapshot)
+        provenance = validate_snapshot(snapshot)
     except AppError as exc:
         _record_failure(
             factory,
@@ -291,6 +406,11 @@ def sync_portfolio(
             state = session.get(SyncState, 1)
             generation = (state.current_generation if state else 0) + 1
 
+            coverage = snapshot.coverage.model_dump(mode="json")
+            if not snapshot.exposures and state is not None and isinstance(state.coverage, dict):
+                cached_lookthrough = state.coverage.get("lookthrough")
+                if type(cached_lookthrough) is bool:
+                    coverage["lookthrough"] = cached_lookthrough
             # All destructive changes are after payload validation and remain transaction-scoped.
             session.execute(delete(CurrentTaxLot))
             session.execute(delete(CurrentPosition))
@@ -319,6 +439,7 @@ def sync_portfolio(
                 account.settled_buying_power_usd = snapshot.settled_buying_power_usd
                 account.source = snapshot.source
                 account.as_of = snapshot.as_of
+            session.flush()
 
             securities: dict[str, Security] = {}
             for position in snapshot.positions:
@@ -331,6 +452,7 @@ def sync_portfolio(
                     isin=position.isin,
                 )
                 securities[position.ticker] = security
+                position_provenance = provenance.positions.get(position.ticker)
                 session.add(
                     CurrentPosition(
                         account_id=1,
@@ -338,11 +460,24 @@ def sync_portfolio(
                         shares=position.shares,
                         market_value_usd=position.market_value_usd,
                         sync_generation=generation,
-                        as_of=snapshot.as_of,
+                        as_of=position_provenance.as_of
+                        if position_provenance is not None
+                        else snapshot.as_of,
+                        broker_position_id=(
+                            position_provenance.broker_position_id
+                            if position_provenance is not None
+                            else None
+                        ),
+                        broker_product_id=(
+                            position_provenance.broker_product_id
+                            if position_provenance is not None
+                            else None
+                        ),
                     )
                 )
             for lot in snapshot.lots:
                 security = securities[lot.ticker]
+                lot_provenance = provenance.lots.get(lot.broker_lot_id)
                 fractional = lot.available_shares != lot.available_shares.to_integral_value()
                 session.add(
                     CurrentTaxLot(
@@ -359,6 +494,24 @@ def sync_portfolio(
                         quality_flags=lot.quality_flags,
                         fractional_cleanup_unsupported=fractional,
                         sync_generation=generation,
+                        broker_total_cost_usd=(
+                            lot_provenance.broker_total_cost_usd
+                            if lot_provenance is not None
+                            else None
+                        ),
+                        broker_total_cost_source_usd=(
+                            lot_provenance.broker_total_cost_source_usd
+                            if lot_provenance is not None
+                            else None
+                        ),
+                        reserved_shares=(
+                            lot_provenance.reserved_shares if lot_provenance is not None else None
+                        ),
+                        broker_acquired_date_source=(
+                            lot_provenance.broker_acquired_date_source
+                            if lot_provenance is not None
+                            else None
+                        ),
                     )
                 )
             for quote in snapshot.quotes:
@@ -441,7 +594,7 @@ def sync_portfolio(
             state.current_generation = generation
             state.started_at = started_at
             state.completed_at = datetime.now(UTC)
-            state.coverage = snapshot.coverage.model_dump(mode="json")
+            state.coverage = coverage
             state.complete = True
             state.last_error_code = None
             state.last_error_summary = None
@@ -459,7 +612,7 @@ def sync_portfolio(
                     details={
                         "generation": generation,
                         "source": snapshot.source,
-                        "coverage": snapshot.coverage.model_dump(mode="json"),
+                        "coverage": coverage,
                         "positions": len(snapshot.positions),
                         "lots": len(snapshot.lots),
                         "transactions": len(snapshot.transactions),
@@ -470,7 +623,7 @@ def sync_portfolio(
             "generation": generation,
             "status": "complete",
             "as_of": snapshot.as_of,
-            "coverage": snapshot.coverage.model_dump(mode="json"),
+            "coverage": coverage,
             "account": snapshot.display_name,
             "demo": snapshot.source.upper() in {"DEMO", "FAKE"},
         }

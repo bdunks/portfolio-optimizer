@@ -107,6 +107,13 @@ The future bounded Pass 2 worker must receive immutable inputs and a deadline, t
 - **Vocabulary:** Owner also supplied `ACH Deposit`/`Ach Deposit` (handled by normalization) and `Reorg`/`Reorganization`. This is source vocabulary, not authorization for new cash, option, mutual-fund or corporate-action subsystems. Preserve unsupported records without an exhaustive unknown-type exception. No nested transaction-type fallback is authorized.
 - **Affected contracts/tests:** O/O1 adapter slice and synthetic regressions for root-only normalized types, positive SELL quantities with positive proceeds, signed BUY cash, separate dividend/reinvestment IDs, acquisition alias and unknown-type preservation/sanitized diagnostics. No scope expansion or default live connectivity.
 
+### O3. Transaction row account identity
+
+- **ID:** O3 / M006-HISTORY-04. **Status:** Accepted.
+- **Decision:** `accountId` and `accountIdKey` are distinct identifiers, never compared as interchangeable values. Preserve optional source `Account.accountId` in the adapter-local account candidate alongside its existing encoded key, without changing persistent/public contracts. Transaction requests/continuations remain bound to the validated encoded key; validate returned transaction `accountId` against the selected account-list `accountId`. Do not infer the numeric/plain ID from the encoded key. Missing identity needed for row validation fails closed for the transaction read, without changing existing portfolio-only compatibility.
+- **Authority/rationale:** Routine internal trust-boundary resolution under O and technical §5 single-account binding. Official List Accounts documentation (https://apisb.etrade.com/docs/api/account/api-account-v1.html) defines `accountId` as the user's account ID and `accountIdKey` as the unique account key, with distinct example values. Transaction documentation defines row `accountId` as numeric account ID. No owner/business preference or new account routing is involved.
+- **Affected contracts/tests:** Adapter-local account candidate/list decoder and transaction fixtures only; distinct plain-ID/key success, foreign-row rejection, missing required identity, existing account resolution and portfolio compatibility. No SQL/API/schema changes or live verification.
+
 ## L. Offline OAuth lifecycle and credential boundary
 
 - **ID:** L / M006-OAUTH-01. **Status:** Accepted.

@@ -10,7 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from fractions import Fraction
 from typing import Literal, NoReturn, cast
-from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit
+from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
 import requests
@@ -18,7 +18,14 @@ from pydantic import ValidationError
 
 from app.broker.etrade_oauth import EtradeOAuthService
 from app.domain.decimal_math import exact_sum
-from app.schemas import CoverageInput, LotInput, PositionInput, TransactionInput
+from app.domain.financial_inputs import QuoteInput
+from app.schemas import (
+    AllowedSecurityInput,
+    CoverageInput,
+    LotInput,
+    PositionInput,
+    TransactionInput,
+)
 from app.services.errors import AppError
 
 logger = logging.getLogger(__name__)
@@ -37,6 +44,9 @@ _UTC_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _PAGE_SIZE = 200
 _MAX_PAGES = 100
 _TRANSACTION_PAGE_SIZE = 50
+_DEFAULT_MAX_QUOTE_AGE = timedelta(minutes=15)
+_MAX_QUOTE_SYMBOLS_PER_REQUEST = 25
+_MAX_QUOTE_BATCHES = 100
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +142,72 @@ class EtradeTransactionHistory:
 
 
 @dataclass(frozen=True, slots=True)
+class EtradeBalanceResult:
+    """Exact balance fields and broker source metadata; receipt time is not broker as-of time."""
+
+    account: EtradeAccountCandidate
+    account_id_source: object
+    cash_usd: Decimal
+    settled_cash_for_investment_usd: Decimal
+    as_of_source: int
+    received_at: datetime
+    source_fields: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class EtradeQuoteRecord:
+    """One returned quote, including source status/time even when it is not actionable."""
+
+    ticker: str
+    quote_status_source: object | None
+    date_time_utc_source: object | None
+    as_of: datetime | None
+    bid_usd: Decimal | None
+    ask_usd: Decimal | None
+    last_usd: Decimal | None
+    quality: Literal["good", "stale", "unusable"]
+    received_at: datetime
+
+    def as_quote_input(self, sync_generation: int) -> QuoteInput | None:
+        """Attach the publication generation when this adapter-local value is assembled."""
+        if self.as_of is None:
+            return None
+        return QuoteInput(
+            ticker=self.ticker,
+            bid_usd=self.bid_usd,
+            ask_usd=self.ask_usd,
+            last_usd=self.last_usd,
+            source="ETRADE",
+            as_of=self.as_of,
+            quality=self.quality,
+            sync_generation=sync_generation,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EtradeQuoteCoverage:
+    """Bounded requested quote set and explicit missing/stale/unusable coverage."""
+
+    requested_symbols: tuple[str, ...]
+    records: tuple[EtradeQuoteRecord, ...]
+    missing_symbols: tuple[str, ...]
+    stale_symbols: tuple[str, ...]
+    unusable_symbols: tuple[str, ...]
+    completed_at: datetime
+
+    @property
+    def complete(self) -> bool:
+        return not (self.missing_symbols or self.stale_symbols or self.unusable_symbols)
+
+    def as_quote_inputs(self, sync_generation: int) -> tuple[QuoteInput, ...]:
+        return tuple(
+            quote
+            for record in self.records
+            if (quote := record.as_quote_input(sync_generation)) is not None
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class _TransactionPage:
     rows: list[dict[str, object]]
     transaction_count: int
@@ -160,6 +236,7 @@ class EtradeReadAdapter:
         clock: Callable[[], datetime] | None = None,
         monotonic_clock: Callable[[], float] | None = None,
         sleep: Callable[[float], None] | None = None,
+        quote_max_age: timedelta = _DEFAULT_MAX_QUOTE_AGE,
     ) -> None:
         if environment not in _DATA_BASES:
             raise ValueError("Unsupported E*TRADE environment")
@@ -173,6 +250,9 @@ class EtradeReadAdapter:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._monotonic_clock = monotonic_clock or time.monotonic
         self._sleep = sleep or time.sleep
+        if not isinstance(quote_max_age, timedelta) or quote_max_age < timedelta(0):
+            raise ValueError("quote_max_age must be a nonnegative timedelta")
+        self._quote_max_age = quote_max_age
         self._last_position_detail_start: float | None = None
 
     def list_accounts(self) -> tuple[EtradeAccountCandidate, ...]:
@@ -425,6 +505,199 @@ class EtradeReadAdapter:
             page_count=pages_read,
         )
 
+    def fetch_balances(
+        self,
+        *,
+        previously_bound_account_id_key: str | None = None,
+    ) -> EtradeBalanceResult:
+        """Read exact account cash fields without reconciling or substituting other balances."""
+        accounts = self.list_accounts()
+        account = self._resolve_account(accounts, previously_bound_account_id_key)
+        if account.account_id is None:
+            _fail(
+                "etrade_read_balance_account_identity_missing",
+                "E*TRADE account identity is unavailable for balance validation.",
+            )
+
+        payload = self._get_json("balances", self._balance_path(account.account_id_key))
+        if payload is None:
+            _fail("etrade_read_balances_missing", "E*TRADE returned no balance response.")
+        root = _as_mapping(payload, "balance response")
+        if "BalanceResponse" not in root:
+            _fail("etrade_read_balances_malformed", "E*TRADE balance response is malformed.")
+        response = _as_mapping(root["BalanceResponse"], "balance response")
+        account_id_source = response.get("accountId")
+        if account_id_source is None:
+            _fail(
+                "etrade_read_balance_account_identity_missing",
+                "E*TRADE balance account identity is missing.",
+            )
+        returned_account_id = _identifier(account_id_source, "balance account ID", maximum=128)
+        if returned_account_id != account.account_id:
+            _fail(
+                "etrade_read_balance_account_mismatch",
+                "E*TRADE returned balances for a different account.",
+            )
+        if "asOfDate" not in response:
+            _fail("etrade_read_balance_as_of_missing", "E*TRADE balance as-of value is missing.")
+        as_of_source = _balance_as_of_source(response["asOfDate"])
+        if "Computed" not in response:
+            _fail("etrade_read_balances_malformed", "E*TRADE computed balance fields are missing.")
+        computed = _as_mapping(response["Computed"], "computed balance")
+        if "cashBalance" not in computed or "settledCashForInvestment" not in computed:
+            _fail(
+                "etrade_read_balance_field_missing", "E*TRADE required balance fields are missing."
+            )
+        cash_balance = _decimal(computed["cashBalance"], "cash balance")
+        settled_cash = _decimal(computed["settledCashForInvestment"], "settled cash for investment")
+
+        received_at = self._now()
+        return EtradeBalanceResult(
+            account=account,
+            account_id_source=account_id_source,
+            cash_usd=cash_balance,
+            settled_cash_for_investment_usd=settled_cash,
+            as_of_source=as_of_source,
+            received_at=received_at,
+            source_fields={
+                "accountId": account_id_source,
+                "asOfDate": as_of_source,
+                "Computed": computed,
+            },
+        )
+
+    def get_quotes(
+        self,
+        held_securities: Sequence[PositionInput],
+        allowed_securities: Sequence[AllowedSecurityInput],
+    ) -> EtradeQuoteCoverage:
+        """Read the deduplicated held/enabled-candidate union in bounded signed batches."""
+        requested: list[str] = []
+        seen_symbols: set[str] = set()
+        for security in held_securities:
+            if not isinstance(security, PositionInput):
+                _fail("etrade_read_quote_query_invalid", "Held quote securities are invalid.")
+            symbol = _normalize_symbol(security.ticker, "held security")
+            if symbol not in seen_symbols:
+                requested.append(symbol)
+                seen_symbols.add(symbol)
+        for security in allowed_securities:
+            if not isinstance(security, AllowedSecurityInput):
+                _fail("etrade_read_quote_query_invalid", "Configured quote candidates are invalid.")
+            if not security.enabled:
+                continue
+            symbol = _normalize_symbol(security.ticker, "configured candidate")
+            if symbol not in seen_symbols:
+                requested.append(symbol)
+                seen_symbols.add(symbol)
+
+        batch_count = (len(requested) + _MAX_QUOTE_SYMBOLS_PER_REQUEST - 1) // (
+            _MAX_QUOTE_SYMBOLS_PER_REQUEST
+        )
+        if batch_count > _MAX_QUOTE_BATCHES:
+            _fail(
+                "etrade_read_quote_batch_limit",
+                "E*TRADE quote request exceeded the bounded batch limit.",
+            )
+        if not requested:
+            return EtradeQuoteCoverage((), (), (), (), (), self._now())
+
+        records_by_symbol: dict[str, EtradeQuoteRecord] = {}
+        for start in range(0, len(requested), _MAX_QUOTE_SYMBOLS_PER_REQUEST):
+            batch = requested[start : start + _MAX_QUOTE_SYMBOLS_PER_REQUEST]
+            payload = self._get_json("quotes", self._quotes_path(batch))
+            received_at = self._now()
+            if payload is None:
+                continue
+            root = _as_mapping(payload, "quote response")
+            if "QuoteResponse" not in root:
+                _fail("etrade_read_quotes_malformed", "E*TRADE quote response is malformed.")
+            response = _as_mapping(root["QuoteResponse"], "quote response")
+            if "QuoteData" not in response:
+                _fail("etrade_read_quotes_malformed", "E*TRADE quote data is missing.")
+            rows = _as_rows(response["QuoteData"], "quote data")
+            batch_symbols = set(batch)
+            for row in rows:
+                record = self._decode_quote_record(row, received_at)
+                if record.ticker not in batch_symbols:
+                    _fail(
+                        "etrade_read_quote_symbol_foreign",
+                        "E*TRADE returned a quote outside the requested batch.",
+                    )
+                if record.ticker in records_by_symbol:
+                    _fail(
+                        "etrade_read_duplicate_quote",
+                        "E*TRADE returned a duplicate quote symbol.",
+                    )
+                records_by_symbol[record.ticker] = record
+
+        missing = tuple(symbol for symbol in requested if symbol not in records_by_symbol)
+        ordered_records = tuple(
+            records_by_symbol[symbol] for symbol in requested if symbol in records_by_symbol
+        )
+        stale = tuple(record.ticker for record in ordered_records if record.quality == "stale")
+        unusable = tuple(
+            record.ticker for record in ordered_records if record.quality == "unusable"
+        )
+        return EtradeQuoteCoverage(
+            requested_symbols=tuple(requested),
+            records=ordered_records,
+            missing_symbols=missing,
+            stale_symbols=stale,
+            unusable_symbols=unusable,
+            completed_at=self._now(),
+        )
+
+    def _decode_quote_record(
+        self, row: Mapping[str, object], received_at: datetime
+    ) -> EtradeQuoteRecord:
+        if "Product" not in row:
+            _fail("etrade_read_quotes_malformed", "E*TRADE quote product is missing.")
+        product = _as_mapping(row["Product"], "quote product")
+        ticker = _normalize_symbol(product.get("symbol"), "quote symbol")
+        if "All" not in row:
+            _fail("etrade_read_quotes_malformed", "E*TRADE quote prices are missing.")
+        all_fields = _as_mapping(row["All"], "quote prices")
+        price_fields = ("bid", "ask", "lastTrade")
+        if any(field not in all_fields for field in price_fields):
+            _fail("etrade_read_quote_price_missing", "E*TRADE quote price fields are incomplete.")
+        bid = _optional_quote_price(all_fields["bid"], "bid")
+        ask = _optional_quote_price(all_fields["ask"], "ask")
+        last = _optional_quote_price(all_fields["lastTrade"], "last trade")
+        status_source = row.get("quoteStatus")
+        timestamp_source = row.get("dateTimeUTC")
+        as_of = _quote_time(timestamp_source)
+
+        stale = False
+        if as_of is None:
+            quality: Literal["good", "stale", "unusable"] = "unusable"
+        else:
+            age = received_at - as_of
+            stale = age < timedelta(0) or age > self._quote_max_age
+            usable_prices = (
+                all(price is None or price > 0 for price in (bid, ask, last))
+                and not (bid is not None and ask is not None and bid > ask)
+                and any(price is not None for price in (bid, ask, last))
+            )
+            if stale:
+                quality = "stale"
+            elif status_source == "REALTIME" and usable_prices:
+                quality = "good"
+            else:
+                quality = "unusable"
+
+        return EtradeQuoteRecord(
+            ticker=ticker,
+            quote_status_source=status_source,
+            date_time_utc_source=timestamp_source,
+            as_of=as_of,
+            bid_usd=bid,
+            ask_usd=ask,
+            last_usd=last,
+            quality=quality,
+            received_at=received_at,
+        )
+
     def _resolve_account(
         self,
         accounts: Sequence[EtradeAccountCandidate],
@@ -537,6 +810,17 @@ class EtradeReadAdapter:
                     break
                 self._sleep(remaining)
         self._last_position_detail_start = self._monotonic_clock()
+
+    @staticmethod
+    def _balance_path(account_key: str) -> str:
+        query = urlencode((("instType", "BROKERAGE"), ("realTimeNAV", "true")))
+        return f"/accounts/{account_key}/balance?{query}"
+
+    @staticmethod
+    def _quotes_path(symbols: Sequence[str]) -> str:
+        encoded_symbols = ",".join(quote(symbol, safe="") for symbol in symbols)
+        query = urlencode((("detailFlag", "ALL"),))
+        return f"/market/quote/{encoded_symbols}?{query}"
 
     def _transactions_path(
         self,
@@ -1186,6 +1470,37 @@ def _decimal(value: object, field: str) -> Decimal:
     if not result.is_finite():
         _fail("etrade_read_quantity_invalid", f"E*TRADE {field} must be finite.")
     return result
+
+
+def _normalize_symbol(value: object, field: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or len(value.strip()) > 32
+        or "," in value
+        or any(character.isspace() or ord(character) < 32 for character in value)
+    ):
+        _fail("etrade_read_quote_symbol_invalid", f"E*TRADE {field} symbol is invalid.")
+    return value.strip().upper()
+
+
+def _balance_as_of_source(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        _fail("etrade_read_balance_as_of_invalid", "E*TRADE balance as-of value is invalid.")
+    return value
+
+
+def _quote_time(value: object) -> datetime | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    try:
+        return _UTC_EPOCH + timedelta(seconds=value)
+    except OverflowError, ValueError:
+        return None
+
+
+def _optional_quote_price(value: object, field: str) -> Decimal | None:
+    return None if value is None else _decimal(value, f"quote {field}")
 
 
 def _asset_type(product: Mapping[str, object]) -> Literal["EQUITY", "ETF"]:

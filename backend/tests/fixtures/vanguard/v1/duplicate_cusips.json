@@ -1,0 +1,1 @@
+{"schema_version":"vanguard.holdings.v1","fund":{"ticker":"VTI","id":"1001"},"as_of_date":"2026-09-30","holdings":[{"ticker":"AAA","cusip":"000000001","weight_pct":"50"},{"ticker":"BBB","cusip":"000000001","weight_pct":"50"}]}

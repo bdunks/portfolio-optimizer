@@ -5,6 +5,13 @@ argument-hint: "<approved task IDs, requirements, or @requirements-file>"
 
 Execute the supplied, approved tasks sequentially through implementation, review, and validation. Ask before starting if scope, approval, or testable acceptance criteria are missing.
 
+### Preflight: verify the contract before implementation
+
+- The parent checks the task, specs, and acceptance criteria against the evidence before delegating. For an existing external interface, obtain the actual contract for the relevant endpoint, format, or version: authoritative provider documentation or schema, or a representative real response with known provenance (sanitized if needed). Verify the fields, types, units, and meanings the implementation depends on. An endpoint URL, a list of desired fields, a demo, or a spec example with no provenance is not enough.
+- If the requirements are incomplete, ambiguous, or conflict with the evidence, stop the affected work. Record what is missing and ask the owner for the source or a decision before coding. A task marked Ready, an approved scope, or an internal decision record does not establish external facts. If live access is out of scope, ask for an existing schema or sanitized capture; do not make a live request to fill the gap.
+- Offline tests may fake the transport. Their representative success fixtures must reproduce the evidenced wire contract; derived edge cases may alter values or omit fields intentionally. Never invent a replacement external schema, implement against it, or count tests against it as delivery. This gate does not prevent designing an internal interface the project owns.
+- Cite the contract source and any evidence limits in the task checkpoint and worker and reviewer briefs. The reviewer checks that implementation and representative fixtures match that source; missing evidence or a mismatch blocks acceptance even if all tests pass. Report offline contract verification separately from any authorized live verification.
+
 ### Orchestration
 The parent is the architect and orchestrator, delegating directly to implementation-worker and fresh reviewer pi-subagents. Do not introduce an intermediate orchestration agent. Workers and reviewers cannot redelegate.
 

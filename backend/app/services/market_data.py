@@ -135,9 +135,12 @@ def fetch_vanguard_exposures(
         raise VanguardMarketDataError("Vanguard response fund does not match configured fund")
 
     try:
-        as_of_date = date.fromisoformat(
-            _required_string(payload["as_of_date"], context="as_of_date")
-        )
+        date_value = payload["as_of_date"]
+        if not isinstance(date_value, str) or not date_value:
+            raise ValueError("as_of_date is not canonical YYYY-MM-DD")
+        as_of_date = date.fromisoformat(date_value)
+        if as_of_date.isoformat() != date_value:
+            raise ValueError("as_of_date is not canonical YYYY-MM-DD")
     except ValueError as exc:
         raise VanguardMarketDataError("Vanguard as_of_date must be an ISO date") from exc
 

@@ -125,6 +125,15 @@ def test_valid_v1_converts_exact_weights_and_preserves_provenance() -> None:
     assert sector_aggregate.coverage.invalid_tickers == ("VTI",)
 
 
+@pytest.mark.parametrize("as_of_date", [" 2026-09-30", "2026-09-30 ", "20260930", "2026-W40-3"])
+def test_noncanonical_as_of_date_is_rejected(as_of_date: str) -> None:
+    payload = _load_valid()
+    payload["as_of_date"] = as_of_date
+
+    with pytest.raises(VanguardMarketDataError, match="as_of_date must be an ISO date"):
+        _fetch(FakeClient(FakeResponse(json.dumps(payload).encode())))
+
+
 def test_empty_section_is_not_claimed_complete() -> None:
     result = _fetch(_client_for_fixture("empty.json"))
 

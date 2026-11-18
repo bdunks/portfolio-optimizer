@@ -6,19 +6,21 @@ import csv
 import io
 import re
 from collections import Counter
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_FLOOR, Decimal, InvalidOperation, localcontext
 from typing import Protocol
 
 import httpx
 
-from app.domain.decimal_math import exact_product, exact_sum
+from app.domain.decimal_math import exact_sum
 from app.schemas import ExposureInput
 
 ITOT_URL = "https://www.ishares.com/us/products/239724/ishares-core-s-p-total-u-s-stock-market-etf/latest-holdings.csv"
-_REQUIRED = {"Ticker", "Name", "Sector", "Asset Class", "Weight (%)", "Location", "Exchange"}
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+_WEIGHT_PLACES = 24
+_REQUIRED = {"Ticker", "Name", "Sector", "Asset Class", "Market Value", "Location", "Exchange"}
 _FOOTER_START = "The content contained herein is owned or licensed by BlackRock"
 
 
@@ -44,6 +46,7 @@ class IsharesHolding:
     asset_class: str
     location: str
     exchange: str
+    market_value: Decimal
     weight: Decimal
 
 
@@ -66,31 +69,24 @@ class IsharesExposureResult:
     source_url: str
     as_of_date: date
     fetched_at: datetime
-    reported_weight_total: Decimal
+    total_equity_market_value: Decimal
     coverage: tuple[IsharesDimensionCoverage, ...]
 
 
 class _Response(Protocol):
-    content: bytes
-
     def raise_for_status(self) -> None: ...
+
+    def iter_bytes(self) -> Iterator[bytes]: ...
+
+
+class _StreamContext(Protocol):
+    def __enter__(self) -> _Response: ...
+
+    def __exit__(self, *args: object) -> None: ...
 
 
 class _HttpClient(Protocol):
-    def get(self, url: str, *, timeout: float) -> _Response: ...
-
-
-def _parse_weight(value: str, context: str) -> Decimal:
-    try:
-        weight = Decimal(value)
-    except (InvalidOperation, ValueError) as exc:
-        raise IsharesMarketDataError(f"{context} has invalid Weight (%)") from exc
-    exponent = weight.as_tuple().exponent
-    if not weight.is_finite() or not isinstance(exponent, int) or not -1000 <= exponent <= 1000:
-        raise IsharesMarketDataError(f"{context} has non-finite or unbounded Weight (%)")
-    if weight < 0:
-        raise IsharesMarketDataError(f"{context} has negative Weight (%)")
-    return exact_product(weight, Decimal("0.01"))
+    def stream(self, method: str, url: str, *, timeout: float) -> _StreamContext: ...
 
 
 def _date_from_preamble(text: str) -> date:
@@ -105,27 +101,44 @@ def _date_from_preamble(text: str) -> date:
         raise IsharesMarketDataError("iShares Fund Holdings as of date is invalid") from exc
 
 
-def _parse_csv(text: str) -> tuple[date, tuple[IsharesHolding, ...], Decimal]:
+def _market_value(value: str, context: str, asset_class: str) -> Decimal:
+    raw = value.strip()
+    try:
+        if not re.fullmatch(r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?", raw):
+            raise InvalidOperation
+        amount = Decimal(raw.replace(",", ""))
+    except (InvalidOperation, ValueError) as exc:
+        raise IsharesMarketDataError(f"{context} has invalid Market Value") from exc
+    exponent = amount.as_tuple().exponent
+    if not amount.is_finite() or not isinstance(exponent, int) or not -1000 <= exponent <= 1000:
+        raise IsharesMarketDataError(f"{context} has non-finite or unbounded Market Value")
+    if asset_class.casefold() == "equity" and amount < 0:
+        raise IsharesMarketDataError(f"{context} has negative equity Market Value")
+    return amount
+
+
+def _parse_csv(text: str) -> tuple[date, tuple[IsharesHolding, ...]]:
     as_of = _date_from_preamble(text)
     lines = text.splitlines(keepends=True)
-    header_index = next(
-        (
-            index
-            for index, line in enumerate(lines)
-            if _REQUIRED.issubset(next(csv.reader([line]), []))
-        ),
-        None,
-    )
+    header_index: int | None = None
+    for index, line in enumerate(lines):
+        try:
+            candidate = next(csv.reader([line], strict=True))
+        except csv.Error:
+            continue
+        if _REQUIRED.issubset(candidate):
+            header_index = index
+            break
     if header_index is None:
         raise IsharesMarketDataError("iShares holdings CSV header is missing")
     try:
-        header = next(csv.reader([lines[header_index]]))
+        header = next(csv.reader([lines[header_index]], strict=True))
     except (csv.Error, StopIteration) as exc:
         raise IsharesMarketDataError("iShares holdings CSV header is malformed") from exc
     if len(header) != len(set(header)) or not _REQUIRED.issubset(header):
         raise IsharesMarketDataError("iShares holdings CSV header lacks required columns")
 
-    reader = csv.reader(io.StringIO("".join(lines[header_index + 1 :])))
+    reader = csv.reader(io.StringIO("".join(lines[header_index + 1 :])), strict=True)
     rows: list[IsharesHolding] = []
     seen: set[tuple[str, str, str, str, str]] = set()
     footer_seen = False
@@ -142,17 +155,14 @@ def _parse_csv(text: str) -> tuple[date, tuple[IsharesHolding, ...], Decimal]:
                 f"iShares row {row_number} has {len(fields)} columns; expected {len(header)}"
             )
         record = dict(zip(header, fields, strict=True))
-        ticker = record["Ticker"].strip()
-        name = record["Name"].strip()
-        sector = record["Sector"].strip()
-        asset_class = record["Asset Class"].strip()
-        location = record["Location"].strip()
-        exchange = record["Exchange"].strip()
-        if not all(
-            (ticker, name, sector, asset_class, location, exchange, record["Weight (%)"].strip())
-        ):
+        ticker, name = record["Ticker"].strip(), record["Name"].strip()
+        sector, asset_class = record["Sector"].strip(), record["Asset Class"].strip()
+        location, exchange = record["Location"].strip(), record["Exchange"].strip()
+        if not all((ticker, name, asset_class, location, exchange)):
             raise IsharesMarketDataError(f"iShares row {row_number} is a partial holding")
-        weight = _parse_weight(record["Weight (%)"].strip(), f"iShares row {row_number}")
+        market_value = _market_value(
+            record["Market Value"], f"iShares row {row_number}", asset_class
+        )
         identity = (
             ticker.upper(),
             name.upper(),
@@ -163,11 +173,39 @@ def _parse_csv(text: str) -> tuple[date, tuple[IsharesHolding, ...], Decimal]:
         if identity in seen:
             raise IsharesMarketDataError(f"duplicate iShares listing at row {row_number}")
         seen.add(identity)
-        rows.append(IsharesHolding(ticker, name, sector, asset_class, location, exchange, weight))
+        rows.append(
+            IsharesHolding(
+                ticker, name, sector, asset_class, location, exchange, market_value, Decimal(0)
+            )
+        )
     if not rows:
         raise IsharesMarketDataError("iShares holdings CSV contains no positions")
-    total = exact_sum(row.weight for row in rows)
-    return as_of, tuple(rows), total
+    return as_of, tuple(rows)
+
+
+def _normalized_weights(
+    rows: tuple[IsharesHolding, ...], denominator: Decimal
+) -> tuple[Decimal, ...]:
+    eligible = [
+        i
+        for i, row in enumerate(rows)
+        if row.asset_class.casefold() == "equity" and row.market_value > 0
+    ]
+    unit = Decimal(1).scaleb(-_WEIGHT_PLACES)
+    with localcontext() as context:
+        context.prec = 80
+        values = [Decimal(0)] * len(rows)
+        remainders: list[tuple[Decimal, int]] = []
+        for index in eligible:
+            quota = rows[index].market_value / denominator / unit
+            floor = quota.to_integral_value(rounding=ROUND_FLOOR)
+            values[index] = floor * unit
+            remainders.append((quota - floor, index))
+        remaining = int((Decimal(1) - exact_sum(values)) / unit)
+        # Stable index tie-break keeps the largest-remainder allocation reproducible.
+        for _, index in sorted(remainders, key=lambda item: (-item[0], item[1]))[:remaining]:
+            values[index] += unit
+    return tuple(values)
 
 
 def fetch_ishares_exposures(
@@ -177,44 +215,64 @@ def fetch_ishares_exposures(
     clock: Callable[[], datetime],
     timeout: float = 10.0,
 ) -> IsharesExposureResult:
-    """Fetch exactly one configured URL using injected HTTP and UTC clock dependencies."""
+    """Fetch one bounded configured URL using injected HTTP and UTC clock dependencies."""
     try:
-        response = client.get(config.url, timeout=timeout)
-        response.raise_for_status()
-        text = response.content.decode("utf-8-sig", errors="strict")
+        content = bytearray()
+        with client.stream("GET", config.url, timeout=timeout) as response:
+            response.raise_for_status()
+            for chunk in response.iter_bytes():
+                content.extend(chunk)
+                if len(content) > MAX_RESPONSE_BYTES:
+                    raise IsharesMarketDataError("iShares response exceeds 8 MiB limit")
+        text = bytes(content).decode("utf-8-sig", errors="strict")
+    except IsharesMarketDataError:
+        raise
     except Exception as exc:
         raise IsharesMarketDataError("iShares request failed or response was not UTF-8") from exc
     try:
-        as_of_date, holdings, reported_total = _parse_csv(text)
+        as_of_date, parsed = _parse_csv(text)
     except (csv.Error, UnicodeError) as exc:
         raise IsharesMarketDataError("iShares holdings CSV is malformed") from exc
+    equities = [row for row in parsed if row.asset_class.casefold() == "equity"]
+    denominator = exact_sum(row.market_value for row in equities if row.market_value > 0)
+    if denominator <= 0:
+        raise IsharesMarketDataError("iShares holdings have no positive equity Market Value")
+    weights = _normalized_weights(parsed, denominator)
+    holdings = tuple(
+        replace(row, weight=weight) for row, weight in zip(parsed, weights, strict=True)
+    )
     fetched_at = clock()
     offset = fetched_at.utcoffset()
     if fetched_at.tzinfo is None or offset is None or offset.total_seconds() != 0:
         raise IsharesMarketDataError("iShares fetch clock must return an aware UTC datetime")
     fetched_at = fetched_at.astimezone(UTC)
 
-    equities = [row for row in holdings if row.asset_class.casefold() == "equity"]
-    equity_ticker_counts = Counter(
+    eligible = [
+        row for row in holdings if row.asset_class.casefold() == "equity" and row.market_value > 0
+    ]
+    ticker_counts = Counter(
         row.ticker.strip().upper()
-        for row in equities
+        for row in eligible
         if row.location.casefold() == "united states" and row.ticker.strip() not in {"-", "—"}
     )
-    exposures_by_key: dict[tuple[str, str], list[Decimal]] = {}
-    for row in equities:
+
+    def usable_ticker(row: IsharesHolding) -> bool:
         ticker = row.ticker.strip().upper()
-        if (
+        return (
             row.location.casefold() == "united states"
             and ticker not in {"-", "—"}
-            and equity_ticker_counts[ticker] == 1
-            and re.fullmatch(r"[A-Z][A-Z0-9.]{0,9}", ticker)
-        ):
-            exposures_by_key.setdefault(("security", ticker), []).append(row.weight)
-        if row.sector not in {"-", "—"}:
-            exposures_by_key.setdefault(("sector", row.sector), []).append(row.weight)
-        if row.location not in {"-", "—"}:
-            exposures_by_key.setdefault(("country", row.location), []).append(row.weight)
+            and ticker_counts[ticker] == 1
+            and re.fullmatch(r"[A-Z][A-Z0-9.]{0,9}", ticker) is not None
+        )
 
+    dimensions: dict[tuple[str, str], list[Decimal]] = {}
+    for row in eligible:
+        if usable_ticker(row):
+            dimensions.setdefault(("security", row.ticker.strip().upper()), []).append(row.weight)
+        if row.sector not in {"", "-", "—"}:
+            dimensions.setdefault(("sector", row.sector), []).append(row.weight)
+        if row.location not in {"", "-", "—"}:
+            dimensions.setdefault(("country", row.location), []).append(row.weight)
     exposures = tuple(
         ExposureInput(
             ticker=config.ticker,
@@ -224,45 +282,66 @@ def fetch_ishares_exposures(
             provider="ishares",
             as_of_date=as_of_date,
         )
-        for (dimension, key), weights in sorted(exposures_by_key.items())
+        for (dimension, key), weights in sorted(dimensions.items())
     )
-    dimension_names = ("security", "sector", "country")
-
-    def covered(row: IsharesHolding, dimension: str) -> bool:
-        if dimension == "security":
-            ticker = row.ticker.strip().upper()
-            return (
-                row.location.casefold() == "united states"
-                and ticker not in {"-", "—"}
-                and equity_ticker_counts[ticker] == 1
-                and re.fullmatch(r"[A-Z][A-Z0-9.]{0,9}", ticker) is not None
-            )
-        return (
-            row.sector not in {"-", "—"}
-            if dimension == "sector"
-            else row.location not in {"-", "—"}
-        )
-
     coverage = tuple(
         IsharesDimensionCoverage(
             dimension=dimension,
-            observed_holdings=sum(covered(row, dimension) for row in equities),
-            eligible_holdings=len(equities),
-            covered_weight=exact_sum(row.weight for row in equities if covered(row, dimension)),
-            total_weight=exact_sum(row.weight for row in equities),
-            shortfall=exact_sum(row.weight for row in equities)
-            - exact_sum(row.weight for row in equities if covered(row, dimension)),
-            complete=all(covered(row, dimension) for row in equities),
+            observed_holdings=sum(
+                (
+                    usable_ticker(row)
+                    if dimension == "security"
+                    else row.sector not in {"", "-", "—"}
+                    if dimension == "sector"
+                    else row.location not in {"", "-", "—"}
+                )
+                for row in eligible
+            ),
+            eligible_holdings=len(eligible),
+            covered_weight=exact_sum(
+                row.weight
+                for row in eligible
+                if (
+                    usable_ticker(row)
+                    if dimension == "security"
+                    else row.sector not in {"", "-", "—"}
+                    if dimension == "sector"
+                    else row.location not in {"", "-", "—"}
+                )
+            ),
+            total_weight=Decimal(1),
+            shortfall=Decimal(1)
+            - exact_sum(
+                row.weight
+                for row in eligible
+                if (
+                    usable_ticker(row)
+                    if dimension == "security"
+                    else row.sector not in {"", "-", "—"}
+                    if dimension == "sector"
+                    else row.location not in {"", "-", "—"}
+                )
+            ),
+            complete=all(
+                (
+                    usable_ticker(row)
+                    if dimension == "security"
+                    else row.sector not in {"", "-", "—"}
+                    if dimension == "sector"
+                    else row.location not in {"", "-", "—"}
+                )
+                for row in eligible
+            ),
         )
-        for dimension in dimension_names
+        for dimension in ("security", "sector", "country")
     )
     return IsharesExposureResult(
-        exposures=exposures,
-        holdings=holdings,
-        fund_ticker=config.ticker.upper(),
-        source_url=config.url,
-        as_of_date=as_of_date,
-        fetched_at=fetched_at,
-        reported_weight_total=reported_total,
-        coverage=coverage,
+        exposures,
+        holdings,
+        config.ticker.upper(),
+        config.url,
+        as_of_date,
+        fetched_at,
+        denominator,
+        coverage,
     )

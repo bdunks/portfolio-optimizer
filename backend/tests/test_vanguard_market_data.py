@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from pathlib import Path
 
 import pytest
@@ -300,3 +300,52 @@ def test_configured_fund_mismatch_is_rejected() -> None:
 
     with pytest.raises(VanguardMarketDataError, match="does not match configured fund"):
         _fetch(client)
+
+
+@pytest.mark.parametrize("weight", ["1e-1001", "1e1001"])
+def test_raw_weight_exponent_outside_wire_bounds_is_rejected(weight: str) -> None:
+    payload = {
+        "schema_version": "vanguard.holdings.v1",
+        "fund": {"ticker": "VTI", "id": "1001"},
+        "as_of_date": "2026-09-30",
+        "holdings": [{"ticker": "AAA", "weight_pct": weight}],
+    }
+    with pytest.raises(VanguardMarketDataError, match="bounded decimal exponent"):
+        _fetch(FakeClient(FakeResponse(json.dumps(payload).encode())))
+
+
+def test_tiny_positive_weight_is_not_lost_when_holdings_sum_to_100() -> None:
+    payload = {
+        "schema_version": "vanguard.holdings.v1",
+        "fund": {"ticker": "VTI", "id": "1001"},
+        "as_of_date": "2026-09-30",
+        "holdings": [
+            {"ticker": "AAA", "weight_pct": "100"},
+            {"ticker": "BBB", "weight_pct": "1e-1000"},
+        ],
+    }
+    with localcontext() as context:
+        context.Emin = -20
+        context.Emax = 20
+        with pytest.raises(VanguardMarketDataError, match="exceed 100 percent"):
+            _fetch(FakeClient(FakeResponse(json.dumps(payload).encode())))
+
+
+def test_raw_weight_exponent_boundary_is_accepted() -> None:
+    payload = {
+        "schema_version": "vanguard.holdings.v1",
+        "fund": {"ticker": "VTI", "id": "1001"},
+        "as_of_date": "2026-09-30",
+        "holdings": [{"ticker": "AAA", "weight_pct": "1e-1000"}],
+    }
+    result = _fetch(FakeClient(FakeResponse(json.dumps(payload).encode())))
+    assert result.exposures[0].weight == Decimal("1e-1002")
+
+
+def test_numeric_fund_id_is_rejected_without_string_coercion() -> None:
+    payload = _load_valid()
+    fund = payload["fund"]
+    assert isinstance(fund, dict)
+    fund["id"] = 1001
+    with pytest.raises(VanguardMarketDataError, match="does not match configured fund"):
+        _fetch(FakeClient(FakeResponse(json.dumps(payload).encode())))

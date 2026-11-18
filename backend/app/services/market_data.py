@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import MAX_EMAX, MIN_EMIN, Decimal, InvalidOperation, localcontext
 from typing import Protocol
 
 import httpx
@@ -76,9 +76,22 @@ def _parse_percentage(value: object, *, context: str) -> Decimal:
         percentage = Decimal(value) if not isinstance(value, Decimal) else value
     except (InvalidOperation, ValueError) as exc:
         raise VanguardMarketDataError(f"{context} must be a decimal percentage") from exc
-    if not percentage.is_finite() or percentage < 0 or percentage > 100:
+    exponent = percentage.as_tuple().exponent
+    if not percentage.is_finite() or not isinstance(exponent, int) or not -1000 <= exponent <= 1000:
+        raise VanguardMarketDataError(f"{context} must have a bounded decimal exponent")
+    if percentage < 0 or percentage > 100:
         raise VanguardMarketDataError(f"{context} must be finite and between 0 and 100")
-    return exact_product(percentage, Decimal("0.01"))
+    with localcontext() as arithmetic_context:
+        arithmetic_context.Emin = MIN_EMIN
+        arithmetic_context.Emax = MAX_EMAX
+        return exact_product(percentage, Decimal("0.01"))
+
+
+def _exact_adapter_sum(values: list[Decimal]) -> Decimal:
+    with localcontext() as arithmetic_context:
+        arithmetic_context.Emin = MIN_EMIN
+        arithmetic_context.Emax = MAX_EMAX
+        return exact_sum(values)
 
 
 def _required_string(value: object, *, context: str) -> str:
@@ -114,7 +127,11 @@ def fetch_vanguard_exposures(
     fund = payload["fund"]
     if not isinstance(fund, dict) or set(fund) != {"ticker", "id"}:
         raise VanguardMarketDataError("Vanguard fund metadata does not match the v1 contract")
-    if fund["ticker"] != config.ticker or str(fund["id"]) != config.fund_id:
+    if (
+        fund["ticker"] != config.ticker
+        or not isinstance(fund["id"], str)
+        or fund["id"] != config.fund_id
+    ):
         raise VanguardMarketDataError("Vanguard response fund does not match configured fund")
 
     try:
@@ -201,7 +218,7 @@ def fetch_vanguard_exposures(
             aggregated.setdefault((dimension, label), []).append(weight)
 
     total = len(holdings)
-    total_weight = exact_sum(weights)
+    total_weight = _exact_adapter_sum(weights)
     if total_weight > Decimal(1):
         raise VanguardMarketDataError("Vanguard holding weights exceed 100 percent")
     exposures.extend(
@@ -209,7 +226,7 @@ def fetch_vanguard_exposures(
             ticker=config.ticker,
             dimension=dimension,
             exposure_key=exposure_key,
-            weight=exact_sum(group_weights),
+            weight=_exact_adapter_sum(group_weights),
             provider="vanguard",
             as_of_date=as_of_date,
         )

@@ -1,1 +1,0 @@
-{"schema_version":"vanguard.holdings.v1","fund":{"ticker":"VTI","id":"1001"},"as_of_date":"2026-09-30","holdings":[{"ticker":"AAA","weight_pct":"60","sector":"Technology","size":"Large"},{"ticker":"BBB","weight_pct":"39","sector":"Technology","size":"Large"}]}

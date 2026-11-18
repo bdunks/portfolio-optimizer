@@ -1,0 +1,43 @@
+{
+  "latestEffectiveDate": "2026-10-31",
+  "2026-10-31": {
+    "equity": [],
+    "fixedIncome": [
+      {
+        "holdingName": "Public Finance Authority",
+        "ticker": "PUBGEN",
+        "percentOfFunds": 0.20769,
+        "cusip": "74448XCX8",
+        "sedol": ""
+      },
+      {
+        "holdingName": "State of California",
+        "ticker": "CAS",
+        "percentOfFunds": 0.15258,
+        "cusip": "13063EUN4",
+        "sedol": ""
+      },
+      {
+        "holdingName": "Public Finance Authority",
+        "ticker": "PUBGEN",
+        "percentOfFunds": 0.02801,
+        "cusip": "74448XED0",
+        "sedol": ""
+      },
+      {
+        "holdingName": "Public Finance Authority",
+        "ticker": "PUBGEN",
+        "percentOfFunds": 0.00437,
+        "cusip": "74442PSZ9",
+        "sedol": ""
+      },
+      {
+        "holdingName": "New York State Dormitory Authority",
+        "ticker": "NYSHGR",
+        "percentOfFunds": "",
+        "cusip": "64990AUU7",
+        "sedol": ""
+      }
+    ]
+  }
+}

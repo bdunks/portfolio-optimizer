@@ -1,0 +1,74 @@
+{
+  "latestEffectiveDate": "2026-10-31",
+  "2026-10-31": {
+    "equity": [
+      {
+        "holdingName": "Apple Inc",
+        "ticker": "AAPL",
+        "percentOfFunds": 6.90493,
+        "cusip": "037833100",
+        "sedol": "2046251",
+        "sector": "Technology Hardware, Storage & Peripherals",
+        "country": "US"
+      },
+      {
+        "holdingName": "NVIDIA Corp",
+        "ticker": "NVDA",
+        "percentOfFunds": 6.43214,
+        "cusip": "67066G104",
+        "sedol": "2379504",
+        "sector": "Semiconductors",
+        "country": "US"
+      },
+      {
+        "holdingName": "P3 Health Partners Inc",
+        "ticker": "PIII",
+        "percentOfFunds": "",
+        "cusip": "744413204",
+        "sedol": "BQH7MZ4",
+        "sector": "Health Care Services",
+        "country": "US"
+      }
+    ],
+    "fixedIncome": [],
+    "shortTermReserves": [
+      {
+        "holdingName": "SLCMT1142",
+        "ticker": "",
+        "percentOfFunds": 0.26194,
+        "cusip": "SLCMT1142",
+        "sedol": "",
+        "finalMaturityDate": ""
+      }
+    ],
+    "shortTermReservesMoneyMarket": [
+      {
+        "issuerName": "Apple Inc",
+        "cusip": "037833100",
+        "sedol": "2046251",
+        "principalAmount": 365727204,
+        "amortizedCost": 126040566314.52
+      }
+    ],
+    "formattedFundOfFundsHoldings": [],
+    "allocationToUnderlyingFunds": [
+      {
+        "holdingName": "SLCMT1142",
+        "ticker": "",
+        "percentOfFunds": 0.26194,
+        "cusip": "SLCMT1142",
+        "sedol": "",
+        "finalMaturityDate": ""
+      }
+    ],
+    "derivatives": [
+      {
+        "description": "S&P500 EMINI FUT  Dec26",
+        "percentOfFunds": 0.08991,
+        "marketValue": 1641197700,
+        "numberOfContracts": 4311,
+        "notionalValue": ""
+      }
+    ]
+  }
+}

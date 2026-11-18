@@ -1,0 +1,53 @@
+{
+  "latestEffectiveDate": "2026-10-31",
+  "2026-10-31": {
+    "equity": [
+      {
+        "holdingName": "Taiwan Semiconductor Manufacturing Co Ltd",
+        "ticker": "2330",
+        "percentOfFunds": 15.30371,
+        "cusip": "",
+        "sedol": "6889106",
+        "sector": "Semiconductors",
+        "country": "TW"
+      },
+      {
+        "holdingName": "Tencent Holdings Ltd",
+        "ticker": "700",
+        "percentOfFunds": 2.69608,
+        "cusip": "G87572163",
+        "sedol": "BMMV2K8",
+        "sector": "Interactive Media & Services",
+        "country": "HK"
+      },
+      {
+        "holdingName": "Quanta Computer Inc",
+        "ticker": "2382",
+        "percentOfFunds": 0.22409,
+        "cusip": "",
+        "sedol": "6141011",
+        "sector": "Technology Hardware, Storage & Peripherals",
+        "country": "TW"
+      },
+      {
+        "holdingName": "Sunny Optical Technology Group Co Ltd",
+        "ticker": "2382",
+        "percentOfFunds": 0.04666,
+        "cusip": "G8586D109",
+        "sedol": "B1YBT08",
+        "sector": "Electronic Components",
+        "country": "HK"
+      },
+      {
+        "holdingName": "VGI PCL - CW27 (W3 FEB 2022)",
+        "ticker": "VGI-W3",
+        "percentOfFunds": "",
+        "cusip": "",
+        "sedol": "BPXZ5G7",
+        "sector": "Advertising",
+        "country": "TH"
+      }
+    ],
+    "fixedIncome": []
+  }
+}

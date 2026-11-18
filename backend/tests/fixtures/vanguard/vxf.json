@@ -1,0 +1,35 @@
+{
+  "latestEffectiveDate": "2026-10-31",
+  "2026-10-31": {
+    "equity": [
+      {
+        "holdingName": "Space Exploration Technologies Corp",
+        "ticker": "SPCX",
+        "percentOfFunds": 2.26037,
+        "cusip": "84615Q103",
+        "sedol": "BXCVG25",
+        "sector": "Alternative Carriers",
+        "country": "US"
+      },
+      {
+        "holdingName": "Snowflake Inc",
+        "ticker": "SNOW",
+        "percentOfFunds": 1.29491,
+        "cusip": "833445109",
+        "sedol": "BN134B7",
+        "sector": "Internet Services & Infrastructure",
+        "country": "US"
+      },
+      {
+        "holdingName": "ALEXZA PHARMACEUTICALS INC-CVR",
+        "ticker": "",
+        "percentOfFunds": "",
+        "cusip": "015CVR996",
+        "sedol": "",
+        "sector": "",
+        "country": "US"
+      }
+    ],
+    "fixedIncome": []
+  }
+}

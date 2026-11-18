@@ -1,0 +1,62 @@
+{
+  "latestEffectiveDate": "2026-10-31",
+  "2026-10-31": {
+    "equity": [
+      {
+        "holdingName": "SAP SE",
+        "ticker": "SAP",
+        "percentOfFunds": 0.72007,
+        "cusip": "D66992104",
+        "sedol": "4846288",
+        "sector": "Application Software",
+        "country": "DE"
+      },
+      {
+        "holdingName": "Shopify Inc",
+        "ticker": "SHOP",
+        "percentOfFunds": 0.60609,
+        "cusip": "82509L107",
+        "sedol": "BX865C7",
+        "sector": "Internet Services & Infrastructure",
+        "country": "CA"
+      },
+      {
+        "holdingName": "GFL Environmental Inc",
+        "ticker": "GFL",
+        "percentOfFunds": 0.04666,
+        "cusip": "36168Q104",
+        "sedol": "BKDT649",
+        "sector": "Environmental & Facilities Services",
+        "country": "CA"
+      },
+      {
+        "holdingName": "Saputo Inc",
+        "ticker": "SAP",
+        "percentOfFunds": 0.0212,
+        "cusip": "802912105",
+        "sedol": "2112226",
+        "sector": "Packaged Foods & Meats",
+        "country": "CA"
+      },
+      {
+        "holdingName": "GFL Environmental Inc",
+        "ticker": "GFL",
+        "percentOfFunds": 0.00261,
+        "cusip": "36168Q104",
+        "sedol": "BKDT650",
+        "sector": "Environmental & Facilities Services",
+        "country": "US"
+      },
+      {
+        "holdingName": "Shopify Inc",
+        "ticker": "SHOP",
+        "percentOfFunds": "",
+        "cusip": "82509L107",
+        "sedol": "BXDZ9Z0",
+        "sector": "Internet Services & Infrastructure",
+        "country": "US"
+      }
+    ],
+    "fixedIncome": []
+  }
+}

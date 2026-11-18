@@ -1,0 +1,35 @@
+{
+  "latestEffectiveDate": "2026-10-31",
+  "2026-10-31": {
+    "equity": [
+      {
+        "holdingName": "Natera Inc",
+        "ticker": "NTRA",
+        "percentOfFunds": 0.7027,
+        "cusip": "632307104",
+        "sedol": "BYQRG48",
+        "sector": "Biotechnology",
+        "country": "US"
+      },
+      {
+        "holdingName": "Everpure Inc",
+        "ticker": "P",
+        "percentOfFunds": 0.49665,
+        "cusip": "74624M102",
+        "sedol": "BYZ62T3",
+        "sector": "Technology Hardware, Storage & Peripherals",
+        "country": "US"
+      },
+      {
+        "holdingName": "PFIZER INC - CVR (NOV 25)",
+        "ticker": "",
+        "percentOfFunds": "",
+        "cusip": "592CVR013",
+        "sedol": "9025253",
+        "sector": "Pharmaceuticals",
+        "country": "US"
+      }
+    ],
+    "fixedIncome": []
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "latestEffectiveDate": "2026-10-31",
+  "2026-10-31": {
+    "equity": [
+      {
+        "holdingName": "Apple Inc",
+        "ticker": "AAPL",
+        "percentOfFunds": 4.75097,
+        "cusip": "037833100",
+        "sedol": "2046251",
+        "sector": "Technology Hardware, Storage & Peripherals",
+        "country": "US"
+      },
+      {
+        "holdingName": "Eli Lilly & Co",
+        "ticker": "LLY",
+        "percentOfFunds": 4.72015,
+        "cusip": "532457108",
+        "sedol": "2516152",
+        "sector": "Pharmaceuticals",
+        "country": "US"
+      }
+    ],
+    "fixedIncome": []
+  }
+}

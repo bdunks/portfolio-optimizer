@@ -1,8 +1,7 @@
-"""Isolated, injected Vanguard JSON adapter for typed look-through exposures.
+"""Injected Vanguard holdings adapter for typed look-through exposures.
 
-The supported synthetic v1 wire contract is documented in
-``backend/tests/fixtures/vanguard/v1/CONTRACT.md``. It is not a claim about a live
-Vanguard endpoint response.
+The configured request is kept separate from parsing so tests can replay captured
+provider responses without constructing a network client.
 """
 
 from __future__ import annotations
@@ -11,7 +10,7 @@ import json
 from dataclasses import dataclass
 from datetime import date
 from decimal import MAX_EMAX, MIN_EMIN, Decimal, InvalidOperation, localcontext
-from typing import Protocol
+from typing import Literal, Protocol
 
 import httpx
 
@@ -36,8 +35,16 @@ class VanguardFundConfig:
 
 @dataclass(frozen=True, slots=True)
 class VanguardConstituentIdentifier:
+    """One source listing, including rows whose reported weight is unavailable."""
+
+    section: Literal["equity", "fixedIncome"]
+    holding_name: str | None
     ticker: str | None
     cusip: str | None
+    sedol: str | None
+    country: str | None
+    industry: str | None
+    weight: Decimal | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +52,8 @@ class VanguardDimensionCoverage:
     dimension: str
     observed_constituents: int
     total_constituents: int
+    covered_weight: Decimal
+    unavailable_weight_count: int
     complete: bool
 
 
@@ -56,6 +65,7 @@ class VanguardExposureResult:
     fund_id: str
     source_url: str
     as_of_date: date
+    reported_weight_total: Decimal
     coverage: tuple[VanguardDimensionCoverage, ...]
 
 
@@ -69,13 +79,15 @@ class _HttpClient(Protocol):
     def get(self, url: str, *, timeout: float) -> _Response: ...
 
 
-def _parse_percentage(value: object, *, context: str) -> Decimal:
-    if isinstance(value, bool) or not isinstance(value, (str, int, Decimal)):
-        raise VanguardMarketDataError(f"{context} must be a decimal percentage")
+def _parse_percentage(value: object, *, context: str) -> Decimal | None:
+    if value == "":
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, Decimal)):
+        raise VanguardMarketDataError(f"{context} must be a JSON number or blank")
     try:
         percentage = Decimal(value) if not isinstance(value, Decimal) else value
     except (InvalidOperation, ValueError) as exc:
-        raise VanguardMarketDataError(f"{context} must be a decimal percentage") from exc
+        raise VanguardMarketDataError(f"{context} must be a JSON number or blank") from exc
     exponent = percentage.as_tuple().exponent
     if not percentage.is_finite() or not isinstance(exponent, int) or not -1000 <= exponent <= 1000:
         raise VanguardMarketDataError(f"{context} must have a bounded decimal exponent")
@@ -94,10 +106,32 @@ def _exact_adapter_sum(values: list[Decimal]) -> Decimal:
         return exact_sum(values)
 
 
-def _required_string(value: object, *, context: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise VanguardMarketDataError(f"{context} must be a non-empty string")
-    return value.strip()
+def _source_text(row: dict[str, object], key: str, *, context: str) -> str | None:
+    value = row.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise VanguardMarketDataError(f"{context}.{key} must be a string when present")
+    return value
+
+
+def _normalised_identifier(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+    return value.strip().upper()
+
+
+def _listing_identity(
+    item: VanguardConstituentIdentifier,
+) -> tuple[str, str, str, str] | None:
+    cusip = _normalised_identifier(item.cusip)
+    sedol = _normalised_identifier(item.sedol)
+    ticker = _normalised_identifier(item.ticker) or ""
+    if cusip is not None:
+        return (item.section, "cusip", cusip, sedol or "")
+    if sedol is not None:
+        return (item.section, "sedol", sedol, ticker)
+    return None
 
 
 def fetch_vanguard_exposures(
@@ -114,143 +148,152 @@ def fetch_vanguard_exposures(
     except Exception as exc:
         raise VanguardMarketDataError("Vanguard request failed or returned invalid JSON") from exc
 
-    if not isinstance(payload, dict) or set(payload) != {
-        "schema_version",
-        "fund",
-        "as_of_date",
-        "holdings",
-    }:
-        raise VanguardMarketDataError("Vanguard response does not match the v1 contract")
-    if payload["schema_version"] != "vanguard.holdings.v1":
-        raise VanguardMarketDataError("Unsupported Vanguard response schema version")
-
-    fund = payload["fund"]
-    if not isinstance(fund, dict) or set(fund) != {"ticker", "id"}:
-        raise VanguardMarketDataError("Vanguard fund metadata does not match the v1 contract")
-    if (
-        fund["ticker"] != config.ticker
-        or not isinstance(fund["id"], str)
-        or fund["id"] != config.fund_id
-    ):
-        raise VanguardMarketDataError("Vanguard response fund does not match configured fund")
-
+    if not isinstance(payload, dict):
+        raise VanguardMarketDataError("Vanguard response must be a JSON object")
+    date_value = payload.get("latestEffectiveDate")
+    if not isinstance(date_value, str) or not date_value:
+        raise VanguardMarketDataError("Vanguard latestEffectiveDate must be an ISO date")
     try:
-        date_value = payload["as_of_date"]
-        if not isinstance(date_value, str) or not date_value:
-            raise ValueError("as_of_date is not canonical YYYY-MM-DD")
         as_of_date = date.fromisoformat(date_value)
         if as_of_date.isoformat() != date_value:
-            raise ValueError("as_of_date is not canonical YYYY-MM-DD")
+            raise ValueError("latestEffectiveDate is not canonical YYYY-MM-DD")
     except ValueError as exc:
-        raise VanguardMarketDataError("Vanguard as_of_date must be an ISO date") from exc
+        raise VanguardMarketDataError("Vanguard latestEffectiveDate must be an ISO date") from exc
 
-    holdings = payload["holdings"]
-    if not isinstance(holdings, list):
-        raise VanguardMarketDataError("Vanguard holdings must be a list")
+    date_section = payload.get(date_value)
+    if not isinstance(date_section, dict):
+        raise VanguardMarketDataError("Vanguard effective-date section must be an object")
+    source_arrays: dict[Literal["equity", "fixedIncome"], list[object]] = {}
+    for section in ("equity", "fixedIncome"):
+        rows = date_section.get(section)
+        if not isinstance(rows, list):
+            raise VanguardMarketDataError(f"Vanguard {section} direct holdings must be an array")
+        source_arrays[section] = rows
 
-    exposures: list[ExposureInput] = []
     identifiers: list[VanguardConstituentIdentifier] = []
-    ticker_ids: set[str] = set()
-    cusip_ids: set[str] = set()
-    observed = {"security": 0, "sector": 0, "size": 0}
-    weights: list[Decimal] = []
-    aggregated: dict[tuple[str, str], list[Decimal]] = {}
-
-    for index, holding in enumerate(holdings):
-        context = f"holdings[{index}]"
-        if not isinstance(holding, dict) or set(holding) - {
-            "ticker",
-            "cusip",
-            "weight_pct",
-            "sector",
-            "size",
-        }:
-            raise VanguardMarketDataError(f"{context} does not match the v1 contract")
-        ticker_value = holding.get("ticker")
-        cusip_value = holding.get("cusip")
-        ticker = (
-            _required_string(ticker_value, context=f"{context}.ticker")
-            if ticker_value is not None
-            else None
-        )
-        cusip = (
-            _required_string(cusip_value, context=f"{context}.cusip")
-            if cusip_value is not None
-            else None
-        )
-        if ticker is None and cusip is None:
-            raise VanguardMarketDataError(f"{context} requires a ticker or CUSIP identifier")
-        if ticker is not None:
-            normalized_ticker = ticker.upper()
-            if normalized_ticker in ticker_ids:
-                raise VanguardMarketDataError(
-                    f"Duplicate Vanguard ticker identifier: {normalized_ticker}"
-                )
-            ticker_ids.add(normalized_ticker)
-            ticker = normalized_ticker
-        if cusip is not None:
-            normalized_cusip = cusip.upper()
-            if normalized_cusip in cusip_ids:
-                raise VanguardMarketDataError(
-                    f"Duplicate Vanguard CUSIP identifier: {normalized_cusip}"
-                )
-            cusip_ids.add(normalized_cusip)
-            cusip = normalized_cusip
-
-        weight = _parse_percentage(holding.get("weight_pct"), context=f"{context}.weight_pct")
-        identifiers.append(VanguardConstituentIdentifier(ticker=ticker, cusip=cusip))
-        weights.append(weight)
-        if ticker is not None:
-            observed["security"] += 1
-            exposures.append(
-                ExposureInput(
-                    ticker=config.ticker,
-                    dimension="security",
-                    exposure_key=ticker,
+    for section, rows in source_arrays.items():
+        for index, value in enumerate(rows):
+            context = f"{date_value}.{section}[{index}]"
+            if not isinstance(value, dict):
+                raise VanguardMarketDataError(f"{context} must be an object")
+            if "percentOfFunds" not in value:
+                raise VanguardMarketDataError(f"{context}.percentOfFunds is required")
+            weight = _parse_percentage(value["percentOfFunds"], context=f"{context}.percentOfFunds")
+            identifiers.append(
+                VanguardConstituentIdentifier(
+                    section=section,
+                    holding_name=_source_text(value, "holdingName", context=context),
+                    ticker=_source_text(value, "ticker", context=context),
+                    cusip=_source_text(value, "cusip", context=context),
+                    sedol=_source_text(value, "sedol", context=context),
+                    country=_source_text(value, "country", context=context)
+                    if section == "equity"
+                    else None,
+                    industry=_source_text(value, "sector", context=context)
+                    if section == "equity"
+                    else None,
                     weight=weight,
-                    provider="vanguard",
-                    as_of_date=as_of_date,
                 )
             )
-        for dimension in ("sector", "size"):
-            label_value = holding.get(dimension)
-            if label_value is None:
-                continue
-            label = _required_string(label_value, context=f"{context}.{dimension}")
-            observed[dimension] += 1
-            aggregated.setdefault((dimension, label), []).append(weight)
 
-    total = len(holdings)
-    total_weight = _exact_adapter_sum(weights)
-    if total_weight > Decimal(1):
-        raise VanguardMarketDataError("Vanguard holding weights exceed 100 percent")
-    exposures.extend(
+    seen_listings: set[tuple[str, str, str, str]] = set()
+    for item in identifiers:
+        identity = _listing_identity(item)
+        if identity is not None:
+            if identity in seen_listings:
+                raise VanguardMarketDataError(
+                    f"Duplicate Vanguard listing identity in {item.section} holdings"
+                )
+            seen_listings.add(identity)
+
+    reported_weight_total = _exact_adapter_sum(
+        [item.weight for item in identifiers if item.weight is not None]
+    )
+    if reported_weight_total > Decimal(1):
+        raise VanguardMarketDataError("Vanguard direct holding weights exceed 100 percent")
+
+    ticker_counts: dict[str, int] = {}
+    bond_cusip_counts: dict[str, int] = {}
+    for item in identifiers:
+        ticker = _normalised_identifier(item.ticker)
+        if ticker is not None:
+            ticker_counts[ticker] = ticker_counts.get(ticker, 0) + 1
+        if item.section == "fixedIncome":
+            cusip = _normalised_identifier(item.cusip)
+            if cusip is not None:
+                bond_cusip_counts[cusip] = bond_cusip_counts.get(cusip, 0) + 1
+
+    dimension_rows: dict[str, list[tuple[str, Decimal]]] = {
+        dimension: []
+        for dimension in ("security", "cusip", "industry", "country", "sector", "size")
+    }
+    for item in identifiers:
+        if item.weight is None:
+            continue
+        ticker = _normalised_identifier(item.ticker)
+        cusip = _normalised_identifier(item.cusip)
+        if (
+            item.section == "equity"
+            and item.country is not None
+            and item.country.strip().upper() == "US"
+            and ticker is not None
+            and ticker_counts[ticker] == 1
+        ):
+            dimension_rows["security"].append((ticker, item.weight))
+        if item.section == "fixedIncome" and cusip is not None and bond_cusip_counts[cusip] == 1:
+            dimension_rows["cusip"].append((cusip, item.weight))
+        if item.section == "equity":
+            if item.industry is not None and item.industry.strip():
+                dimension_rows["industry"].append((item.industry.strip(), item.weight))
+            if item.country is not None and item.country.strip():
+                dimension_rows["country"].append((item.country.strip(), item.weight))
+
+    grouped_weights: dict[tuple[str, str], list[Decimal]] = {}
+    observed = dict.fromkeys(dimension_rows, 0)
+    covered_weights: dict[str, list[Decimal]] = {dimension: [] for dimension in dimension_rows}
+    for dimension, rows in dimension_rows.items():
+        for exposure_key, weight in rows:
+            grouped_weights.setdefault((dimension, exposure_key), []).append(weight)
+            observed[dimension] += 1
+            covered_weights[dimension].append(weight)
+
+    exposures = tuple(
         ExposureInput(
             ticker=config.ticker,
             dimension=dimension,
             exposure_key=exposure_key,
-            weight=_exact_adapter_sum(group_weights),
+            weight=_exact_adapter_sum(weights),
             provider="vanguard",
             as_of_date=as_of_date,
         )
-        for (dimension, exposure_key), group_weights in sorted(aggregated.items())
+        for (dimension, exposure_key), weights in sorted(grouped_weights.items())
     )
-
+    total_constituents = len(identifiers)
+    unavailable_weight_count = sum(item.weight is None for item in identifiers)
     coverage = tuple(
         VanguardDimensionCoverage(
             dimension=dimension,
             observed_constituents=observed[dimension],
-            total_constituents=total,
-            complete=(total > 0 and total_weight == Decimal(1) and observed[dimension] == total),
+            total_constituents=total_constituents,
+            covered_weight=_exact_adapter_sum(covered_weights[dimension]),
+            unavailable_weight_count=unavailable_weight_count,
+            complete=(
+                total_constituents > 0
+                and reported_weight_total == Decimal(1)
+                and unavailable_weight_count == 0
+                and observed[dimension] == total_constituents
+                and _exact_adapter_sum(covered_weights[dimension]) == Decimal(1)
+            ),
         )
-        for dimension in ("security", "sector", "size")
+        for dimension in dimension_rows
     )
     return VanguardExposureResult(
-        exposures=tuple(exposures),
+        exposures=exposures,
         identifiers=tuple(identifiers),
         fund_ticker=config.ticker.upper(),
         fund_id=config.fund_id,
         source_url=config.url,
         as_of_date=as_of_date,
+        reported_weight_total=reported_weight_total,
         coverage=coverage,
     )

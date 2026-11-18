@@ -281,17 +281,20 @@ def test_encoded_response_is_rejected_before_reading_body() -> None:
         fetch_ishares_exposures(IsharesFundConfig("ITOT", URL), client, clock=lambda: FETCHED_AT)
 
 
-def test_configured_httpx_redirect_is_rejected() -> None:
+def test_configured_httpx_redirect_is_not_followed() -> None:
+    requests: list[httpx.Request] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
-        if str(request.url) == URL:
-            return httpx.Response(302, headers={"location": "/redirected"})
-        return httpx.Response(200, content=FIXTURE.read_bytes())
+        requests.append(request)
+        return httpx.Response(302, headers={"location": "https://off-host.example/redirected"})
 
     with (
         httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True) as client,
-        pytest.raises(IsharesMarketDataError, match="request identity"),
+        pytest.raises(IsharesMarketDataError),
     ):
         fetch_ishares_exposures(IsharesFundConfig("ITOT", URL), client, clock=lambda: FETCHED_AT)
+
+    assert [str(request.url) for request in requests] == [URL]
 
 
 def test_blank_equity_ticker_and_location_remain_in_denominator_with_gaps() -> None:

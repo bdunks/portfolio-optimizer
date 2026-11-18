@@ -97,7 +97,13 @@ class _StreamContext(Protocol):
 
 class _HttpClient(Protocol):
     def stream(
-        self, method: str, url: str, *, timeout: float, headers: dict[str, str]
+        self,
+        method: str,
+        url: str,
+        *,
+        timeout: float,
+        headers: dict[str, str],
+        follow_redirects: bool,
     ) -> _StreamContext: ...
 
 
@@ -233,7 +239,11 @@ def fetch_ishares_exposures(
     try:
         content = bytearray()
         with client.stream(
-            "GET", config.url, timeout=timeout, headers={"Accept-Encoding": "identity"}
+            "GET",
+            config.url,
+            timeout=timeout,
+            headers={"Accept-Encoding": "identity"},
+            follow_redirects=False,
         ) as response:
             if str(response.request.url) != config.url or response.history:
                 raise IsharesMarketDataError("iShares response request identity changed")

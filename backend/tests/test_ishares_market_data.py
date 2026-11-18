@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import csv
 import io
+from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import override
 
 import httpx
 import pytest
@@ -197,3 +199,114 @@ def _run_with_clock(clock: datetime) -> IsharesExposureResult:
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         return fetch_ishares_exposures(IsharesFundConfig("ITOT", URL), client, clock=lambda: clock)
+
+
+@pytest.mark.parametrize("asset_class", ["Equit", "Stock", "", "Bond"])
+def test_unknown_asset_class_fails_closed(asset_class: str) -> None:
+    body = FIXTURE.read_bytes().replace(
+        b'"AAPL","APPLE","Information Technology","Equity"',
+        f'"AAPL","APPLE","Information Technology","{asset_class}"'.encode(),
+    )
+    _expect_error(body)
+
+
+@pytest.mark.parametrize(
+    ("ticker", "url"), [("DGRO", URL), ("ITOT", URL + "?other"), ("ITOT", "https://example.com")]
+)
+def test_unverified_fund_or_url_rejected_before_transport(ticker: str, url: str) -> None:
+    with pytest.raises(IsharesMarketDataError):
+        IsharesFundConfig(ticker, url)
+
+
+def test_as_of_date_in_footer_cannot_replace_missing_preamble_date() -> None:
+    body = FIXTURE.read_bytes().replace(b'Fund Holdings as of,"Nov 17, 2026"\n', b"")
+    body = body.replace(
+        b"The content contained herein is owned or licensed by BlackRock",
+        b"The content contained herein is owned or licensed by BlackRock\n"
+        b'Fund Holdings as of,"Nov 17, 2026"',
+    )
+    _expect_error(body)
+
+
+class _ChunkStream(httpx.SyncByteStream):
+    def __init__(self, chunks: list[bytes]) -> None:
+        self.chunks = chunks
+        self.iterated = 0
+
+    @override
+    def __iter__(self) -> Iterator[bytes]:
+        for chunk in self.chunks:
+            self.iterated += 1
+            yield chunk
+
+    @override
+    def close(self) -> None:
+        pass
+
+
+def test_streamed_response_checks_identity_encoding_and_remaining_budget() -> None:
+    chunks = _ChunkStream([b"x" * MAX_RESPONSE_BYTES, b"y"])
+    seen_headers: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_headers.append(request.headers["accept-encoding"])
+        return httpx.Response(200, stream=chunks)
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(IsharesMarketDataError, match="8 MiB"),
+    ):
+        fetch_ishares_exposures(IsharesFundConfig("ITOT", URL), client, clock=lambda: FETCHED_AT)
+    assert seen_headers == ["identity"]
+    assert chunks.iterated == 2
+
+
+def test_encoded_response_is_rejected_before_reading_body() -> None:
+    class UnreadableStream(httpx.SyncByteStream):
+        @override
+        def __iter__(self) -> Iterator[bytes]:
+            raise AssertionError("encoded body must not be iterated")
+
+        @override
+        def close(self) -> None:
+            pass
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-encoding": "gzip"}, stream=UnreadableStream())
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(IsharesMarketDataError, match="content encoding"),
+    ):
+        fetch_ishares_exposures(IsharesFundConfig("ITOT", URL), client, clock=lambda: FETCHED_AT)
+
+
+def test_configured_httpx_redirect_is_rejected() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == URL:
+            return httpx.Response(302, headers={"location": "/redirected"})
+        return httpx.Response(200, content=FIXTURE.read_bytes())
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True) as client,
+        pytest.raises(IsharesMarketDataError, match="request identity"),
+    ):
+        fetch_ishares_exposures(IsharesFundConfig("ITOT", URL), client, clock=lambda: FETCHED_AT)
+
+
+def test_blank_equity_ticker_and_location_remain_in_denominator_with_gaps() -> None:
+    body = FIXTURE.read_bytes().replace(
+        b'"AAPL","APPLE","Information Technology","Equity","6,733,276,319.38","7.23",'
+        b'"6,733,276,319.38","19,133,518.00","351.91","United States","NASDAQ"',
+        b'"","APPLE","Information Technology","Equity","6,733,276,319.38","7.23",'
+        b'"6,733,276,319.38","19,133,518.00","351.91","","NASDAQ"',
+    )
+    result = _run(body)
+    assert result.total_equity_market_value == Decimal("11668291953.02")
+    assert exact_sum(row.weight for row in result.holdings) == Decimal(1)
+    coverage = {row.dimension: row for row in result.coverage}
+    assert coverage["security"].complete is False
+    assert coverage["country"].complete is False
+    assert "AAPL" not in _weights(result, "security")
+    assert "" not in _weights(result, "country")
+    assert coverage["country"].shortfall > 0

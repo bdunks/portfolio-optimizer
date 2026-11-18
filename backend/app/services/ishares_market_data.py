@@ -21,6 +21,13 @@ ITOT_URL = "https://www.ishares.com/us/products/239724/ishares-core-s-p-total-u-
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 _WEIGHT_PLACES = 24
 _REQUIRED = {"Ticker", "Name", "Sector", "Asset Class", "Market Value", "Location", "Exchange"}
+_ALLOWED_ASSET_CLASSES = {
+    "Equity",
+    "Cash",
+    "Cash Collateral and Margins",
+    "Money Market",
+    "Futures",
+}
 _FOOTER_START = "The content contained herein is owned or licensed by BlackRock"
 
 
@@ -34,8 +41,8 @@ class IsharesFundConfig:
     url: str
 
     def __post_init__(self) -> None:
-        if not self.ticker.strip() or not self.url.strip():
-            raise ValueError("iShares ticker and URL must be configured")
+        if self.ticker != "ITOT" or self.url != ITOT_URL:
+            raise IsharesMarketDataError("only the verified ITOT fund and §5 URL are supported")
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +81,10 @@ class IsharesExposureResult:
 
 
 class _Response(Protocol):
+    headers: httpx.Headers
+    request: httpx.Request
+    history: list[httpx.Response]
+
     def raise_for_status(self) -> None: ...
 
     def iter_bytes(self) -> Iterator[bytes]: ...
@@ -81,12 +92,13 @@ class _Response(Protocol):
 
 class _StreamContext(Protocol):
     def __enter__(self) -> _Response: ...
-
     def __exit__(self, *args: object) -> None: ...
 
 
 class _HttpClient(Protocol):
-    def stream(self, method: str, url: str, *, timeout: float) -> _StreamContext: ...
+    def stream(
+        self, method: str, url: str, *, timeout: float, headers: dict[str, str]
+    ) -> _StreamContext: ...
 
 
 def _date_from_preamble(text: str) -> date:
@@ -118,7 +130,6 @@ def _market_value(value: str, context: str, asset_class: str) -> Decimal:
 
 
 def _parse_csv(text: str) -> tuple[date, tuple[IsharesHolding, ...]]:
-    as_of = _date_from_preamble(text)
     lines = text.splitlines(keepends=True)
     header_index: int | None = None
     for index, line in enumerate(lines):
@@ -131,6 +142,7 @@ def _parse_csv(text: str) -> tuple[date, tuple[IsharesHolding, ...]]:
             break
     if header_index is None:
         raise IsharesMarketDataError("iShares holdings CSV header is missing")
+    as_of = _date_from_preamble("".join(lines[:header_index]))
     try:
         header = next(csv.reader([lines[header_index]], strict=True))
     except (csv.Error, StopIteration) as exc:
@@ -158,8 +170,10 @@ def _parse_csv(text: str) -> tuple[date, tuple[IsharesHolding, ...]]:
         ticker, name = record["Ticker"].strip(), record["Name"].strip()
         sector, asset_class = record["Sector"].strip(), record["Asset Class"].strip()
         location, exchange = record["Location"].strip(), record["Exchange"].strip()
-        if not all((ticker, name, asset_class, location, exchange)):
+        if not all((name, asset_class, exchange)):
             raise IsharesMarketDataError(f"iShares row {row_number} is a partial holding")
+        if asset_class not in _ALLOWED_ASSET_CLASSES:
+            raise IsharesMarketDataError(f"iShares row {row_number} has unknown Asset Class")
         market_value = _market_value(
             record["Market Value"], f"iShares row {row_number}", asset_class
         )
@@ -218,12 +232,19 @@ def fetch_ishares_exposures(
     """Fetch one bounded configured URL using injected HTTP and UTC clock dependencies."""
     try:
         content = bytearray()
-        with client.stream("GET", config.url, timeout=timeout) as response:
+        with client.stream(
+            "GET", config.url, timeout=timeout, headers={"Accept-Encoding": "identity"}
+        ) as response:
+            if str(response.request.url) != config.url or response.history:
+                raise IsharesMarketDataError("iShares response request identity changed")
             response.raise_for_status()
+            encoding = response.headers.get("content-encoding", "identity").strip().casefold()
+            if encoding not in {"", "identity"}:
+                raise IsharesMarketDataError("iShares response used unsupported content encoding")
             for chunk in response.iter_bytes():
-                content.extend(chunk)
-                if len(content) > MAX_RESPONSE_BYTES:
+                if len(chunk) > MAX_RESPONSE_BYTES - len(content):
                     raise IsharesMarketDataError("iShares response exceeds 8 MiB limit")
+                content.extend(chunk)
         text = bytes(content).decode("utf-8-sig", errors="strict")
     except IsharesMarketDataError:
         raise

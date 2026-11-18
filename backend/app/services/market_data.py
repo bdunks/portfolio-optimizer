@@ -15,6 +15,7 @@ from typing import Protocol
 
 import httpx
 
+from app.domain.decimal_math import exact_product, exact_sum
 from app.schemas import ExposureInput
 
 
@@ -77,7 +78,7 @@ def _parse_percentage(value: object, *, context: str) -> Decimal:
         raise VanguardMarketDataError(f"{context} must be a decimal percentage") from exc
     if not percentage.is_finite() or percentage < 0 or percentage > 100:
         raise VanguardMarketDataError(f"{context} must be finite and between 0 and 100")
-    return percentage / Decimal(100)
+    return exact_product(percentage, Decimal("0.01"))
 
 
 def _required_string(value: object, *, context: str) -> str:
@@ -132,6 +133,8 @@ def fetch_vanguard_exposures(
     ticker_ids: set[str] = set()
     cusip_ids: set[str] = set()
     observed = {"security": 0, "sector": 0, "size": 0}
+    weights: list[Decimal] = []
+    aggregated: dict[tuple[str, str], list[Decimal]] = {}
 
     for index, holding in enumerate(holdings):
         context = f"holdings[{index}]"
@@ -176,6 +179,7 @@ def fetch_vanguard_exposures(
 
         weight = _parse_percentage(holding.get("weight_pct"), context=f"{context}.weight_pct")
         identifiers.append(VanguardConstituentIdentifier(ticker=ticker, cusip=cusip))
+        weights.append(weight)
         if ticker is not None:
             observed["security"] += 1
             exposures.append(
@@ -194,24 +198,30 @@ def fetch_vanguard_exposures(
                 continue
             label = _required_string(label_value, context=f"{context}.{dimension}")
             observed[dimension] += 1
-            exposures.append(
-                ExposureInput(
-                    ticker=config.ticker,
-                    dimension=dimension,
-                    exposure_key=label,
-                    weight=weight,
-                    provider="vanguard",
-                    as_of_date=as_of_date,
-                )
-            )
+            aggregated.setdefault((dimension, label), []).append(weight)
 
     total = len(holdings)
+    total_weight = exact_sum(weights)
+    if total_weight > Decimal(1):
+        raise VanguardMarketDataError("Vanguard holding weights exceed 100 percent")
+    exposures.extend(
+        ExposureInput(
+            ticker=config.ticker,
+            dimension=dimension,
+            exposure_key=exposure_key,
+            weight=exact_sum(group_weights),
+            provider="vanguard",
+            as_of_date=as_of_date,
+        )
+        for (dimension, exposure_key), group_weights in sorted(aggregated.items())
+    )
+
     coverage = tuple(
         VanguardDimensionCoverage(
             dimension=dimension,
             observed_constituents=observed[dimension],
             total_constituents=total,
-            complete=total > 0 and observed[dimension] == total,
+            complete=(total > 0 and total_weight == Decimal(1) and observed[dimension] == total),
         )
         for dimension in ("security", "sector", "size")
     )

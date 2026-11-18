@@ -147,6 +147,121 @@ def test_missing_dimension_rows_remain_missing_without_renormalizing() -> None:
 
 
 @pytest.mark.parametrize(
+    ("name", "expected_complete"),
+    [("fully_labeled_underweight.json", False)],
+)
+def test_fully_labeled_underweight_response_is_incomplete(
+    name: str, expected_complete: bool
+) -> None:
+    result = _fetch(_client_for_fixture(name))
+    assert all(item.complete is expected_complete for item in result.coverage)
+    assert sum(
+        (row.weight for row in result.exposures if row.dimension == "sector"), Decimal(0)
+    ) == Decimal("0.99")
+
+
+def test_fully_labeled_overweight_response_is_rejected() -> None:
+    with pytest.raises(VanguardMarketDataError, match="exceed 100 percent"):
+        _fetch(_client_for_fixture("fully_labeled_overweight.json"))
+
+
+def test_shared_classifications_emit_one_exactly_aggregated_row_per_key() -> None:
+    payload = {
+        "schema_version": "vanguard.holdings.v1",
+        "fund": {"ticker": "VTI", "id": "1001"},
+        "as_of_date": "2026-09-30",
+        "holdings": [
+            {"ticker": "AAA", "weight_pct": "60", "sector": "Technology", "size": "Large"},
+            {"ticker": "BBB", "weight_pct": "40", "sector": "Technology", "size": "Large"},
+        ],
+    }
+    result = _fetch(FakeClient(FakeResponse(json.dumps(payload).encode())))
+    assert all(item.complete for item in result.coverage)
+    assert [
+        (row.dimension, row.exposure_key, row.weight)
+        for row in result.exposures
+        if row.dimension in {"sector", "size"}
+    ] == [
+        ("sector", "Technology", Decimal(1)),
+        ("size", "Large", Decimal(1)),
+    ]
+
+
+def test_percentage_conversion_is_exact_beyond_default_decimal_precision() -> None:
+    percentage = "33." + "3" * 80 + "4"
+    payload = {
+        "schema_version": "vanguard.holdings.v1",
+        "fund": {"ticker": "VTI", "id": "1001"},
+        "as_of_date": "2026-09-30",
+        "holdings": [
+            {"ticker": "AAA", "weight_pct": percentage},
+            {"ticker": "BBB", "weight_pct": "0"},
+        ],
+    }
+    result = _fetch(FakeClient(FakeResponse(json.dumps(payload).encode())))
+    security_row = next(row for row in result.exposures if row.exposure_key == "AAA")
+    source_weight = Decimal(percentage)
+    exponent = source_weight.as_tuple().exponent
+    assert isinstance(exponent, int)
+    expected = Decimal(
+        (source_weight.as_tuple().sign, source_weight.as_tuple().digits, exponent - 2)
+    )
+    assert security_row.weight == expected
+
+
+def test_missing_holdings_section_is_rejected_explicitly() -> None:
+    payload = _load_valid()
+    del payload["holdings"]
+    with pytest.raises(VanguardMarketDataError, match="does not match the v1 contract"):
+        _fetch(FakeClient(FakeResponse(json.dumps(payload).encode())))
+
+
+def test_adapter_derived_complete_coverage_flows_to_sector_consumer() -> None:
+    payload = {
+        "schema_version": "vanguard.holdings.v1",
+        "fund": {"ticker": "VTI", "id": "1001"},
+        "as_of_date": "2026-11-05",
+        "holdings": [
+            {"ticker": "AAA", "weight_pct": "60", "sector": "Technology", "size": "Large"},
+            {"ticker": "BBB", "weight_pct": "40", "sector": "Industrials", "size": "Large"},
+        ],
+    }
+    result = _fetch(FakeClient(FakeResponse(json.dumps(payload).encode())))
+    domain_rows = tuple(
+        LookThroughExposureInput(
+            ticker=row.ticker,
+            dimension=row.dimension,
+            exposure_key=row.exposure_key,
+            weight=row.weight,
+            provider=row.provider,
+            as_of_date=row.as_of_date,
+        )
+        for row in result.exposures
+    )
+    derived_coverage = all(item.complete for item in result.coverage)
+    inputs = _inputs(
+        positions=(
+            PositionInput(
+                ticker="VTI",
+                asset_type="ETF",
+                is_completion_etf=False,
+                shares=Decimal(1),
+                sync_generation=1,
+                as_of=datetime(2026, 11, 5, 16, 0, tzinfo=UTC),
+                market_value_usd=Decimal(100),
+                assignment=None,
+            ),
+        ),
+        exposures=domain_rows,
+        metadata=_metadata(lookthrough_complete=derived_coverage),
+    )
+    aggregate = aggregate_lookthrough_exposure(inputs, tickers=("VTI",), dimension="sector")
+    assert derived_coverage is True
+    assert aggregate.coverage.complete is True
+    assert aggregate.coverage.invalid_tickers == ()
+
+
+@pytest.mark.parametrize(
     "name",
     ["unknown_dimension.json", "duplicate_identifiers.json", "duplicate_cusips.json"],
 )

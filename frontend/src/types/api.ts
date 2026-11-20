@@ -92,6 +92,31 @@ export type EtradeAuthVerifyInput = {
   "verifier": string;
 };
 
+export type ExposureCacheTickerResponse = {
+  "ticker": string;
+  "freshness": "configured_missing" | "current" | "stale";
+  "configured_provider": "vanguard" | "ishares" | "manual_csv";
+  "provider": "vanguard" | "ishares" | "manual_csv" | null;
+  "as_of_date": string | null;
+  "cached_at": string | null;
+  "last_attempted_at": string | null;
+  "last_attempt_provider": "vanguard" | "ishares" | "manual_csv" | null;
+  "last_attempt_status": "never" | "success" | "failure";
+  "last_error_code": string | null;
+  "last_error_summary": string | null;
+  "publication_revision": number;
+  "dimensions": Array<ExposureDimensionCoverageResponse>;
+};
+
+export type ExposureDimensionCoverageResponse = {
+  "dimension": string;
+  "covered_weight": string;
+  "complete": boolean;
+  "observed_item_count": number;
+  "scope_item_count": number;
+  "provider_universe_verified": boolean;
+};
+
 export type FrozenRunDisplayContextResponse = {
   "available": boolean;
   "source": "frozen_input_bundle" | "policy_revision" | null;
@@ -712,6 +737,36 @@ export interface ApiOperations {
     request: never;
     responses: {
       "200": PortfolioNotSyncedResponse | PortfolioReadyResponse;
+      "403": ErrorEnvelope;
+      "404": ErrorEnvelope;
+      "409": ErrorEnvelope;
+      "422": ErrorEnvelope;
+      "500": ErrorEnvelope;
+      "502": ErrorEnvelope;
+      "503": ErrorEnvelope;
+    };
+  };
+  "POST /api/v1/market-data/exposures/refresh": {
+    path: Record<never, never>;
+    query: Record<never, never>;
+    request: never;
+    responses: {
+      "200": Array<ExposureCacheTickerResponse>;
+      "403": ErrorEnvelope;
+      "404": ErrorEnvelope;
+      "409": ErrorEnvelope;
+      "422": ErrorEnvelope;
+      "500": ErrorEnvelope;
+      "502": ErrorEnvelope;
+      "503": ErrorEnvelope;
+    };
+  };
+  "GET /api/v1/market-data/exposures/cache": {
+    path: Record<never, never>;
+    query: Record<never, never>;
+    request: never;
+    responses: {
+      "200": Array<ExposureCacheTickerResponse>;
       "403": ErrorEnvelope;
       "404": ErrorEnvelope;
       "409": ErrorEnvelope;

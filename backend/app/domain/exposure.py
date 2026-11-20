@@ -62,6 +62,13 @@ def _normalise_key(dimension: str, key: str) -> str:
     return key.strip().upper() if _normalise_dimension(dimension) == "security" else key.strip()
 
 
+def requires_lookthrough(inputs: FinancialInputs, ticker: str, asset_type: str) -> bool:
+    """Whether a security must use cached look-through rather than direct equity treatment."""
+    return asset_type.upper() != "EQUITY" or any(
+        row.ticker.upper() == ticker.upper() for row in inputs.exposure_cache
+    )
+
+
 def _selected_rows(
     exposures: Sequence[LookThroughExposureInput],
     dimension: str,
@@ -176,17 +183,40 @@ def aggregate_lookthrough_exposure(
     evaluation_date = inputs.proposed_trade_date
     stale_before = evaluation_date - timedelta(days=EXPOSURE_CACHE_MAX_AGE_DAYS)
     lookthrough_required = False
+    cache_by_ticker = {row.ticker.upper(): row for row in inputs.exposure_cache}
+    legacy_lookthrough_required = False
 
     for position in selected_positions:
         ticker = position.ticker.upper()
         security = inputs.security_for(ticker)
         asset_type = security.identity.asset_type if security is not None else position.asset_type
         market_value = Decimal(1) if ticker in unit_notional_tickers else position.market_value_usd
-        if asset_type == "EQUITY" and normalized_dimension == "security":
+        if (
+            not requires_lookthrough(inputs, ticker, asset_type)
+            and normalized_dimension == "security"
+        ):
             values[("security", ticker)].append(market_value)
             continue
 
         lookthrough_required = True
+        cache_metadata = cache_by_ticker.get(ticker)
+        if cache_metadata is None:
+            legacy_lookthrough_required = True
+        else:
+            cache_dimension_complete = next(
+                (
+                    row.complete
+                    for row in cache_metadata.dimensions
+                    if _normalise_dimension(row.dimension) == normalized_dimension
+                ),
+                None,
+            )
+            if cache_dimension_complete is None:
+                missing_tickers.add(ticker)
+            elif not cache_dimension_complete:
+                invalid_tickers.add(ticker)
+            if not stale_before <= cache_metadata.as_of_date <= evaluation_date:
+                stale_tickers.add(ticker)
         ticker_rows = [
             row
             for (row_ticker, row_dimension, _), row in selected_rows.items()
@@ -195,6 +225,11 @@ def aggregate_lookthrough_exposure(
         if not ticker_rows:
             missing_tickers.add(ticker)
             continue
+        if cache_metadata is not None and any(
+            row.provider != cache_metadata.provider or row.as_of_date != cache_metadata.as_of_date
+            for row in ticker_rows
+        ):
+            conflicting_tickers.add(ticker)
         if any(
             row.as_of_date < stale_before or row.as_of_date > evaluation_date for row in ticker_rows
         ):
@@ -221,8 +256,10 @@ def aggregate_lookthrough_exposure(
         complete: bool | None = False
     elif not lookthrough_required:
         complete = True
-    else:
+    elif legacy_lookthrough_required:
         complete = inputs.source_metadata.lookthrough_complete
+    else:
+        complete = True
 
     coverage = ExposureCoverage(
         complete=complete,

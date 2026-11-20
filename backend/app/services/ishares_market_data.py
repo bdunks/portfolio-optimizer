@@ -81,6 +81,7 @@ class IsharesExposureResult:
 
 
 class _Response(Protocol):
+    status_code: int
     headers: httpx.Headers
     request: httpx.Request
     history: list[httpx.Response]
@@ -200,6 +201,10 @@ def _parse_csv(text: str) -> tuple[date, tuple[IsharesHolding, ...]]:
         )
     if not rows:
         raise IsharesMarketDataError("iShares holdings CSV contains no positions")
+    if not footer_seen:
+        raise IsharesMarketDataError(
+            "iShares holdings CSV is missing the terminal BlackRock footer"
+        )
     return as_of, tuple(rows)
 
 
@@ -245,8 +250,13 @@ def fetch_ishares_exposures(
             headers={"Accept-Encoding": "identity"},
             follow_redirects=False,
         ) as response:
-            if str(response.request.url) != config.url or response.history:
-                raise IsharesMarketDataError("iShares response request identity changed")
+            if (
+                response.status_code != 200
+                or str(response.request.url) != config.url
+                or response.history
+                or response.headers.get("content-range") is not None
+            ):
+                raise IsharesMarketDataError("iShares response status or request identity changed")
             response.raise_for_status()
             encoding = response.headers.get("content-encoding", "identity").strip().casefold()
             if encoding not in {"", "identity"}:

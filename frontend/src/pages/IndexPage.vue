@@ -203,6 +203,80 @@
 
       <Card class="workspace-card allocation-card tw:min-w-0">
         <CardContent class="tw:pt-4">
+          <div class="tw:mb-4 tw:flex tw:flex-wrap tw:items-start tw:justify-between tw:gap-3">
+            <div class="tw:grid tw:gap-1">
+              <h2 class="tw:m-0! tw:text-lg! tw:font-semibold!">ETF Look-Through</h2>
+              <p class="tw:m-0! tw:text-sm tw:text-muted-foreground">
+                Refresh cached fund holdings explicitly. A new recommendation run will use refreshed
+                data; saved runs and targets are unchanged.
+              </p>
+              <p
+                v-if="exposureLoadError"
+                role="status"
+                aria-live="polite"
+                class="tw:m-0! tw:text-sm"
+              >
+                {{ exposureLoadError }}
+              </p>
+              <p
+                v-if="exposureError"
+                role="alert"
+                aria-live="assertive"
+                class="tw:m-0! tw:text-sm tw:text-destructive"
+              >
+                {{ exposureError }}
+              </p>
+              <ul
+                v-if="exposureCache?.length"
+                class="tw:m-0! tw:list-none tw:p-0 tw:text-sm"
+                aria-label="ETF look-through cache status"
+              >
+                <li v-for="item in exposureCache" :key="item.ticker">
+                  {{ item.ticker }}:
+                  {{ item.freshness === 'configured_missing' ? 'not yet cached' : item.freshness }}
+                  <template v-if="item.as_of_date">
+                    · holdings as of {{ item.as_of_date }}</template
+                  >
+                  <template v-if="item.dimensions.length">
+                    · observed coverage fractions
+                    {{
+                      item.dimensions
+                        .map((dimension) => `${dimension.dimension} ${dimension.covered_weight}`)
+                        .join(', ')
+                    }}
+                  </template>
+                  <template v-if="item.last_attempt_status === 'failure'">
+                    · latest refresh failed{{
+                      item.last_error_summary ? `: ${item.last_error_summary}` : ''
+                    }}
+                  </template>
+                </li>
+              </ul>
+              <p
+                v-else-if="exposureCache && !exposureCache.length"
+                role="status"
+                class="tw:m-0! tw:text-sm"
+              >
+                No look-through source is configured.
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              :disabled="exposurePending"
+              :aria-busy="exposurePending"
+              @click="refreshExposure"
+            >
+              <LoaderCircle
+                v-if="exposurePending"
+                aria-hidden="true"
+                data-icon="inline-start"
+                class="tw:animate-spin"
+              />
+              <RefreshCw v-else aria-hidden="true" data-icon="inline-start" />
+              {{ exposurePending ? 'Refreshing ETF Look-Through…' : 'Refresh ETF Look-Through' }}
+            </Button>
+          </div>
           <AllocationTargets
             :allocation="allocation"
             :labels="effectLabels"
@@ -730,7 +804,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -756,6 +830,7 @@ import {
 import { sumExactUsd } from '@/utils/exact-usd';
 import type { AllowedSecurityResponse } from '@/types/api';
 
+import { api } from '@/services/api';
 import { completeFrozenRunSleeveLabels } from './run-context';
 import {
   selectPortfolioLabelContext,
@@ -765,6 +840,42 @@ import {
 import ResourceFreshnessNotice from '@/components/ResourceFreshnessNotice.vue';
 
 const store = useWorkspace();
+const exposureCache = ref<Awaited<ReturnType<typeof api.getExposureCache>> | null>(null);
+const exposurePending = ref(false);
+const exposureError = ref<string | null>(null);
+const exposureLoadError = ref<string | null>(null);
+let exposureReadRevision = 0;
+async function loadExposureCache(): Promise<void> {
+  const revision = exposureReadRevision;
+  try {
+    const result = await api.getExposureCache();
+    if (revision !== exposureReadRevision) return;
+    exposureCache.value = result;
+    exposureLoadError.value = null;
+  } catch (error) {
+    if (revision !== exposureReadRevision) return;
+    exposureLoadError.value =
+      error instanceof Error ? error.message : 'Look-through cache status could not be loaded.';
+  }
+}
+
+async function refreshExposure(): Promise<void> {
+  if (exposurePending.value) return;
+  exposurePending.value = true;
+  exposureError.value = null;
+  try {
+    // Invalidate any mount-time status read so it cannot overwrite this newer refresh result.
+    exposureReadRevision += 1;
+    exposureCache.value = await api.refreshExposureCache();
+    exposureLoadError.value = null;
+  } catch (error) {
+    exposureError.value =
+      error instanceof Error ? error.message : 'ETF look-through refresh failed.';
+    await loadExposureCache();
+  } finally {
+    exposurePending.value = false;
+  }
+}
 const router = useRouter();
 const portfolio = computed(() => store.portfolio);
 const activePolicy = computed(() => store.policy?.active ?? null);
@@ -1115,6 +1226,7 @@ async function runOptimizer(): Promise<void> {
 }
 
 onMounted(() => {
+  void loadExposureCache();
   void store.ensureInitialWorkspace();
 });
 </script>

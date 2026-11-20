@@ -216,7 +216,7 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(
         )
         assert response.status_code == 200, response.text
         assert response.json()["position_count"] == 460
-        assert portfolio_selects == 11
+        assert portfolio_selects == 12
 
         lot_page = client.get("/api/v1/lots?limit=500")
         assert lot_page.status_code == 200, lot_page.text
@@ -371,7 +371,7 @@ def test_460_security_2500_lot_loads_are_bulk_and_round_trip_immutable_inputs(
         )
         assert len(inputs.positions) == 460
         assert len(inputs.lots) == 2500
-        assert full_input_selects == 13
+        assert full_input_selects == 14
         assert inputs.exposures[0].ticker == "VTI"
         assert inputs.exposures[0].weight == Decimal("0.25")
         assert len(inputs.transactions) == 1

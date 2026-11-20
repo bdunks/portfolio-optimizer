@@ -22,6 +22,18 @@ class VanguardMarketDataError(ValueError):
     """The configured Vanguard request or response cannot be used safely."""
 
 
+VANGUARD_BASE_URL = "https://advisors.vanguard.com/investments/products/api/funds"
+_VANGUARD_FUND_IDS = {
+    "VTI": "0970",
+    "VB": "0969",
+    "VXF": "0965",
+    "VIG": "0920",
+    "VEA": "0936",
+    "VWO": "0964",
+    "VTEB": "4391",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class VanguardFundConfig:
     ticker: str
@@ -29,8 +41,10 @@ class VanguardFundConfig:
     url: str
 
     def __post_init__(self) -> None:
-        if not self.ticker.strip() or not self.fund_id.strip() or not self.url.strip():
-            raise ValueError("Vanguard ticker, fund ID, and URL must be configured")
+        expected_id = _VANGUARD_FUND_IDS.get(self.ticker.upper())
+        expected_url = f"{VANGUARD_BASE_URL}/{expected_id}/holdings/latest"
+        if expected_id is None or self.fund_id != expected_id or self.url != expected_url:
+            raise VanguardMarketDataError("Vanguard ticker, fund ID, and §5 URL must match")
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,12 +85,16 @@ class VanguardExposureResult:
 
 class _Response(Protocol):
     content: bytes
+    status_code: int
+    headers: httpx.Headers
+    request: httpx.Request
+    history: list[httpx.Response]
 
     def raise_for_status(self) -> None: ...
 
 
 class _HttpClient(Protocol):
-    def get(self, url: str, *, timeout: float) -> _Response: ...
+    def get(self, url: str, *, timeout: float, follow_redirects: bool) -> _Response: ...
 
 
 def _parse_percentage(value: object, *, context: str) -> Decimal | None:
@@ -134,17 +152,39 @@ def _listing_identity(
     return None
 
 
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON member name: {key}")
+        result[key] = value
+    return result
+
+
 def fetch_vanguard_exposures(
     config: VanguardFundConfig,
     client: _HttpClient | httpx.Client,
     *,
     timeout: float = 10.0,
 ) -> VanguardExposureResult:
-    """Fetch one configured fund using the supplied client; no transport is constructed here."""
     try:
-        response = client.get(config.url, timeout=timeout)
+        response = client.get(config.url, timeout=timeout, follow_redirects=False)
+        if (
+            response.status_code != 200
+            or response.history
+            or str(response.request.url) != config.url
+            or response.headers.get("content-range") is not None
+        ):
+            raise VanguardMarketDataError("Vanguard response status or request identity is invalid")
         response.raise_for_status()
-        payload = json.loads(response.content, parse_float=Decimal, parse_int=Decimal)
+        payload = json.loads(
+            response.content,
+            parse_float=Decimal,
+            parse_int=Decimal,
+            object_pairs_hook=_unique_json_object,
+        )
+    except VanguardMarketDataError:
+        raise
     except Exception as exc:
         raise VanguardMarketDataError("Vanguard request failed or returned invalid JSON") from exc
 
@@ -169,6 +209,8 @@ def fetch_vanguard_exposures(
         if not isinstance(rows, list):
             raise VanguardMarketDataError(f"Vanguard {section} direct holdings must be an array")
         source_arrays[section] = rows
+    if not any(source_arrays.values()):
+        raise VanguardMarketDataError("Vanguard response contains no direct holdings")
 
     identifiers: list[VanguardConstituentIdentifier] = []
     for section, rows in source_arrays.items():

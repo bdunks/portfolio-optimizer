@@ -288,10 +288,70 @@ function selectedOverviewRunFixture(withUnavailableGroupDetails = false) {
   } as never;
 }
 
-function jsonResponse(value: unknown): Response {
+function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
-    status: 200,
+    status,
     headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.href;
+  return input.url;
+}
+
+function exposureStatus(freshness: 'configured_missing' | 'current' | 'stale', failed = false) {
+  return {
+    ticker: 'ITOT',
+    freshness,
+    configured_provider: 'ishares',
+    provider: freshness === 'configured_missing' ? null : 'ishares',
+    as_of_date: freshness === 'configured_missing' ? null : '2026-11-17',
+    fetched_at: freshness === 'configured_missing' ? null : '2026-11-18T14:08:29Z',
+    last_attempt_at: failed ? '2026-11-19T01:00:00Z' : null,
+    last_attempt_status: failed
+      ? 'failure'
+      : freshness === 'configured_missing'
+        ? 'never'
+        : 'success',
+    last_error_code: failed ? 'provider_unavailable' : null,
+    last_error_summary: failed ? 'Provider refresh failed' : null,
+    publication_revision: 1,
+    dimensions:
+      freshness === 'configured_missing'
+        ? []
+        : [
+            {
+              dimension: 'sector',
+              covered_weight: '0.834567890123456789',
+              complete: false,
+              observed_item_count: 10,
+            },
+          ],
+  };
+}
+
+function seedWorkspaceReads(pinia: ReturnType<typeof createPinia>) {
+  const queryClient = getTestQueryClientForPinia(pinia);
+  queryClient.setQueryData(workspaceQueryKeys.health, { status: 'ok', schema_ready: false });
+  queryClient.setQueryData(workspaceQueryKeys.portfolio, {
+    status: 'not_synced',
+    positions: [],
+    coverage: {},
+    sync: {
+      generation: 0,
+      complete: false,
+      started_at: null,
+      completed_at: null,
+      last_error_code: null,
+      last_error_summary: null,
+    },
+  });
+  queryClient.setQueryData(workspaceQueryKeys.policy, {
+    active: null,
+    drafts: [],
+    superseded: [],
   });
 }
 
@@ -358,6 +418,200 @@ describe('IndexPage', () => {
     expect(wrapper.findAll('.overview-page-action')).toHaveLength(2);
     wrapper.unmount();
   });
+
+  it('loads the empty unconfigured cache from the local API and keeps refresh visible without workspace data', async () => {
+    const fetcher = vi.fn<typeof fetch>((input) => {
+      if (input === '/api/v1/market-data/exposures/cache') return Promise.resolve(jsonResponse([]));
+      if (input === '/health')
+        return Promise.resolve(jsonResponse({ status: 'ok', schema_ready: false }));
+      if (input === '/api/v1/portfolio')
+        return Promise.resolve(
+          jsonResponse({
+            status: 'not_synced',
+            positions: [],
+            coverage: {},
+            sync: {
+              generation: 0,
+              complete: false,
+              started_at: null,
+              completed_at: null,
+              last_error_code: null,
+              last_error_summary: null,
+            },
+          }),
+        );
+      if (input === '/api/v1/policy')
+        return Promise.resolve(jsonResponse({ active: null, drafts: [], superseded: [] }));
+      throw new Error(`Unexpected request: ${requestUrl(input)}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [] });
+    const wrapper = mountWithWorkspace(IndexPage, { global: { plugins: [pinia, router] } });
+    await flushPromises();
+
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/v1/market-data/exposures/cache',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(wrapper.text()).toContain('No look-through source is configured.');
+    expect(
+      wrapper
+        .findAll('button')
+        .some((button) => button.text().includes('Refresh ETF Look-Through')),
+    ).toBe(true);
+    expect(fetcher.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
+      ['/api/v1/market-data/exposures/cache', 'GET'],
+      ['/health', 'GET'],
+      ['/api/v1/portfolio', 'GET'],
+      ['/api/v1/policy', 'GET'],
+    ]);
+    wrapper.unmount();
+  });
+
+  it('refreshes a configured missing source once with a bodyless POST and displays API state', async () => {
+    const pendingPost = deferred<Response>();
+    const fetcher = vi.fn<typeof fetch>((input) => {
+      if (input === '/api/v1/market-data/exposures/cache')
+        return Promise.resolve(jsonResponse([exposureStatus('configured_missing')]));
+      if (input === '/api/v1/market-data/exposures/refresh') return pendingPost.promise;
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    seedWorkspaceReads(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [] });
+    const wrapper = mountWithWorkspace(IndexPage, { global: { plugins: [pinia, router] } });
+    await flushPromises();
+    expect(wrapper.text()).toContain('ITOT: not yet cached');
+
+    const button = wrapper
+      .findAll('button')
+      .find((candidate) => candidate.text().includes('Refresh ETF Look-Through'))!;
+    await button.trigger('click');
+    await flushPromises();
+    expect(button.attributes('disabled')).toBeDefined();
+    expect(button.text()).toContain('Refreshing ETF Look-Through');
+    await button.trigger('click');
+    expect(
+      fetcher.mock.calls.filter(([url]) => url === '/api/v1/market-data/exposures/refresh'),
+    ).toHaveLength(1);
+    const post = fetcher.mock.calls.find(
+      ([url]) => url === '/api/v1/market-data/exposures/refresh',
+    );
+    expect(post?.[1]).toMatchObject({ method: 'POST' });
+    expect(post?.[1]?.body).toBeUndefined();
+    expect(new Headers(post?.[1]?.headers).has('Content-Type')).toBe(false);
+
+    pendingPost.resolve(jsonResponse([exposureStatus('current')]));
+    await flushPromises();
+    expect(wrapper.text()).toContain('ITOT: current');
+    expect(wrapper.text()).toContain('holdings as of 2026-11-17');
+    expect(wrapper.text()).toContain('sector 0.834567890123456789');
+    expect(
+      fetcher.mock.calls.filter(([url]) => url === '/api/v1/market-data/exposures/cache'),
+    ).toHaveLength(1);
+    expect(
+      fetcher.mock.calls
+        .map(([url]) => url)
+        .filter(
+          (url) =>
+            requestUrl(url).includes('/portfolio/sync') || requestUrl(url).includes('/optimizer/'),
+        ),
+    ).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it('retains prior cached dates and observed coverage while showing persisted refresh failure', async () => {
+    const fetcher = vi.fn<typeof fetch>((input) => {
+      if (input === '/api/v1/market-data/exposures/cache')
+        return Promise.resolve(jsonResponse([exposureStatus('stale', true)]));
+      if (input === '/api/v1/market-data/exposures/refresh')
+        return Promise.resolve(
+          jsonResponse(
+            {
+              code: 'exposure_refresh_failed',
+              message: 'Could not refresh ETF holdings',
+              details: {},
+              correlation_id: 'corr-refresh',
+            },
+            502,
+          ),
+        );
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    seedWorkspaceReads(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [] });
+    const wrapper = mountWithWorkspace(IndexPage, { global: { plugins: [pinia, router] } });
+    await flushPromises();
+    await wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('Refresh ETF Look-Through'))!
+      .trigger('click');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('Could not refresh ETF holdings');
+    expect(wrapper.text()).toContain('ITOT: stale');
+    expect(wrapper.text()).toContain('holdings as of 2026-11-17');
+    expect(wrapper.text()).toContain('sector 0.834567890123456789');
+    expect(wrapper.text()).toContain('latest refresh failed: Provider refresh failed');
+    expect(fetcher.mock.calls.map(([url, init]) => [url, init?.method])).toContainEqual([
+      '/api/v1/market-data/exposures/cache',
+      'GET',
+    ]);
+    expect(
+      fetcher.mock.calls.filter(([url]) => url === '/api/v1/market-data/exposures/cache'),
+    ).toHaveLength(2);
+    expect(
+      fetcher.mock.calls.filter(([url]) => url === '/api/v1/market-data/exposures/refresh'),
+    ).toHaveLength(1);
+    expect(
+      fetcher.mock.calls
+        .map(([url]) => url)
+        .filter(
+          (url) =>
+            requestUrl(url).includes('/portfolio/sync') || requestUrl(url).includes('/optimizer/'),
+        ),
+    ).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it('does not allow a delayed mount-time cache read to overwrite a successful refresh response', async () => {
+    const delayedGet = deferred<Response>();
+    const fetcher = vi.fn<typeof fetch>((input) => {
+      if (input === '/api/v1/market-data/exposures/cache') return delayedGet.promise;
+      if (input === '/api/v1/market-data/exposures/refresh')
+        return Promise.resolve(jsonResponse([exposureStatus('current')]));
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    seedWorkspaceReads(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [] });
+    const wrapper = mountWithWorkspace(IndexPage, { global: { plugins: [pinia, router] } });
+    await wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('Refresh ETF Look-Through'))!
+      .trigger('click');
+    await flushPromises();
+    delayedGet.resolve(jsonResponse([exposureStatus('configured_missing')]));
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('ITOT: current');
+    expect(wrapper.text()).toContain('holdings as of 2026-11-17');
+    expect(wrapper.text()).not.toContain('ITOT: not yet cached');
+    expect(
+      fetcher.mock.calls.filter(([url]) => url === '/api/v1/market-data/exposures/cache'),
+    ).toHaveLength(1);
+    wrapper.unmount();
+  });
+
   it('leads with confirmed optimization outcomes and a grouped API-sourced preview', async () => {
     const pinia = createPinia();
     setActivePinia(pinia);

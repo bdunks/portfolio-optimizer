@@ -23,6 +23,8 @@ from app.domain.allocation import (
 )
 from app.domain.financial_inputs import (
     AccountInput,
+    ExposureCacheInput,
+    ExposureDimensionCoverageInput,
     FinancialInputs,
     InputSourceMetadata,
     LookThroughExposureInput,
@@ -682,6 +684,45 @@ def test_validator_rejects_buy_funding_shortfall_after_order_fee(
     assert not result.accepted
     assert result.reasons == ("accounting:insufficient_cash",)
     assert result.evaluation is None
+
+
+def test_execution_validation_rejects_incomplete_cache_managed_buy_candidate() -> None:
+    inputs = _inputs()
+    inputs = replace(
+        inputs,
+        securities=tuple(
+            replace(row, identity=replace(row.identity, asset_type="EQUITY"))
+            if row.identity.ticker == "NEWETF"
+            else row
+            for row in inputs.securities
+        ),
+        account=replace(
+            inputs.account,
+            cash_usd=Decimal(1000),
+            settled_buying_power_usd=Decimal(1000),
+        ),
+        exposures=tuple(
+            replace(row, provider="manual_csv") if row.ticker == "NEWETF" else row
+            for row in inputs.exposures
+        ),
+        exposure_cache=(
+            ExposureCacheInput(
+                "NEWETF",
+                "manual_csv",
+                TRADE_DATE,
+                (
+                    ExposureDimensionCoverageInput("security", False),
+                    ExposureDimensionCoverageInput("sector", True),
+                ),
+            ),
+        ),
+    )
+    buy = ConsolidatedLeg("buy:NEWETF", "BUY", "NEWETF", Decimal(1), Decimal(100))
+
+    validation = validate_candidate(inputs, (buy,))
+
+    assert not validation.accepted
+    assert "buy_exposure_incomplete:NEWETF" in validation.reasons
 
 
 @pytest.mark.parametrize(
@@ -2054,6 +2095,38 @@ def test_buy_only_trade_group_is_ranked(monkeypatch: pytest.MonkeyPatch) -> None
         "Funding and replacement BUYs included" in line
         for line in result.metadata.trade_group_priorities[0].rationale
     )
+
+
+def test_optimizer_buy_screen_rejects_incomplete_cache_equity() -> None:
+    inputs, _, _, _ = _buy_only_components_case()
+    inputs = replace(
+        inputs,
+        securities=tuple(
+            replace(row, identity=replace(row.identity, asset_type="EQUITY"))
+            if row.identity.ticker == "NEWETF"
+            else row
+            for row in inputs.securities
+        ),
+        exposure_cache=(
+            ExposureCacheInput(
+                "NEWETF",
+                "manual_csv",
+                TRADE_DATE,
+                (
+                    ExposureDimensionCoverageInput("security", False),
+                    ExposureDimensionCoverageInput("sector", True),
+                ),
+            ),
+        ),
+    )
+
+    result = optimize_worker(OptimizerRequest(inputs), time.monotonic() + 10)
+
+    assert result.status == "ready"
+    assert result.legs
+    assert "NEWETF" not in {leg.ticker for leg in result.legs}
+    assert "OTHERETF" in {leg.ticker for leg in result.legs}
+    assert any(leg.ticker == "OTHERETF" and leg.side == "BUY" for leg in result.legs)
 
 
 def test_solver_fallback_preserves_downstream_deadline_reserve(

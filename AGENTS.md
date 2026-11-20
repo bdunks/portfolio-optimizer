@@ -1,90 +1,46 @@
 # Agent instructions — Portfolio Optimizer
 
-## Product goal
+## Product & safety boundaries
 
-Implement a local, single-user, **single-account** decision-support app that takes a current E*TRADE brokerage account portfolio, configured allocation/tax/batch policy and market data (including Vanguard JSON and iShares CSV ETF look-through holdings) and outputs **prioritized, explainable, small-batch tax-lot-level SELL and whole-share BUY recommendations**. Enable **user-directed, individually approved** E*TRADE order preview/placement only in the final implementation phase (Phase 5). Never implement unattended trading, multi-account routing or multi-year projection workflows.
+Local, single-user, **single-account** tax-aware decision-support app for a single managed E*TRADE brokerage account. It produces ranked, explainable, small-batch tax-lot-level SELL and whole-share BUY recommendations.
 
-## Source precedence
+- Never implement unattended trading, multi-account routing, or multi-year projection workflows.
+- Live broker writes/order placement remain disabled without explicit owner release authorization (see Decision `D1` in `docs/decisions.md`).
+- Keep credentials backend-only, bind locally (`127.0.0.1`), and keep no-credentials DEMO mode functional.
+- Never commit or include `backend/.env`, `backend/data/`, real E*TRADE tokens, account IDs, or live account payloads in source, fixtures, or reports.
 
-1. `docs/01_functional_specification.md` — financial semantics, user experience and acceptance criteria.
-2. `docs/02_technical_specification.md` — architecture, data model, exact tax netting equations, APIs and 2-pass small-batch solver design.
-3. `docs/portfolio_tax_optimizer_reference.html` — appearance and interaction **only**; its demo numbers and embedded comments cannot override the specs.
+## Repo layout & verification
 
-All allocation sleeves, target percentages, ETF candidates, wash-sale assumptions, tax rates, carryforwards, retained TLH targets, gain budgets and small-batch limits are **configurable product data**, not constants. Demo examples must never be mistaken for live holdings.
+- `backend/`: Python 3.14 (`uv`), FastAPI, SQLite + SQLAlchemy/Alembic, CVXPY/OSQP/CLARABEL.
+- `frontend/`: Node 24, Vue 3, Vite, TypeScript, Pinia, Vue Router, Tailwind/shadcn-vue.
+- Toolchain is managed via `mise.toml`. Do not introduce Docker, PostgreSQL, or React.
+- **Typecheck (strict):** `mise run typecheck` (`pyrefly` strict mode on backend + `vue-tsc` on frontend). Ruff also enforces `ANN` type annotations in tests.
+- **Format / lint:** `mise run format` (note: `format:backend` runs `ruff check --fix-only --unsafe-fixes`—inspect diffs; use `cd backend && uv run ruff check .` and `cd frontend && npm run lint:check` for read-only checks).  Do not waste tokens fixing errors before running autofix.
+- **Tests:** `cd backend && uv run pytest`; `cd frontend && npm test`, `npm run test:integration`, `npm run test:e2e`.
+- **Migrations:** Schema changes go through Alembic (`backend/migrations/`, `cd backend && uv run alembic upgrade head`).
+- **API contracts:** When FastAPI routes or schemas change, regenerate `backend/openapi.json` and `frontend/src/types/api.ts` via `cd backend && uv run python scripts/generate_api_contract.py` (verify with `--check`).
 
-## Decision records
+## Source precedence & decisions
 
-- Read relevant `docs/decisions.md` entries before implementation or delegation; log cross-cutting financial, lifecycle, API and persistence decisions before dependent work.
-- Records need a stable ID, status (`Open`, `Provisional`, `Accepted`, `Superseded`), decision/rationale, authority, and affected contracts/tests. Tasks and worker briefs reference IDs rather than duplicating decisions.
-- The orchestrator resolves routine technical choices; ask the owner about business semantics, workflow restrictions or material trade-offs. Stop affected work on unresolved or conflicting assumptions; never infer approval.
-- Decisions cannot override specifications. Update affected specs for approved behavior changes, link superseded records, and verify agreed behavior end to end—not merely safe rejection.
+1. `docs/01_functional_specification.md` — financial semantics, UX, and acceptance criteria.
+2. `docs/02_technical_specification.md` — architecture, data model, tax netting equations, APIs, and solver design.
+3. `docs/portfolio_tax_optimizer_reference.html` — appearance/interaction reference **only**; its demo numbers and comments never override specs.
 
-## Engineering constraints
+- All sleeves, target percentages, ETF candidates, wash-sale rules, tax rates, carryforwards, TLH targets, gain budgets, and batch limits are configurable product data, not constants.
+- Check `docs/decisions.md` before cross-cutting financial, lifecycle, API, or persistence work; log new decisions there following its header format and reference IDs in tasks/briefs.
+- Resolve routine technical choices autonomously; ask the owner on business semantics, workflow restrictions, or material trade-offs. Stop affected work on unresolved or conflicting assumptions; never infer approval.
+- Decisions cannot override specs—update affected specs for approved behavior changes and verify agreed behavior end to end.
+- For optimizer quality/benchmark work, follow `docs/optimizer_quality_protocol.md`.
 
-- Use the **normalized current-state SQLite schema** in the technical spec for the **single managed E*TRADE account**. Keep queryable lots, positions, transactions, policies, overrides, cached look-through exposures, recommendations and orders in typed relational tables; reserve run-input JSON only for immutable provenance. Avoid periodic snapshot, multi-account, external-tax-event and corporate-action subsystems.
-- Convert money to `Decimal` for tax/cash checks; implement the exact IRS ST/LT netting function $T(S, L)$ with configurable `target_retained_net_loss_usd`; validate active policy target sums **exactly 100%**; resolve all individual equities + `VB`/`VXF` to the US direct-indexing container sleeve by default; preserve specific broker lot IDs and independent post-rounding constraints.
-- Enforce **small-batch execution limits** (`max_sell_tickers_per_batch`, `max_sell_lots_per_batch`, `max_total_orders_per_batch`) via the 2-pass screen-then-solve-batch architecture (`10.0s` timeout budget). Do **not** block small legacy/DRIP lot sales with a minimum sell notional—reward lot and position cleanup and consolidate multi-lot sales of the same ticker into a single SELL order.
-- Rank coherent trade groups and respect buy/sell dependencies; subset changes trigger a fast Pass 2 re-solve of replacement ETF buys; subset review never means blanket order approval.
-- Keep credentials in the backend, bind locally (`127.0.0.1`), test with deterministic fake broker data, and maintain a functional no-credentials demo.
-- State actual test/build/benchmark outcomes; do not claim an integration or benchmark was verified without running it.
+## Core invariants
 
-# Backlog
+- Use `Decimal` for money, tax, and cash checks; preserve the normalized current-state SQLite schema and specific broker lot IDs.
+- Test broker/order flows with deterministic fakes unless the owner explicitly authorizes a live read check.
+- Report actual test/build/benchmark outcomes; never claim a check or integration was verified without running it.
 
-Use the backlog to plan substantial or multi-step work on this project, or when the user asks to work from it. Don't create backlog entries for every small fix.
+## Backlog
 
-Inspect relevant existing projects, milestones, and tasks before planning or structural changes. Running or completing the selected task does not require listing projects, milestones, or sibling tasks. Don't initialize or reset an existing database, delete work, promote Draft items, or mark tasks Done without a request or an agreed plan.
-
-Common backlog commands (run from the repository root):
-
-- `backlog task next --json` — find eligible work with task, milestone, and project context, including their instructions. No follow-up `task show` is required to start work.
-- `backlog task show <id> --json` — inspect a specific task and its context when needed. (`task <id>` is not a command.)
-- `backlog task list --milestone <id> --json` — inspect tasks and their order before changing a milestone.
-- `backlog milestone list --json` — inspect milestones before adding or moving work.
-- `backlog task create --milestone <id> --title TEXT --instructions TEXT --done-when TEXT --state Draft --json` — create a draft task and capture its ID.
-- `backlog task move <id> --milestone <id> --position N` — move a task to a zero-based position.
-- `backlog task done <id> [--handoff TEXT]` — complete eligible work; include a handoff for useful outcomes, decisions, deviations, or context for subsequent work. Omit it when there is nothing useful to pass on.
-- `backlog --help` and `backlog <command> --help` — see all commands and flags.
-
-
-## Author readable tasks
-
-Write instructions, Done-when criteria, and handoffs as Markdown for humans reading the browser:
-
-- Keep titles plain text.
-- For multi-part instructions, use descriptive `##` headings and short paragraphs or lists. Include goal, scope, and constraints where useful; omit empty sections.
-- Put each independent Done-when criterion on its own `-` bullet.
-- Use backticks for paths, commands, and identifiers; use fenced code blocks for multiline code.
-- Submit actual newlines, not literal `\n` text. Leave blank lines between paragraphs and before lists.
-- When editing, preserve existing requirements and useful structure; update the relevant section rather than appending another prose block.
-- For useful handoffs, separate outcomes, checks, and remaining issues where needed. Do not claim checks that were not run; omit a handoff when there is nothing useful to pass on.
-- Short, single-purpose fields need no unnecessary headings. GFM tables, task lists, strikethrough, and bare URL links are supported; checklist boxes are read-only recorded text, not task-state controls.
-
-Example (set `milestone_id` to the inspected destination milestone ID first; this creates Draft work, not approval to execute):
-
-```bash
-backlog task create --milestone "$milestone_id" \
-  --title "Explain blocked tasks" \
-  --instructions "$(cat <<'MD'
-## Goal
-Make blocked tasks understandable without changing eligibility.
-
-## Scope
-- Show the direct prerequisites preventing execution.
-- Reuse existing task-detail components.
-
-## Constraints
-- Do not introduce another persisted state.
-MD
-)" \
-  --done-when "$(cat <<'MD'
-- Blocked tasks identify their incomplete prerequisites.
-- Eligible tasks retain their existing behavior.
-- Focused tests cover both cases.
-MD
-)" \
-  --state Draft --json
-```
-
-The quoted `MD` delimiters prevent shell expansion of Markdown backticks and `$` expressions. Use the same quoted-heredoc pattern with `task edit --instructions`, `--done-when`, or `task done --handoff`.
-
-
+- Use `backlog` for substantial or multi-step work, or when asked; skip it for small fixes.
+- Inspect relevant projects, milestones, and tasks before structural changes (`backlog task next --json` suffices to start eligible work).
+- Never initialize/reset the backlog database, delete work, promote `Draft` items, or mark tasks `Done` without a request or agreed plan.
+- When creating, editing, or completing backlog tasks, use the `backlog-authoring` skill (`.agents/skills/backlog-authoring/SKILL.md`).

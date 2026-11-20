@@ -3,39 +3,30 @@ description: Execute approved tasks sequentially with workers, review, validatio
 argument-hint: "<approved task IDs, requirements, or @requirements-file>"
 ---
 
-Execute the supplied, approved tasks sequentially through implementation, review, and validation. Ask before starting if scope, approval, or testable acceptance criteria are missing.
+Execute the approved tasks sequentially through implementation, validation, and fresh review. Ask before starting if scope, approval, or acceptance criteria are missing.
 
-### Preflight: verify the contract before implementation
+### 1. External contracts (when applicable)
+When a task touches an external API or file format, verify the real contract before delegating:
+- Use authoritative documentation, a schema, or a sanitized real capture with known provenance—never invent a wire schema or rely on unverified examples.
+- If the contract or requirements are missing or conflict, stop and ask the user. Do not make live requests unless authorized.
+- Offline tests may mock transport, but representative success fixtures must match the real contract.
+- Include the contract source (and any evidence limits) in both worker and reviewer briefs so the reviewer can check against it. Report offline verification separately from live verification.
 
-- The parent checks the task, specs, and acceptance criteria against the evidence before delegating. For an existing external interface, obtain the actual contract for the relevant endpoint, format, or version: authoritative provider documentation or schema, or a representative real response with known provenance (sanitized if needed). Verify the fields, types, units, and meanings the implementation depends on. An endpoint URL, a list of desired fields, a demo, or a spec example with no provenance is not enough.
-- If the requirements are incomplete, ambiguous, or conflict with the evidence, stop the affected work. Record what is missing and ask the owner for the source or a decision before coding. A task marked Ready, an approved scope, or an internal decision record does not establish external facts. If live access is out of scope, ask for an existing schema or sanitized capture; do not make a live request to fill the gap.
-- Offline tests may fake the transport. Their representative success fixtures must reproduce the evidenced wire contract; derived edge cases may alter values or omit fields intentionally. Never invent a replacement external schema, implement against it, or count tests against it as delivery. This gate does not prevent designing an internal interface the project owns.
-- Cite the contract source and any evidence limits in the task checkpoint and worker and reviewer briefs. The reviewer checks that implementation and representative fixtures match that source; missing evidence or a mismatch blocks acceptance even if all tests pass. Report offline contract verification separately from any authorized live verification.
+### 2. Roles and delegation
+- **Parent (you):** Own planning, task decomposition, interface definitions, sequencing, delegation, and integration verification. Never write implementation code directly (including patches or temporary scripts under `/tmp`).
+- **Workers and reviewers:** Run one subagent at a time. Subagents cannot redelegate.
+- **Briefs:** Keep each worker brief concise and focused on the current state: goal, owned files, interface contracts, contract sources, relevant decision IDs (per `AGENTS.md`), and acceptance checks.
 
-### Orchestration
-The parent is the architect and orchestrator, delegating directly to implementation-worker and fresh reviewer pi-subagents. Do not introduce an intermediate orchestration agent. Workers and reviewers cannot redelegate.
+**Models:**
+- **Implementation (`implementation-worker`):** `gpt-6-luna` — `thinking: max` (complex), `high` (average), `medium` (simple).
+- **Fresh review (`reviewer`):** `gpt-6.2-sol` with `thinking: medium` (broad/complex), or `gpt-6-luna` with `thinking: max` (narrow/simple).
 
-- The parent owns architecture, task decomposition, interface definitions, sequencing, delegation, and integration review.
-- The parent must never write implementation code, including patches or temporary files under /tmp. Delegate implementation directly rather than generating code for Luna to apply.
-- Follow `AGENTS.md` decision-record rules: resolve relevant assumptions and log decisions before dependent work; include applicable decision IDs in tasks and worker briefs.
-- Delegate small, bounded, independently testable increments to Luna `implementation-worker` subagents. Split large implementations or review-fix lists into coherent changes with explicit dependencies and acceptance checks.
-- Launch implementation workers at the appropriate thinking levels for task complexity, erring higher if unsure:
-  - Complex task: `gpt-6-luna` with `thinking: max`
-  - Average task: `gpt-6-luna` with `thinking: high`
-  - Low complexity: `gpt-6-luna` with `thinking: medium`
-- Give each worker a concise brief: goal, owned files, interface contracts, dependency commits, acceptance checks, and unresolved decisions. Maintain one current checkpoint rather than accumulating overlapping instructions or forwarding orchestration history.
-- Each worker first verifies its checkout, dependencies, and relevant test commands using the project environment. Report blockers immediately; do not defer environment discovery until handoff or treat unrun checks as passing.
-- Each worker implements directly in its assigned checkout or worktree. Iterate through local edits and checks without committing every attempt; commit a coherent increment after its required checks pass. Create an explicitly unvalidated recovery commit only when preserving substantial unfinished work before a handoff/interruption or risky operation—not merely because validation is next. Status updates and failed checks belong in the durable task checkpoint, not separate Git commits.
-- Optionally use one feature branch per coherent deliverable or tightly coupled task group, especially when isolation or squash integration is useful; do not create branches for individual fixes/check cycles. After validation and fresh review, the branch may be squash-merged into one meaningful commit. Do not rewrite shared history without explicit approval.
-- Run only one subagent at a time, including implementation workers and reviewers. Validate and commit each coherent increment before fresh review; review its complete diff against the task base, not each intermediate commit. Finish review and fixes before starting the next task.
-- Validate complete caller and user paths, persistence round trips, and compatibility—not only isolated helpers or components. Add regressions for reported failures before declaring fixes complete.
-- A fresh subagent reviews each bounded change, connected code, integration, and test evidence:
-  - Broad and complex change: `gpt-6.2-sol` with `thinking: medium`
-  - Simple change or narrow fix review: `gpt-6-luna` with `thinking: max`
-- Delegate fixes back to implementation workers in coherent increments. Integrate tested changes and rerun relevant integration checks before proceeding; do not equate passing tests with review acceptance.
-- Treat failing tests, lint and typechecks as implementation feedback, not worker failures. Allow up to three local fix/check cycles within the assigned scope; run strict typing early, including tests, and explicitly type heterogeneous fixtures/empty containers and narrow optional values. Never relax checks or add suppressions to hide failures. Stop and report ambiguous semantics, scope/security/environment blockers, repeated failures without progress, or exhausted cycles. On an actual worker/runtime failure, report it, inspect preserved changes and checkpoints, and use only an authorized, bounded recovery; restart a maximum of two times.
-- Minimize redundant context, handoffs, repeated reviews, and repeated validation of unchanged revisions. Preserve exact revisions, actual check outcomes, remaining risks, and the next action in durable checkpoints.
-- Continue through full implementation and verification, not just planning or scaffolding. Do not mark work complete while required checks or review findings remain unresolved.
+### 3. Build, validate, and review
+- Workers edit files directly in the working tree and **do not commit**. They should run relevant tests, lint, and typechecks early and report environment or scope blockers immediately.
+- Validate real caller and user paths, persistence round trips, and compatibility—not only isolated helpers. Add regression tests for fixed bugs.
+- Never weaken checks or add suppressions to hide failures. Treat failing tests, lint, and typechecks as normal feedback to fix within scope; stop and report if blocked, requirements are ambiguous, or retries make no progress.
+- Once checks pass, run a fresh reviewer against the full working-tree diff from the task base. Passing tests do not substitute for review acceptance.
+- Delegate review fixes back to an implementation worker and re-verify until both checks and review pass. Do not mark work complete while required checks or review findings remain open.
 
 ### Task
 $ARGUMENTS

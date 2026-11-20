@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -14,6 +15,8 @@ from app.domain.exposure import (
 )
 from app.domain.financial_inputs import (
     AccountInput,
+    ExposureCacheInput,
+    ExposureDimensionCoverageInput,
     FinancialInputs,
     InputSourceMetadata,
     LookThroughExposureInput,
@@ -59,6 +62,7 @@ def _inputs(
     transactions: tuple[TransactionInput, ...] = (),
     exposures: tuple[LookThroughExposureInput, ...] = (),
     metadata: InputSourceMetadata | None = None,
+    exposure_cache: tuple[ExposureCacheInput, ...] = (),
     asset_types: dict[str, str] | None = None,
 ) -> FinancialInputs:
     security_tickers = {position.ticker for position in positions}
@@ -96,6 +100,7 @@ def _inputs(
         transactions=transactions,
         exposures=exposures,
         source_metadata=metadata if metadata is not None else _metadata(),
+        exposure_cache=exposure_cache,
     )
 
 
@@ -602,6 +607,26 @@ def test_direct_equity_exposure_does_not_require_lookthrough_metadata() -> None:
     assert aggregate.values[0].value_usd == Decimal(100)
 
 
+def test_cache_managed_equity_uses_cached_lookthrough_instead_of_direct_shortcut() -> None:
+    inputs = _inputs(
+        positions=(_position("ITOT", "100", asset_type="EQUITY"),),
+        exposure_cache=(
+            ExposureCacheInput(
+                "ITOT",
+                "ishares",
+                TRADE_DATE,
+                (ExposureDimensionCoverageInput("security", False),),
+            ),
+        ),
+    )
+
+    aggregate = aggregate_lookthrough_exposure(inputs)
+
+    assert aggregate.coverage.complete is False
+    assert aggregate.coverage.invalid_tickers == ("ITOT",)
+    assert all(row.exposure_key != "ITOT" for row in aggregate.values)
+
+
 def test_sector_coverage_requires_exact_unit_weight_per_ticker() -> None:
     holdings = (_position("A", "50"), _position("B", "50"), _position("C", "50"))
     exposures = (
@@ -691,3 +716,102 @@ def test_exposure_and_known_source_metadata_round_trip_and_legacy_absence_stays_
     assert legacy_restored.exposures == ()
     assert legacy_restored.source_metadata.transaction_history_complete is None
     assert legacy_restored.source_metadata.lookthrough_complete is None
+
+
+@pytest.mark.parametrize(
+    ("coverage_complete", "expected_failure"), [(False, "invalid"), (None, "missing")]
+)
+def test_cache_managed_dimensions_cannot_be_promoted_by_global_coverage(
+    coverage_complete: bool | None, expected_failure: str
+) -> None:
+    source_date = TRADE_DATE - timedelta(days=95)
+    dimension_coverage = (
+        (ExposureDimensionCoverageInput("security", coverage_complete),)
+        if coverage_complete is not None
+        else ()
+    )
+    cache = ExposureCacheInput("CACHE-ETF", "vanguard", source_date, dimension_coverage)
+    inputs = _inputs(
+        positions=(_position("CACHE-ETF", "100"),),
+        exposures=(_exposure("CACHE-ETF", "AAA", "0.6", as_of_date=source_date),),
+        metadata=_metadata(lookthrough_complete=True),
+        exposure_cache=(cache,),
+    )
+
+    security = aggregate_lookthrough_exposure(inputs)
+    unavailable_dimension = aggregate_lookthrough_exposure(inputs, dimension="sector")
+    day_96 = aggregate_lookthrough_exposure(
+        replace(inputs, proposed_trade_date=TRADE_DATE + timedelta(days=1))
+    )
+
+    assert security.coverage.complete is (coverage_complete is True)
+    assert unavailable_dimension.coverage.complete is False
+    assert unavailable_dimension.coverage.missing_tickers == ("CACHE-ETF",)
+    assert day_96.coverage.complete is False
+    assert day_96.coverage.stale_tickers == ("CACHE-ETF",)
+    if expected_failure == "invalid":
+        assert security.coverage.invalid_tickers == ("CACHE-ETF",)
+
+
+def test_cache_metadata_must_match_winning_rows_and_legacy_coverage_stays_independent() -> None:
+    managed_date = TRADE_DATE - timedelta(days=10)
+    cache = ExposureCacheInput(
+        "CACHE-ETF",
+        "vanguard",
+        managed_date,
+        (ExposureDimensionCoverageInput("security", True),),
+    )
+    managed = _position("CACHE-ETF", "100")
+    legacy = _position("LEGACY-ETF", "50")
+    rows = (
+        _exposure("CACHE-ETF", "AAA", "0.6", as_of_date=managed_date),
+        _exposure("LEGACY-ETF", "BBB", "0.4"),
+    )
+    mixed = _inputs(
+        positions=(managed, legacy),
+        exposures=rows,
+        metadata=_metadata(lookthrough_complete=False),
+        exposure_cache=(cache,),
+    )
+    assert aggregate_lookthrough_exposure(mixed).coverage.complete is False
+    complete_legacy = replace(mixed, source_metadata=_metadata(lookthrough_complete=True))
+    assert aggregate_lookthrough_exposure(complete_legacy).coverage.complete is True
+
+    mismatched = replace(
+        complete_legacy,
+        exposures=(
+            _exposure("CACHE-ETF", "AAA", "0.6", provider="ishares", as_of_date=managed_date),
+            rows[1],
+        ),
+    )
+    mismatch_coverage = aggregate_lookthrough_exposure(mismatched).coverage
+    assert mismatch_coverage.complete is False
+    assert mismatch_coverage.conflicting_tickers == ("CACHE-ETF",)
+
+
+def test_cache_evidence_does_not_change_wash_sale_assessments() -> None:
+    inputs = _inputs(
+        transactions=(
+            _transaction(
+                "recent-buy",
+                trade_date=TRADE_DATE - timedelta(days=5),
+                lot_id="recent-lot",
+            ),
+        )
+    )
+    cached_inputs = replace(
+        inputs,
+        exposure_cache=(
+            ExposureCacheInput(
+                "ITOT",
+                "ishares",
+                TRADE_DATE,
+                (ExposureDimensionCoverageInput("security", False),),
+            ),
+        ),
+    )
+    sale = _loss_sale()
+    buy = ProposedBuy("ITOT", Decimal(1), "replacement", TRADE_DATE)
+
+    assert assess_wash_sales(cached_inputs, (sale,)) == assess_wash_sales(inputs, (sale,))
+    assert assess_proposed_buys(cached_inputs, (buy,)) == assess_proposed_buys(inputs, (buy,))

@@ -121,7 +121,9 @@ def test_signed_cash_2026_11_16_is_valid_but_not_in_equity_denominator() -> None
     prefix = body[: body.index(b'"AAPL","APPLE"')]
     header = prefix + equity
     # This is a test composition of separately captured same-date rows, not a provider capture fixture.
-    dated = header + cash
+    # Compose a terminal footer from the shortened capture excerpt; captured signed values stay verbatim.
+    footer = FIXTURE.read_bytes().splitlines(keepends=True)[-1]
+    dated = header + cash + footer
     result = _run(dated)
     assert result.as_of_date == date(2026, 11, 16)
     assert result.total_equity_market_value == Decimal("6747027920.14")
@@ -145,6 +147,9 @@ def test_bom_header_reorder_and_quoted_market_values_are_supported() -> None:
     writer.writerow(reordered)
     for row in source_rows:
         writer.writerow([row[header.index(column)] for column in reordered])
+    # The source excerpt's shortened legal record is supplied as the composed terminal record.
+    footer = next(csv.reader([FIXTURE.read_text().splitlines()[-1]]))
+    writer.writerow(footer)
     result = _run(('\ufeffFund Holdings as of,"Nov 17, 2026"\n\n' + buffer.getvalue()).encode())
     assert result.total_equity_market_value == Decimal("11668291953.02")
 
@@ -185,12 +190,37 @@ def test_duplicate_footer_and_unknown_structural_records_fail_closed() -> None:
     _expect_error(body)
 
 
+def test_truncated_capture_without_terminal_blackrock_record_is_rejected() -> None:
+    # A row-boundary excerpt derived from the captured success fixture, not a full response.
+    lines = FIXTURE.read_bytes().splitlines(keepends=True)
+    truncated = b"".join(lines[:6])
+    assert b'"AAPL","APPLE"' in truncated
+    assert b"BlackRock" not in truncated
+    _expect_error(truncated)
+
+
 def test_response_size_transport_and_clock_are_bounded() -> None:
     _expect_error(b"x" * (MAX_RESPONSE_BYTES + 1))
     with pytest.raises(IsharesMarketDataError):
         _run(status=503)
     with pytest.raises(IsharesMarketDataError, match="UTC"):
         _run_with_clock(datetime(2026, 11, 18, 14, 8, 29))
+
+
+@pytest.mark.parametrize(
+    ("status", "headers"),
+    [(206, {}), (200, {"content-range": "bytes 0-10/100"})],
+)
+def test_partial_ishares_responses_are_rejected(status: int, headers: dict[str, str]) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == URL
+        return httpx.Response(status, content=FIXTURE.read_bytes(), headers=headers)
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(IsharesMarketDataError),
+    ):
+        fetch_ishares_exposures(IsharesFundConfig("ITOT", URL), client, clock=lambda: FETCHED_AT)
 
 
 def _run_with_clock(clock: datetime) -> IsharesExposureResult:

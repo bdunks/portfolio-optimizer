@@ -1,5 +1,6 @@
 import type {
   ActivityPageResponse,
+  ExposureCacheTickerResponse,
   ApiOperationName,
   ApiQuery,
   ApiRequest,
@@ -369,6 +370,22 @@ export function createApiClient(fetchOverride?: typeof fetch) {
     };
   }
 
+  async function getExposureCache(): Promise<ExposureCacheTickerResponse[]> {
+    return jsonRequest({
+      operation: 'GET /api/v1/market-data/exposures/cache',
+      path: '/api/v1/market-data/exposures/cache',
+      method: 'GET',
+    });
+  }
+
+  async function refreshExposureCache(): Promise<ExposureCacheTickerResponse[]> {
+    return jsonRequest({
+      operation: 'POST /api/v1/market-data/exposures/refresh',
+      path: '/api/v1/market-data/exposures/refresh',
+      method: 'POST',
+    });
+  }
+
   async function getWashSales(): Promise<WashSalesResponse> {
     return jsonRequest({
       operation: 'GET /api/v1/wash-sales',
@@ -388,6 +405,8 @@ export function createApiClient(fetchOverride?: typeof fetch) {
 
   return {
     getHealth,
+    getExposureCache,
+    refreshExposureCache,
     syncPortfolio,
     getPortfolio,
     getLots,

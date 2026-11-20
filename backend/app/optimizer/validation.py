@@ -12,7 +12,11 @@ from dataclasses import dataclass, replace
 from decimal import Decimal
 
 from app.domain.decimal_math import exact_difference, exact_product, exact_sum, percentage
-from app.domain.exposure import ExposureCoverage, aggregate_lookthrough_exposure
+from app.domain.exposure import (
+    ExposureCoverage,
+    aggregate_lookthrough_exposure,
+    requires_lookthrough,
+)
 from app.domain.financial_inputs import FinancialInputs
 from app.domain.portfolio_accounting import (
     BasketValidationError,
@@ -440,7 +444,9 @@ def _exposure_validation(
     needs_exposure = False
     for leg in legs:
         security = inputs.security_for(leg.ticker)
-        if security is None or security.identity.asset_type.upper() != "EQUITY":
+        if security is None or requires_lookthrough(
+            inputs, leg.ticker, security.identity.asset_type
+        ):
             needs_exposure = True
             break
     if not needs_exposure:
@@ -459,7 +465,9 @@ def _exposure_validation(
         if leg.side != "BUY":
             continue
         security = inputs.security_for(leg.ticker)
-        if security is None or security.identity.asset_type.upper() == "EQUITY":
+        if security is None or not requires_lookthrough(
+            inputs, leg.ticker, security.identity.asset_type
+        ):
             continue
         try:
             candidate = aggregate_lookthrough_exposure(inputs, tickers=(leg.ticker,))

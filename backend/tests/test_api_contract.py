@@ -94,7 +94,14 @@ def test_openapi_has_named_phase_one_success_and_error_models() -> None:
             if success_status is None:
                 continue
             success_schema = _response_schema(operation["responses"][success_status])
-            branches = success_schema.get("anyOf", success_schema.get("oneOf", [success_schema]))
+            if success_schema.get("type") == "array":
+                items = success_schema.get("items")
+                assert isinstance(items, dict)
+                branches = [items]
+            else:
+                branches = success_schema.get(
+                    "anyOf", success_schema.get("oneOf", [success_schema])
+                )
             assert isinstance(branches, list)
             references = [
                 _schema_ref(branch).rsplit("/", 1)[-1]

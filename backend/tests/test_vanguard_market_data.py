@@ -6,6 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
+import httpx
 import pytest
 
 from app.domain.exposure import aggregate_lookthrough_exposure
@@ -34,8 +35,22 @@ FUND_IDS = (
 
 
 class FakeResponse:
-    def __init__(self, content: bytes, *, status_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        content: bytes,
+        *,
+        status_code: int = 200,
+        headers: dict[str, str] | None = None,
+        request_url: str | None = None,
+        history: list[httpx.Response] | None = None,
+        status_error: Exception | None = None,
+    ) -> None:
         self.content = content
+        self.status_code = status_code
+        self.headers = httpx.Headers(headers)
+        self.request: httpx.Request
+        self.request_url = request_url
+        self.history = history or []
         self.status_error = status_error
 
     def raise_for_status(self) -> None:
@@ -46,10 +61,11 @@ class FakeResponse:
 class FakeClient:
     def __init__(self, response: FakeResponse) -> None:
         self.response = response
-        self.calls: list[tuple[str, float]] = []
+        self.calls: list[tuple[str, float, bool]] = []
 
-    def get(self, url: str, *, timeout: float) -> FakeResponse:
-        self.calls.append((url, timeout))
+    def get(self, url: str, *, timeout: float, follow_redirects: bool) -> FakeResponse:
+        self.calls.append((url, timeout, follow_redirects))
+        self.response.request = httpx.Request("GET", self.response.request_url or url)
         return self.response
 
 
@@ -101,7 +117,7 @@ def test_captured_provider_excerpts_preserve_configured_request_and_provenance(
 
     result = _fetch(client, config)
 
-    assert client.calls == [(config.url, 3.25)]
+    assert client.calls == [(config.url, 3.25, False)]
     assert result.fund_ticker == ticker
     assert result.fund_id == fund_id
     assert result.source_url == config.url
@@ -253,7 +269,7 @@ def test_unavailable_optimizer_sector_and_size_coverage_cannot_pass_sector_consu
     assert not _weights(result, "sector")
 
 
-def test_valid_empty_direct_arrays_return_incomplete_coverage() -> None:
+def test_empty_direct_arrays_are_rejected() -> None:
     payload = _load_payload("VTEB")
     section = _date_section(payload)
     empty_equity: list[dict[str, object]] = []
@@ -261,15 +277,11 @@ def test_valid_empty_direct_arrays_return_incomplete_coverage() -> None:
     section["equity"] = empty_equity
     section["fixedIncome"] = empty_fixed_income
 
-    result = _fetch(
-        FakeClient(FakeResponse(_encode_payload(payload))),
-        _config("VTEB", "4391"),
-    )
-
-    assert result.exposures == ()
-    assert result.identifiers == ()
-    assert result.reported_weight_total == Decimal(0)
-    assert all(not item.complete and item.total_constituents == 0 for item in result.coverage)
+    with pytest.raises(VanguardMarketDataError, match="no direct holdings"):
+        _fetch(
+            FakeClient(FakeResponse(_encode_payload(payload))),
+            _config("VTEB", "4391"),
+        )
 
 
 @pytest.mark.parametrize(
@@ -451,9 +463,61 @@ def test_noncanonical_effective_date_is_rejected(date_value: str) -> None:
         )
 
 
+def test_duplicate_json_member_names_are_rejected_before_field_interpretation() -> None:
+    content = (FIXTURES / "vb.json").read_bytes()
+    duplicate = content.replace(
+        b'"percentOfFunds": 0.7027,',
+        b'"percentOfFunds": 0.7027, "percentOfFunds": 0,',
+        1,
+    )
+    assert duplicate != content
+    with pytest.raises(VanguardMarketDataError, match="request failed"):
+        _fetch(FakeClient(FakeResponse(duplicate)), _config("VB", "0969"))
+
+
 def test_invalid_json_and_http_failure_are_explicit() -> None:
     config = _config("VTI", "0970")
     with pytest.raises(VanguardMarketDataError, match="request failed"):
         _fetch(FakeClient(FakeResponse(b"{")), config)
     with pytest.raises(VanguardMarketDataError, match="request failed"):
         _fetch(FakeClient(FakeResponse(b"{}", status_error=RuntimeError("HTTP 503"))), config)
+
+
+@pytest.mark.parametrize(
+    ("ticker", "fund_id", "url"),
+    [
+        ("VB", "0970", f"{BASE_URL}/0970/holdings/latest"),
+        ("VTI", "0969", f"{BASE_URL}/0969/holdings/latest"),
+        ("DGRO", "0970", f"{BASE_URL}/0970/holdings/latest"),
+        ("VTI", "0970", f"{BASE_URL}/0970/other"),
+    ],
+)
+def test_mismatched_vanguard_identity_is_rejected_before_transport(
+    ticker: str, fund_id: str, url: str
+) -> None:
+    with pytest.raises(VanguardMarketDataError):
+        VanguardFundConfig(ticker, fund_id, url)
+
+
+@pytest.mark.parametrize(
+    ("status", "headers", "request_url", "redirected"),
+    [
+        (206, {}, None, False),
+        (200, {"content-range": "bytes 0-4/5"}, None, False),
+        (200, {}, "https://off-host.invalid/redirected", False),
+        (200, {}, None, True),
+    ],
+)
+def test_partial_or_changed_vanguard_response_is_rejected(
+    status: int, headers: dict[str, str], request_url: str | None, redirected: bool
+) -> None:
+    prior = [httpx.Response(302)] if redirected else []
+    response = FakeResponse(
+        (FIXTURES / "vti.json").read_bytes(),
+        status_code=status,
+        headers=headers,
+        request_url=request_url,
+        history=prior,
+    )
+    with pytest.raises(VanguardMarketDataError):
+        _fetch(FakeClient(response), _config("VTI", "0970"))

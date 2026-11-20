@@ -22,6 +22,8 @@ cd backend
 uv sync
 uv run alembic upgrade head
 uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+# Optional: configure manual canonical ITOT look-through refresh (no startup fetch)
+PORTFOLIO_ENABLE_ITOT_REFRESH=1 uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 # Terminal 2
 cd frontend

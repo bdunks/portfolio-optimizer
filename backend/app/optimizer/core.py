@@ -19,7 +19,7 @@ import cvxpy as cp
 
 from app.domain.allocation import AllocationSleeve, assignment_path, resolve_cash, resolve_holding
 from app.domain.decimal_math import exact_product, exact_sum, percentage
-from app.domain.exposure import aggregate_lookthrough_exposure
+from app.domain.exposure import aggregate_lookthrough_exposure, requires_lookthrough
 from app.domain.financial_inputs import FinancialInputs, LotInput, PositionInput, QuoteInput
 from app.domain.portfolio_accounting import (
     BasketValidationError,
@@ -994,7 +994,7 @@ def _screen(
         _, buy_price = _execution_prices(mark, config.estimated_spread_bps)
         if buy_price <= 0 or buy_price < 0:
             continue
-        if not is_equity:
+        if requires_lookthrough(inputs, ticker, security.identity.asset_type):
             try:
                 candidate_exposure = aggregate_lookthrough_exposure(inputs, tickers=(ticker,))
                 exposure_ok = candidate_exposure.coverage.complete is True and bool(

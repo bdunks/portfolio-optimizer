@@ -548,6 +548,34 @@ class LotResponse(StrictModel):
     fractional_cleanup_unsupported: bool
 
 
+class ExposureDimensionCoverageResponse(StrictModel):
+    dimension: str
+    covered_weight: str
+    complete: bool
+    observed_item_count: int
+    scope_item_count: int
+    provider_universe_verified: bool
+
+
+class ExposureCacheTickerResponse(StrictModel):
+    ticker: str
+    freshness: Literal["configured_missing", "current", "stale"]
+    configured_provider: Literal["vanguard", "ishares", "manual_csv"]
+    provider: Literal["vanguard", "ishares", "manual_csv"] | None
+    as_of_date: date | None
+    cached_at: datetime | None
+    last_attempted_at: datetime | None
+    last_attempt_provider: Literal["vanguard", "ishares", "manual_csv"] | None
+    last_attempt_status: Literal["never", "success", "failure"]
+    last_error_code: str | None
+    last_error_summary: str | None
+    publication_revision: int
+    dimensions: list[ExposureDimensionCoverageResponse]
+
+
+ExposureCacheResponse = list[ExposureCacheTickerResponse]
+
+
 class LotCacheStatusResponse(StrictModel):
     freshness: Literal["unknown", "current", "stale"]
     current_generation: int | None

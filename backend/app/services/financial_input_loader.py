@@ -13,6 +13,8 @@ from app.db.models import (
     CurrentPosition,
     CurrentQuote,
     CurrentTaxLot,
+    ExposureCacheState,
+    ExposureDimensionCoverage,
     PolicyAllowedSecurity,
     PolicyRevision,
     PolicySectorBand,
@@ -33,6 +35,8 @@ from app.domain.allocation import (
 )
 from app.domain.financial_inputs import (
     AccountInput,
+    ExposureCacheInput,
+    ExposureDimensionCoverageInput,
     FinancialInputs,
     InputSourceMetadata,
     LookThroughExposureInput,
@@ -247,6 +251,40 @@ def load_financial_inputs(
         )
         for row, ticker in exposures
     )
+    cache_state_rows = session.execute(
+        select(ExposureCacheState, ExposureDimensionCoverage)
+        .outerjoin(
+            ExposureDimensionCoverage,
+            ExposureDimensionCoverage.ticker == ExposureCacheState.ticker,
+        )
+        .order_by(ExposureCacheState.ticker, ExposureDimensionCoverage.dimension)
+    ).all()
+    successful_cache_states: dict[str, tuple[str, date]] = {}
+    cache_dimensions: dict[str, list[ExposureDimensionCoverageInput]] = {}
+    for cache_state, dimension_coverage in cache_state_rows:
+        if (
+            cache_state.publication_revision <= 0
+            or cache_state.provider is None
+            or cache_state.as_of_date is None
+        ):
+            continue
+        successful_cache_states[cache_state.ticker] = (cache_state.provider, cache_state.as_of_date)
+        if dimension_coverage is not None:
+            cache_dimensions.setdefault(cache_state.ticker, []).append(
+                ExposureDimensionCoverageInput(
+                    dimension=dimension_coverage.dimension,
+                    complete=dimension_coverage.complete,
+                )
+            )
+    exposure_cache_inputs = tuple(
+        ExposureCacheInput(
+            ticker=ticker,
+            provider=provider,
+            as_of_date=as_of_date,
+            dimensions=tuple(cache_dimensions.get(ticker, ())),
+        )
+        for ticker, (provider, as_of_date) in sorted(successful_cache_states.items())
+    )
     policy = (
         load_policy_input(session, revision)
         if revision is not None
@@ -375,4 +413,5 @@ def load_financial_inputs(
         transactions=transaction_inputs,
         exposures=exposure_inputs,
         source_metadata=_source_metadata(sync_state, include_transactions=include_transactions),
+        exposure_cache=exposure_cache_inputs,
     )

@@ -296,6 +296,20 @@ class LookThroughExposureInput:
 
 
 @dataclass(frozen=True, slots=True)
+class ExposureDimensionCoverageInput:
+    dimension: str
+    complete: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ExposureCacheInput:
+    ticker: str
+    provider: str
+    as_of_date: date
+    dimensions: tuple[ExposureDimensionCoverageInput, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class InputSourceMetadata:
     sync_complete: bool | None = None
     sync_started_at: datetime | None = None
@@ -381,6 +395,8 @@ class FinancialInputs:
     exposures: tuple[LookThroughExposureInput, ...] = ()
     source_metadata: InputSourceMetadata = InputSourceMetadata()
 
+    exposure_cache: tuple[ExposureCacheInput, ...] = ()
+
     def quote_for(self, ticker: str) -> QuoteInput | None:
         return next((row for row in self.quotes if row.ticker == ticker), None)
 
@@ -388,7 +404,7 @@ class FinancialInputs:
         return next((row for row in self.securities if row.identity.ticker == ticker), None)
 
     def to_provenance(self) -> dict[str, object]:
-        return {
+        provenance: dict[str, object] = {
             "schema": "demo-run-input-v2",
             "account": {
                 "local_account_id": self.account.local_account_id,
@@ -495,6 +511,20 @@ class FinancialInputs:
             "source_metadata": self.source_metadata.to_provenance(),
             "source_checksum": self.source_checksum,
         }
+        if self.exposure_cache:
+            provenance["exposure_cache"] = [
+                {
+                    "ticker": row.ticker,
+                    "provider": row.provider,
+                    "as_of_date": row.as_of_date.isoformat(),
+                    "dimensions": [
+                        {"dimension": dimension.dimension, "complete": dimension.complete}
+                        for dimension in row.dimensions
+                    ],
+                }
+                for row in self.exposure_cache
+            ]
+        return provenance
 
 
 def financial_inputs_from_provenance(
@@ -716,6 +746,49 @@ def financial_inputs_from_provenance(
     source_metadata = InputSourceMetadata.from_provenance(bundle.get("source_metadata"))
     if not isinstance(raw_lots, list) or not isinstance(raw_transactions, list):
         raise TypeError("frozen lot or transaction data is malformed")
+    raw_exposure_cache = bundle.get("exposure_cache", [])
+    if not isinstance(raw_exposure_cache, list):
+        raise TypeError("frozen exposure cache data is malformed")
+    exposure_cache_rows: list[ExposureCacheInput] = []
+    seen_cache_tickers: set[str] = set()
+    for row in raw_exposure_cache:
+        if (
+            not isinstance(row, dict)
+            or not isinstance(row.get("ticker"), str)
+            or not isinstance(row.get("provider"), str)
+            or row.get("provider") not in {"vanguard", "ishares", "manual_csv"}
+            or not isinstance(row.get("as_of_date"), str)
+            or not isinstance(row.get("dimensions"), list)
+        ):
+            raise TypeError("frozen exposure cache data is malformed")
+        ticker = row["ticker"].strip().upper()
+        if not ticker or ticker in seen_cache_tickers:
+            raise ValueError("frozen exposure cache ticker is invalid or duplicated")
+        seen_cache_tickers.add(ticker)
+        dimensions: list[ExposureDimensionCoverageInput] = []
+        seen_dimensions: set[str] = set()
+        for dimension_row in row["dimensions"]:
+            if (
+                not isinstance(dimension_row, dict)
+                or not isinstance(dimension_row.get("dimension"), str)
+                or type(dimension_row.get("complete")) is not bool
+            ):
+                raise TypeError("frozen exposure cache dimensions are malformed")
+            dimension = dimension_row["dimension"].strip()
+            normalized_dimension = dimension.lower()
+            if not dimension or normalized_dimension in seen_dimensions:
+                raise ValueError("frozen exposure cache dimensions are invalid or duplicated")
+            seen_dimensions.add(normalized_dimension)
+            dimensions.append(ExposureDimensionCoverageInput(dimension, dimension_row["complete"]))
+        exposure_cache_rows.append(
+            ExposureCacheInput(
+                ticker=ticker,
+                provider=row["provider"],
+                as_of_date=_parse_date(row["as_of_date"]),
+                dimensions=tuple(dimensions),
+            )
+        )
+    exposure_cache = tuple(exposure_cache_rows)
     lots = tuple(
         LotInput(
             ticker=str(row["ticker"]),
@@ -792,5 +865,6 @@ def financial_inputs_from_provenance(
         transactions=transactions,
         exposures=exposures,
         source_metadata=source_metadata,
+        exposure_cache=exposure_cache,
         source_checksum=str(bundle["source_checksum"]) if bundle.get("source_checksum") else None,
     )

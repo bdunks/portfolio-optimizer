@@ -19,5 +19,9 @@ row at physical row 2447. That capture was fetched at
 test composes these two same-date rows into an in-memory fake response; it does
 not commit a mixed-date or complete raw capture.
 
+The signed-cash parser test composes those captured rows and supplies the shortened
+terminal BlackRock record from `itot_excerpt.csv` solely to satisfy the observed
+response structure; that footer is not part of the signed-row capture. The full-capture
+offline replay remains the evidence for the actual Nov 16 terminal record.
 Other parser edge cases are generated as explicit test mutations; they are not
 represented as provider records. No raw full holdings capture is committed.

@@ -30,6 +30,7 @@ from app.db.models import (
     CurrentPosition,
     CurrentQuote,
     CurrentTaxLot,
+    ExposureCacheState,
     OptimizerRun,
     PolicyRevision,
     PolicySleeve,
@@ -43,6 +44,66 @@ from app.db.models import (
 )
 from app.db.session import create_database_engine, make_session_factory
 from app.main import create_app
+from app.services.errors import AppError
+from app.services.exposure_cache import LocalCsvExposureConfig, refresh_exposure_cache
+
+
+def test_legacy_exposure_date_is_preserved_and_guards_first_cache_publication(
+    tmp_path: Path,
+) -> None:
+    engine = create_database_engine(f"sqlite:///{tmp_path / 'legacy-exposure.sqlite3'}")
+    _upgrade_to(engine, "0012_portfolio_lot_cache")
+    factory = make_session_factory(engine)
+    legacy_date = date(2026, 11, 18)
+    with factory.begin() as session:
+        security = Security(ticker="SCHD", asset_type="ETF")
+        session.add(security)
+        session.flush()
+        session.add(
+            SecurityExposure(
+                security_id=security.id,
+                dimension="security",
+                exposure_key="OLD",
+                weight=Decimal(1),
+                provider="manual_csv",
+                as_of_date=legacy_date,
+            )
+        )
+
+    upgrade_database(engine)
+    path = tmp_path / "legacy.csv"
+    source = LocalCsvExposureConfig("SCHD", path)
+    with factory() as session:
+        assert session.query(SecurityExposure).one().exposure_key == "OLD"
+        assert session.get(ExposureCacheState, "SCHD") is None
+
+    def write_csv(as_of: date, key: str) -> None:
+        path.write_text(
+            "ticker,as_of_date,dimension,exposure_key,weight\n"
+            f"SCHD,{as_of.isoformat()},security,{key},1\n",
+            encoding="utf-8",
+        )
+
+    write_csv(legacy_date - timedelta(days=1), "OLDER")
+    with pytest.raises(AppError) as error:
+        refresh_exposure_cache(factory, [source], clock=lambda: datetime(2026, 11, 19, tzinfo=UTC))
+    assert error.value.code == "exposure_refresh_failed"
+    with factory() as session:
+        assert session.query(SecurityExposure).one().exposure_key == "OLD"
+        state = session.get(ExposureCacheState, "SCHD")
+        assert state is not None
+        assert state.as_of_date is None
+        assert state.last_attempt_status == "failure"
+
+    for accepted_date, key in ((legacy_date, "SAME"), (legacy_date + timedelta(days=1), "NEW")):
+        write_csv(accepted_date, key)
+        refresh_exposure_cache(factory, [source], clock=lambda: datetime(2026, 11, 19, tzinfo=UTC))
+        with factory() as session:
+            assert [row.exposure_key for row in session.query(SecurityExposure).all()] == [key]
+            state = session.get(ExposureCacheState, "SCHD")
+            assert state is not None
+            assert state.as_of_date == accepted_date
+    engine.dispose()
 
 
 def _backend_root() -> Path:
@@ -719,7 +780,7 @@ def test_alembic_cli_uses_private_protected_engine_and_environment_url(tmp_path:
             assert connection.scalar(text("PRAGMA journal_mode")).lower() == "wal"
             assert connection.scalar(text("PRAGMA busy_timeout")) == 5000
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-                "0012_portfolio_lot_cache"
+                "0013_exposure_cache"
             )
     finally:
         engine.dispose()

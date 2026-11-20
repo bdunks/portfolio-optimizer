@@ -20,6 +20,7 @@ from app.db.models import (
     CurrentPosition,
     CurrentQuote,
     CurrentTaxLot,
+    ExposureCacheState,
     LotCacheState,
     Security,
     SecurityExposure,
@@ -412,6 +413,17 @@ def sync_portfolio(
                 if type(cached_lookthrough) is bool:
                     coverage["lookthrough"] = cached_lookthrough
             # All destructive changes are after payload validation and remain transaction-scoped.
+            cache_managed_tickers: set[str] = set()
+            if snapshot.exposures:
+                cache_managed_tickers = set(
+                    session.scalars(
+                        select(ExposureCacheState.ticker).where(
+                            ExposureCacheState.publication_revision > 0,
+                            ExposureCacheState.provider.is_not(None),
+                            ExposureCacheState.as_of_date.is_not(None),
+                        )
+                    ).all()
+                )
             session.execute(delete(CurrentTaxLot))
             session.execute(delete(CurrentPosition))
             session.execute(delete(CurrentQuote))
@@ -533,8 +545,16 @@ def sync_portfolio(
                 )
 
             if snapshot.exposures:
-                session.execute(delete(SecurityExposure))
+                session.execute(
+                    delete(SecurityExposure).where(
+                        SecurityExposure.security_id.not_in(
+                            select(Security.id).where(Security.ticker.in_(cache_managed_tickers))
+                        )
+                    )
+                )
                 for exposure in snapshot.exposures:
+                    if exposure.ticker in cache_managed_tickers:
+                        continue
                     security = securities.get(exposure.ticker) or _security_for_ticker(
                         session, exposure.ticker, "ETF"
                     )

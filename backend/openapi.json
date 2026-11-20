@@ -493,6 +493,199 @@
         "title": "EtradeAuthVerifyInput",
         "type": "object"
       },
+      "ExposureCacheTickerResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "as_of_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of Date"
+          },
+          "cached_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cached At"
+          },
+          "configured_provider": {
+            "enum": [
+              "vanguard",
+              "ishares",
+              "manual_csv"
+            ],
+            "title": "Configured Provider",
+            "type": "string"
+          },
+          "dimensions": {
+            "items": {
+              "$ref": "#/components/schemas/ExposureDimensionCoverageResponse"
+            },
+            "title": "Dimensions",
+            "type": "array"
+          },
+          "freshness": {
+            "enum": [
+              "configured_missing",
+              "current",
+              "stale"
+            ],
+            "title": "Freshness",
+            "type": "string"
+          },
+          "last_attempt_provider": {
+            "anyOf": [
+              {
+                "enum": [
+                  "vanguard",
+                  "ishares",
+                  "manual_csv"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Attempt Provider"
+          },
+          "last_attempt_status": {
+            "enum": [
+              "never",
+              "success",
+              "failure"
+            ],
+            "title": "Last Attempt Status",
+            "type": "string"
+          },
+          "last_attempted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Attempted At"
+          },
+          "last_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Code"
+          },
+          "last_error_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Summary"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "enum": [
+                  "vanguard",
+                  "ishares",
+                  "manual_csv"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "publication_revision": {
+            "title": "Publication Revision",
+            "type": "integer"
+          },
+          "ticker": {
+            "title": "Ticker",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticker",
+          "freshness",
+          "configured_provider",
+          "provider",
+          "as_of_date",
+          "cached_at",
+          "last_attempted_at",
+          "last_attempt_provider",
+          "last_attempt_status",
+          "last_error_code",
+          "last_error_summary",
+          "publication_revision",
+          "dimensions"
+        ],
+        "title": "ExposureCacheTickerResponse",
+        "type": "object"
+      },
+      "ExposureDimensionCoverageResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "covered_weight": {
+            "title": "Covered Weight",
+            "type": "string"
+          },
+          "dimension": {
+            "title": "Dimension",
+            "type": "string"
+          },
+          "observed_item_count": {
+            "title": "Observed Item Count",
+            "type": "integer"
+          },
+          "provider_universe_verified": {
+            "title": "Provider Universe Verified",
+            "type": "boolean"
+          },
+          "scope_item_count": {
+            "title": "Scope Item Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dimension",
+          "covered_weight",
+          "complete",
+          "observed_item_count",
+          "scope_item_count",
+          "provider_universe_verified"
+        ],
+        "title": "ExposureDimensionCoverageResponse",
+        "type": "object"
+      },
       "FrozenRunDisplayContextResponse": {
         "additionalProperties": false,
         "properties": {
@@ -5144,6 +5337,190 @@
           }
         },
         "summary": "Refresh Lots Endpoint"
+      }
+    },
+    "/api/v1/market-data/exposures/cache": {
+      "get": {
+        "operationId": "exposure_cache_status_api_v1_market_data_exposures_cache_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ExposureCacheTickerResponse"
+                  },
+                  "title": "Response Exposure Cache Status Api V1 Market Data Exposures Cache Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Exposure Cache Status"
+      }
+    },
+    "/api/v1/market-data/exposures/refresh": {
+      "post": {
+        "operationId": "refresh_exposure_cache_endpoint_api_v1_market_data_exposures_refresh_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ExposureCacheTickerResponse"
+                  },
+                  "title": "Response Refresh Exposure Cache Endpoint Api V1 Market Data Exposures Refresh Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Consistent API error envelope"
+          }
+        },
+        "summary": "Refresh Exposure Cache Endpoint"
       }
     },
     "/api/v1/optimizer/runs": {

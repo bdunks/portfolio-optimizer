@@ -283,6 +283,60 @@ class SecurityExposure(Base):
     as_of_date: Mapped[date] = mapped_column(Date, nullable=False)
 
 
+class ExposureCacheState(Base):
+    __tablename__ = "exposure_cache_state"
+    __table_args__ = (
+        CheckConstraint("publication_revision >= 0", name="ck_exposure_cache_revision_nonnegative"),
+        CheckConstraint(
+            "last_attempt_status IN ('success', 'failure')",
+            name="ck_exposure_cache_attempt_status",
+        ),
+        CheckConstraint(
+            "provider IS NULL OR provider IN ('vanguard', 'ishares', 'manual_csv')",
+            name="ck_exposure_cache_provider",
+        ),
+        CheckConstraint(
+            "last_attempt_provider IS NULL OR last_attempt_provider IN ('vanguard', 'ishares', 'manual_csv')",
+            name="ck_exposure_cache_attempt_provider",
+        ),
+    )
+
+    ticker: Mapped[str] = mapped_column(String(32), primary_key=True)
+    provider: Mapped[str | None] = mapped_column(String(24))
+    as_of_date: Mapped[date | None] = mapped_column(Date)
+    cached_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    publication_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_attempted_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_attempt_provider: Mapped[str | None] = mapped_column(String(24))
+    last_attempt_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    last_error_code: Mapped[str | None] = mapped_column(String(64))
+    last_error_summary: Mapped[str | None] = mapped_column(String(500))
+
+
+class ExposureDimensionCoverage(Base):
+    __tablename__ = "exposure_dimension_coverage"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["ticker"],
+            ["exposure_cache_state.ticker"],
+            ondelete="CASCADE",
+            name="fk_exposure_coverage_cache_state",
+        ),
+        CheckConstraint(
+            "observed_item_count >= 0 AND scope_item_count >= observed_item_count",
+            name="ck_exposure_coverage_item_counts",
+        ),
+    )
+
+    ticker: Mapped[str] = mapped_column(String(32), primary_key=True)
+    dimension: Mapped[str] = mapped_column(String(32), primary_key=True)
+    covered_weight: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
+    complete: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    observed_item_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope_item_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    provider_universe_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
 class PolicyRevision(Base):
     __tablename__ = "policy_revision"
     __table_args__ = (

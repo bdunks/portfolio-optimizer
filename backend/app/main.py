@@ -13,6 +13,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
+import httpx
 from fastapi import Depends, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -55,6 +56,7 @@ from app.schemas import (
     EtradeAuthStartResponse,
     EtradeAuthStatusResponse,
     EtradeAuthVerifyInput,
+    ExposureCacheTickerResponse,
     HealthResponse,
     LotCacheStatusResponse,
     LotPageResponse,
@@ -84,7 +86,14 @@ from app.services.demo_optimizer import (
     wash_sales,
 )
 from app.services.errors import AppError
+from app.services.exposure_cache import (
+    ExposureCacheTickerStatus,
+    ExposureSourceConfig,
+    get_exposure_cache_status,
+    refresh_exposure_cache,
+)
 from app.services.financial_input_loader import load_allocation_policy, load_financial_inputs
+from app.services.ishares_market_data import ITOT_URL, IsharesFundConfig
 from app.services.lot_cache import (
     PortfolioWithLotsReader,
     get_lot_cache_status,
@@ -207,6 +216,15 @@ def _whole_share_fields(shares: Decimal) -> dict[str, Any]:
     }
 
 
+def _exposure_cache_response(status: ExposureCacheTickerStatus) -> ExposureCacheTickerResponse:
+    value = asdict(status)
+    value["dimensions"] = tuple(
+        {**dimension, "covered_weight": str(dimension["covered_weight"])}
+        for dimension in value["dimensions"]
+    )
+    return ExposureCacheTickerResponse.model_validate(value)
+
+
 def _demo_seed(factory: sessionmaker[Session], broker: ReadOnlyBroker) -> None:
     with factory() as session:
         has_policy = session.scalar(select(PolicyRevision.id).limit(1)) is not None
@@ -235,6 +253,11 @@ def create_app(
     allowed_origins: list[str] | None = None,
     etrade_oauth: EtradeOAuthService | None = None,
     portfolio_lot_reader: PortfolioWithLotsReader | None = None,
+    exposure_sources: tuple[ExposureSourceConfig, ...] = (),
+    exposure_vanguard_client: httpx.Client | None = None,
+    exposure_ishares_client: httpx.Client | None = None,
+    exposure_clock: Callable[[], datetime] | None = None,
+    enable_itot_refresh: bool = False,
 ) -> FastAPI:
     """Create an isolated app with optional test OAuth service and explicit transport injection."""
     db_url = database_url or os.getenv("PORTFOLIO_DATABASE_URL", "sqlite:///data/portfolio.sqlite3")
@@ -248,6 +271,16 @@ def create_app(
     optimizer_supervisor = ProcessSupervisor(max_workers=2)
     validation_executor = BoundedValidationExecutor(max_workers=2)
 
+    owned_ishares_client = False
+    if enable_itot_refresh:
+        if not exposure_sources:
+            exposure_sources = (IsharesFundConfig("ITOT", ITOT_URL),)
+        if exposure_ishares_client is None and any(
+            isinstance(source, IsharesFundConfig) for source in exposure_sources
+        ):
+            exposure_ishares_client = httpx.Client(timeout=10.0, follow_redirects=False)
+            owned_ishares_client = True
+
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncGenerator[None]:
         try:
@@ -260,6 +293,8 @@ def create_app(
             await optimizer_supervisor.aclose()
             if etrade_oauth is not None:
                 etrade_oauth.close()
+            if owned_ishares_client and exposure_ishares_client is not None:
+                exposure_ishares_client.close()
             if owned_engine:
                 db_engine.dispose()
 
@@ -479,6 +514,43 @@ def create_app(
             "allocation": allocation,
             "us_transition": us_transition,
         }
+
+    @application.post(
+        "/api/v1/market-data/exposures/refresh",
+        response_model=list[ExposureCacheTickerResponse],
+        responses=API_ERROR_RESPONSES,
+    )
+    def refresh_exposure_cache_endpoint() -> list[ExposureCacheTickerResponse]:
+        clock = exposure_clock or (lambda: datetime.now(UTC))
+        statuses = refresh_exposure_cache(
+            sessions,
+            exposure_sources,
+            clock=clock,
+            vanguard_client=exposure_vanguard_client,
+            ishares_client=exposure_ishares_client,
+            publication_hook=publication_hook,
+        )
+        return [_exposure_cache_response(status) for status in statuses]
+
+    @application.get(
+        "/api/v1/market-data/exposures/cache",
+        response_model=list[ExposureCacheTickerResponse],
+        responses=API_ERROR_RESPONSES,
+    )
+    def exposure_cache_status() -> list[ExposureCacheTickerResponse]:
+        if not exposure_sources:
+            return []
+        clock = exposure_clock or (lambda: datetime.now(UTC))
+        evaluation_time = clock()
+        if evaluation_time.tzinfo is None or evaluation_time.utcoffset() is None:
+            raise AppError("exposure_clock_invalid", "Exposure cache clock must be timezone-aware")
+        with sessions() as session:
+            statuses = get_exposure_cache_status(
+                session,
+                exposure_sources,
+                evaluation_date=evaluation_time.astimezone(UTC).date(),
+            )
+        return [_exposure_cache_response(status) for status in statuses]
 
     @application.post(
         "/api/v1/lots/refresh",
@@ -1072,4 +1144,10 @@ def _sync_status(state: SyncState | None) -> dict[str, Any]:
     }
 
 
-app = create_app(seed_demo_data=os.getenv("PORTFOLIO_DEMO_SEED") == "1")
+def _standard_app(*, exposure_clock: Callable[[], datetime] | None = None) -> FastAPI:
+    return create_app(
+        seed_demo_data=os.getenv("PORTFOLIO_DEMO_SEED") == "1",
+        exposure_clock=exposure_clock,
+        enable_itot_refresh=os.getenv("PORTFOLIO_ENABLE_ITOT_REFRESH") == "1",
+    )
+app = _standard_app()
